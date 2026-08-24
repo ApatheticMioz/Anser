@@ -1,0 +1,3 @@
+@echo off
+echo Stopping any running vLLM server in WSL...
+wsl -d Ubuntu -- bash ~/qwen-serving/launchers/stop_server.sh

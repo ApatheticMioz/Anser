@@ -1,0 +1,670 @@
+# Delegation infrastructure — investigation history
+
+Not auto-loaded into any session's context. Read this on demand when debugging
+`mcp-qwen/index.js` or reconsidering a design decision below — it's the "why,"
+not the "what to do now" (that's `D:\LLM_Ecosystem\CLAUDE.md` and
+`~/.claude/CLAUDE.md`, kept short deliberately).
+
+## Goose subprocess design (initial)
+
+Chose `goose.exe` (block/goose) over the earlier `pi`-CLI design because Goose
+is MCP-native (`--with-extension` attaches any stdio MCP server per task); `pi`
+explicitly doesn't support MCP/sub-agents. Subprocess spawn pitfalls learned
+from the `pi` attempt and avoided here: `stdio: ["ignore", "pipe", "pipe"]`
+(unset stdin hangs some CLIs indefinitely), `goose.exe` is a real PE binary not
+an npm `.cmd` shim (no EINVAL-on-batch-file issue), and timeout kills go through
+`taskkill /PID <pid> /T /F` (a bare `child.kill()` doesn't cascade to child
+processes on Windows, which can orphan a long-running verification command).
+
+Claude Desktop has a hardcoded, non-configurable ~60s client-side MCP timeout
+(confirmed empirically). Since real delegate calls take 30-150s+, this is
+handled with an async taskId/poll pattern: `delegate_coding_task` races its
+own work against `RACE_MS` (50s) and returns a `taskId` to poll via
+`qwen_check_task` if not done by then, rather than blocking past what the
+client can wait for.
+
+## Bug: fabricated file path (2026-08-23, session 1)
+
+A real run wrote to `C:\Users\hassan\goose\...` — not this machine's user, not
+anywhere in the given `cwd`. Root cause, confirmed via Goose's own
+`llm_request.*.jsonl` log (`%APPDATA%\Block\goose\data\logs\`): Goose's
+`developer` extension resolves its working directory from the process-wide
+`GOOSE_WORKING_DIR` env var, not `std::env::current_dir()`
+([block/goose#6610](https://github.com/block/goose/issues/6610),
+[#6909](https://github.com/block/goose/issues/6909)). The spawn set `cwd` on
+the child process but never set that env var, so the model's turn-context
+claimed the right directory while the extension's actual file-tool root
+diverged — the model guessed a plausible path rather than surfacing the
+contradiction. Fix: set `GOOSE_WORKING_DIR: cwd` in the spawn env, and restate
+the absolute `cwd` as the first line of the task prompt as defense in depth.
+
+## Bug: shell mismatch (2026-08-23, session 1, recurred on retry)
+
+`'Get-Content' is not recognized...` (exit 255). Goose has no shell-selection
+config on Windows and defaults to `cmd.exe`, while its own baked-in
+developer-extension system prompt tells the model to use PowerShell-only
+cmdlets ([block/goose#7837](https://github.com/block/goose/issues/7837), open,
+no upstream workaround). Mitigated (not fixed — no config exists) by prepending
+a one-line counter-instruction to the task prompt.
+
+## Design: verify default flip (2026-08-23, after session 1)
+
+Session 1: 8 delegate calls, all left at the then-default `verify:true`. Every
+one either hit the 400s timeout mid self-check or burned the whole budget on a
+build/test pass before reaching the edit — while the caller re-verified against
+disk afterward regardless (standing policy). Flipped default to `verify:false`.
+
+## Design: taskId/poll gaps closed (2026-08-23)
+
+Two gaps found by live-testing the above fix:
+- **Queue time misreported as hang.** `qwen_check_task`'s "elapsed" counted
+  from task *creation*, not execution start. With several tasks queued behind
+  each other on one GPU, "832s elapsed, still running" was mostly queue wait,
+  and read as a hang to both the orchestrator and the user mid-session. Fixed:
+  `execStartedAt`/`queuePositionAtEnqueue` tracked separately; status messages
+  distinguish "queued" from "executing."
+- **Cold boot had no taskId to poll.** `ensureMode`'s boot wait (up to 180s)
+  was awaited *before* `startGooseTask` registered a taskId — a cold first
+  call could blow through the client timeout with nothing to check (confirmed:
+  a cold call returned a bare timeout; the edit had actually landed, only
+  discovered minutes later via an unrelated follow-up call). Fixed: taskId
+  registered synchronously before any `await`; boot now happens inside the
+  queued task itself, tracked via a `booting` flag.
+
+Also added `qwen_cancel_task` (taskkill-based, same tree-kill as the timeout
+path) — session 1 had 8 abandoned Goose runs kept executing in the background
+after the caller gave up and redid the work by hand, with nothing to stop a
+late write from clobbering the hand-fix. No evidence it happened that night,
+but nothing prevented it either.
+
+Live-tested same day: cwd fix confirmed (no more fabricated paths),
+`verify:false` completes well under budget, queue-position reporting accurate,
+cancel-while-queued genuinely prevents execution (target file never created).
+
+## Post-mortem: session 2 (2026-08-23, run entirely after the above fixes)
+
+Fixes confirmed working (correct cwd, correct verify:false timing, correct
+queue-position reporting, cancel-while-queued). Session still burned a large
+fraction of its work redoing things by hand, for two *new* root causes:
+
+1. **`verify:true` kept getting passed explicitly anyway** — all 8 real calls
+   this session. Every one either hit the 400s timeout with an incomplete/
+   zero-file result, or was lost to point 2. Combined with session 1: ~1
+   confirmed clean success out of 16 self-verify attempts, and that one
+   success was small enough it likely didn't need self-verify either. The
+   caller's reasoning ("this needs an exact pattern followed, so let Qwen
+   self-check") matched every failure, not just the risky-feeling ones. Fixed
+   by rewriting the tool description to state this track record as a blunt
+   fact rather than a neutral tradeoff.
+2. **6 calls fired in a 4-minute window, then ~90 minutes of unrelated work
+   (manual browser QA) with no follow-up.** Single-GPU serial queue + verify:
+   true tasks tending to run the full 400s meant a 30-40min+ backlog; 2 of the
+   6 tasks aged out of the then-30min retention window before being checked.
+   Results (success or failure) were unrecoverable; the caller reimplemented
+   both features by hand. Fixed: `TASK_RETENTION_MS` raised 30min → 3h, and
+   every status message now reports the total unfinished-task count
+   server-wide, not just the one being asked about.
+
+**Unused capability, both sessions combined (18 delegate calls, 0 uses):**
+`extensions` (per-task MCP attachment) never passed once. Every UI-facing
+feature got verified visually by the caller doing its own browser-tool calls
+by hand (131 in session 2 alone) instead of Qwen doing it via an attached
+Playwright MCP server (`npx -y @playwright/mcp@latest`,
+[goose-docs.ai/docs/mcp/playwright-mcp](https://goose-docs.ai/docs/mcp/playwright-mcp/)).
+Tool description now names this pattern explicitly for UI-facing tasks.
+
+**Token cost mechanism identified:** session 2 carried 570M cache-read tokens
+across 1,009 assistant turns. `qwen_check_task` poll volume (129 polls that
+session) is the real driver, not manual coding output — every poll is a
+permanent context addition re-sent (as a cached read) on every subsequent
+turn for the rest of the session. This is structural to the async poll
+pattern, not a bug; it argues for fewer/wider-spaced polls and preferring
+verify:false (shorter runs, fewer polls needed).
+
+## Design: DELEGATE_TIMEOUT_MS = 400s — why, and why not raised further
+
+400s was set before any production data existed — a generous-feeling multiple
+of the expected 60-150s case, not a measured figure. Telemetry since:
+
+- Plain `verify:false` tasks land in 40-60s — 400s is already a 7-10x margin.
+  No change made here.
+- `verify:true` tasks show a *qualitative* failure pattern: broad,
+  unstructured exploration with zero files written well past 200-270s, not
+  "nearly done but out of time." Raising this ceiling was considered and
+  rejected — nothing in the evidence suggests more time converts these runs to
+  successes, only that it would hold the GPU/queue longer before the same
+  zero-output result. (This is a separate judgment from whether verify:true
+  should be used at all — see the flip above. The point here is specifically
+  that a bigger number wasn't the fix.)
+- **Real bug found 2026-08-23**: the tool's own docs said a first-time
+  npx-based extension download costs ~500s, but the flat 400s ceiling applied
+  to every call regardless — meaning any extensions-attached call (e.g. the
+  Playwright recommendation added the same day) was guaranteed to be killed
+  before or during install. Fixed: `EXTENSION_TIMEOUT_BONUS_MS` (500s) added on
+  top of the base 400s only when `extensions` is non-empty, computed once per
+  task and threaded through the kill timer and all status messages via
+  `entry.timeoutMs`.
+
+## Bug: Goose stderr never captured (2026-08-23)
+
+Root-caused the "no diagnostic info" problem from the Playwright extension
+test above. `spawn(GOOSE_EXE, args, { stdio: ["ignore", "pipe", "pipe"] })`
+pipes stderr as a file descriptor, but nothing ever attached a `.on("data")`
+listener to `child.stderr` - every Goose-level error message (crash, extension
+load failure) was captured by the OS pipe and then simply never read, which
+in Node means it's silently discarded, not buffered for later. This matters
+specifically because Goose's own documented error format for extension
+failures is literally `"process quit before initialization: stderr = ..."` -
+the actual cause was sitting in the one stream we weren't reading. Fixed:
+`entry.stderr` accumulates stderr chunks (capped at 8000 chars), threaded into
+`summarizeGooseRun` and surfaced in every status message when non-empty.
+
+Also checked while diagnosing the Playwright failure, both ruled out as causes
+on this box specifically:
+- Known Windows bug ([block/goose#6816](https://github.com/block/goose/issues/6816)):
+  `@` in package names gets backslash-escaped when extensions are added via
+  Goose Desktop's UI, breaking npx path resolution. Fixed upstream via PR
+  #7242. Scope unclear (Desktop UI config generation vs. CLI `--with-extension`
+  directly) - not confirmed as our cause, but installed Goose is v1.47.0;
+  worth checking if that predates the fix if the bug recurs after the stderr
+  fix lands.
+- Known "Node.js installer script not found" issue: happens when Node is
+  installed outside the standard `C:\Program Files\nodejs\` path. Checked:
+  `where node` on this box returns exactly that standard path (v25.8.0). Not
+  the cause here.
+- Confirmed our `--with-extension` syntax matches Goose's own documented
+  format exactly (`[name:]ENV1=val1 command args...`) - not a syntax error on
+  our side.
+
+**Not yet resolved**: the actual root cause of the Playwright non-attachment.
+Next real diagnostic step, pending a client restart to load the stderr-capture
+fix: re-run the same test and read `entry.stderr` for the first time.
+
+## Design: deep research harness for Qwen (2026-08-23)
+
+Selected [free-search-mcp](https://github.com/sweetcornna/free-search-mcp)
+(`uvx free-search-mcp`) after comparing options: DuckDuckGo MCP and the
+official MCP reference `fetch` server (`uvx mcp-server-fetch`) each cover half
+the problem (search XOR fetch) and need composing; Tavily/Brave/Exa need paid
+API keys past a small free tier. free-search-mcp's `research()` tool does
+search + fetch + brief generation in one call, no API key, multi-engine
+(DuckDuckGo/Mojeek/Startpage) with a Playwright fallback, plus `read_doc()`
+for PDF/DOCX/XLSX/PPTX/EPUB/CSV - broader than this orchestrator's own native
+web tools in that one respect. `uv`/`uvx` confirmed already installed on this
+box (v0.11.8). Small project (54 stars, 57 commits) but no red flags found in
+its docs/architecture. Wired into `delegate_coding_task`'s `extensions` field
+description and both CLAUDE.md files. **Not live-tested** - the Playwright
+extension was also assumed-working before being recommended and turned out not
+to be, so this should not be trusted either until confirmed the same way: a
+real delegate call, checking the actual result text for registration.
+
+## Design: verify removed entirely (2026-08-23)
+
+`verify:true` was documented as opt-in with an explicit ~1-in-16 success-rate
+warning in the tool description. Caller kept passing it anyway across both
+real sessions (8/8 real calls in session 2, despite the warning already being
+live). A written warning did not change behavior. Removed `verify` as a
+parameter entirely - `delegate_coding_task` now always instructs Qwen not to
+run build/typecheck/test commands. There is no code path left that can
+reproduce the failure mode, regardless of what the caller intends.
+
+## Bug: Playwright extension never attached (2026-08-23, live-tested)
+
+Recommended `extensions: ['npx -y @playwright/mcp@latest']` for UI-facing
+tasks (see the two entries above this one) without ever having tested it.
+Live-tested directly: dispatched a task with that extension attached. Qwen's
+own final report: *"I don't see a browser/playwright tool in my current
+toolset... the available extensions (`summarize`, `chatrecall`,
+`code_execution`) don't include one."* The extension did not register in
+Goose's toolset - root cause not diagnosed (could be a silent npx failure, a
+Goose `--with-extension` bug, or something else). Qwen worked around it
+unprompted: launched real headless Chrome
+(`C:\Program Files\Google\Chrome\Application\chrome.exe`) via Python's
+`subprocess` module (cmd.exe mangles the space in `Program Files` if invoked
+as a raw shell string) with `--headless --dump-dom <file:// url>`, and
+confirmed the actual rendered DOM matched the edit (exit code 0, no errors).
+
+Conclusion: `--with-extension` MCP attachment is **not proven reliable** on
+this box for at least this one real package - stop recommending it as the
+default UI-verification path. Direct shell-invoked headless Chrome **is**
+proven reliable (this one live test) and needs no attachment step to fail.
+Tool description now recommends the shell-Chrome pattern by name instead of
+Playwright. `extensions` remains available and documented, just not assumed
+to work without checking the actual result text - same "never trust a
+delegated summary without checking" discipline as everything else.
+
+## Design: HTTP status endpoint to escape turn-per-poll cost (2026-08-23)
+
+User's framing: "you can implement a tool for yourself to remind you it's
+done maybe? Could be more efficient than polling." Checked the actual
+literature rather than just building something:
+
+- MCP's own async-task standard, **SEP-1686 "Tasks"** (Final status, current
+  spec) - not a draft, the accepted design. Its own Motivation section states
+  the scoping explicitly: *"Concurrent and poll-able tool calls... for
+  operations executing in the range of a few minutes, and some form of push
+  notification system... for long analyses on the order of hours. This SEP
+  supports the former."* Our tasks are minutes-scale - polling is what the
+  spec authors deliberately designed for this tier, not an oversight. The
+  spec's one notification (`notifications/tasks/created`) fires only at task
+  *creation*, to resolve a race condition, not on completion - even the
+  current standard has no push-to-done primitive. Separately, the broader
+  webhook-vs-polling literature (Gemini API webhooks, agent-runtime writeups)
+  does favor push - but for durable sleep/wake execution platforms, a
+  different deployment model than an interactive Claude Code session driving
+  MCP tools.
+
+Given no protocol-level push exists to use, built the practical equivalent
+using what the harness already has: a localhost-only HTTP endpoint
+(`STATUS_PORT = 18021`, GET `/task/<taskId>`) that a Bash background loop
+(`run_in_background:true`) can poll with real OS-level `sleep`, entirely
+outside any LLM turn - the caller is notified once, on completion, instead of
+manually calling `qwen_check_task` N times, each one a permanent addition to
+conversation context (the actual mechanism behind the 570M-cache-read-token
+finding earlier in this file). The endpoint is deliberately minimal: GET-only,
+read-only, `{found, done, booting, executing, isError}` - no result text
+(that still comes from `qwen_check_task`, once, after the wait resolves, to
+avoid duplicating `summarizeGooseRun`'s formatting in two places), no way to
+start or cancel work over HTTP, bound to `127.0.0.1` only.
+
+**Real incident, same day, caught from the user's own pasted MCP logs**: this
+first version had no `'error'` handler on the HTTP server. Each Claude surface
+(Desktop, Code, Cowork - confirmed from the log, which names exactly these)
+spawns its own separate OS process running this same stdio server; only the
+first to start can bind `STATUS_PORT`. Every later one hit `EADDRINUSE`, and
+an unhandled `'error'` event on a Node `http.Server` is an uncaught exception
+- which killed the ENTIRE process, not just the listener, taking that
+session's whole MCP connection down with it (log showed "Connection closed"
+seconds after a successful `tools/list`, across multiple sessions). Fixed with
+an `http.on("error", ...)` handler that logs and continues instead - verified
+directly, not just reasoned about: manually occupied port 18021 with a dummy
+listener, started `index.js` against it, confirmed via stderr the process
+logged the conflict and stayed alive rather than throwing. A zombie process
+from before the fix (still holding the port, already disconnected from its
+own client) was killed manually to clear the port for the next real restart.
+
+**Lesson for any future feature here**: this server is not a singleton -
+multiple independent OS processes run the same code concurrently, one per
+Claude surface, each with its own separate `pendingTasks` in memory. Any
+future addition that binds a fixed port, writes a fixed file path, or assumes
+single-instance state needs the same "what happens when a second copy of me
+is already running" check this one initially skipped.
+
+**Not yet live-tested end-to-end** (a real background curl loop against a real
+in-flight task, now that the crash is fixed) - needs a restart to load.
+
+## Rejected (for now): Goose's own subagent dispatch (2026-08-23)
+
+User's prior experience running Qwen via TabbyAPI got parallel subagents
+working sharing one KV cache pool, and asked whether Goose's built-in
+`delegate`/`summon` subagent mechanism (`qwen-worker`, seen in the tool
+listing during the harness audit) could do the same here. Checked the real
+infrastructure first: this server's CTX=huge config does run
+`--max-num-seqs 2` with `--enable-prefix-caching` genuinely on
+(`~/qwen-serving/single-user/start_qwen.sh`) - the mechanism class is real
+and present, inherited from upstream's own tuning, not something built for
+this project specifically.
+
+Live-tested the actual subagent path: dispatched a task instructing Qwen to
+delegate three trivial one-sentence summarization subtasks via `qwen-worker`,
+async/parallel. Result: **failed outright on the first attempt** - the
+subagent's default LLM config requested a model named `"haiku"`, not
+inheriting this server's `GOOSE_MODEL=qwen3.8-27b` override (Goose's subagent
+system has its own model-selection defaults, apparently assuming Claude-style
+tiering). Qwen caught this itself and retried with an explicit override -
+that retry then **never completed**, hitting the full 400s timeout with zero
+of the three trivial subtasks finished.
+
+Conclusion: the underlying capacity is real (2-way concurrency, real
+prefix-cache sharing), but Goose's own subagent implementation is not
+currently reliable enough to route real work through. Not recommended as of
+this writing. If revisited: the model-override syntax needs to actually work
+end-to-end, and a clean fast run needs to be confirmed before trusting it,
+same bar as everything else in this file.
+
+## Boot-log warnings cross-checked against upstream, MAX_SEQS raised 2->4 (2026-08-24)
+
+User pasted a real vLLM boot log and asked for the WARNING/ERROR lines to be
+explained, plus whether 2-way concurrency had actually been tested properly
+(it hadn't - see previous entry's "not yet live-tested" note). Rather than
+reason from first principles, read upstream's own `docs/gotchas.md` (31+
+numbered points) and `README.md` in the actual WSL checkout before concluding
+anything.
+
+**Per-warning findings:**
+- `Unknown vLLM environment variable detected: VLLM_DFLASH2_LOOKUP*` (x4) -
+  these are this recipe's own patch env vars, not stock vLLM; the generic
+  validator just doesn't know about them. Cosmetic.
+- `[ERROR] min_frames/max_frames... not documented` (x2, once per process) -
+  `transformers`' own docstring lint for the Qwen3-VL video processor,
+  instantiated generically even though the very next line confirms
+  `language_model_only`/text-only mode. Labeled ERROR but dead-code-path
+  noise. Cosmetic.
+- `mamba_ssm_dtype='float32' in config, but --mamba-ssm-cache-dtype='float16'
+  was passed` - confirms an intentional override already made in
+  `start_qwen.sh`, not a new problem.
+- `Prefix caching in Mamba cache 'align' mode is... experimental` - not
+  mentioned in upstream's own docs, but already substantively validated:
+  upstream's own README documents extensive `PREFIX_CACHE=1 + CTX=huge`
+  testing (4.7s vs 169s cache-hit benchmark, GSM8K accuracy checks). This is
+  vLLM's generic caution label on a path this recipe has already stress-
+  tested for the specific case we run. No action.
+- `Add 3 padding layers, may waste at most 60.00% KV cache memory` - also
+  unmentioned upstream, also already implicitly priced in: the realized pool
+  (268,169 tokens) matches upstream's own benchmarked number for this exact
+  config exactly (see below), so whatever padding occurs is already reflected
+  in that final figure, not hidden loss on top of it. No action.
+- `max_num_scheduled_tokens is set to 2034... may lead to suboptimal
+  performance... decrease num_speculative_tokens or max_num_seqs` - directly
+  tied to the concurrency question below.
+- `flashinfer is unavailable; the DFlash2 selector uses torch.topk, at
+  roughly half the speed` - checked whether flashinfer was even installed
+  (`pip show flashinfer-python` -> yes, 0.6.16.post3, a real vLLM dependency,
+  not missing) - so the failure is at runtime, not install. Checked
+  `CUDA_HOME`: unset, and no `nvcc` found anywhere under `/usr/local` in this
+  WSL venv - only PyTorch's bundled CUDA runtime is present, no full toolkit.
+  Same root cause independently explains the earlier `deep_gemm... AssertionError:
+  cuda_home is not None` warning - both packages need `nvcc` to JIT-compile
+  custom kernels on first use and silently fall back without it. Confirmed
+  via upstream's own README that FlashInfer is documented as the backend for
+  `CTX=long` (fp8 KV, 150k context) specifically, not `CTX=huge` (our KVarN
+  config) - so this gap only costs the DFlash2 selector step, not the main
+  attention/decode path. Real, but narrow. **Not fixed**: installing a system
+  CUDA toolkit (`nvcc`) is a multi-GB, system-level WSL change: flagged for
+  the user to approve rather than done unprompted, unlike the in-repo config
+  changes elsewhere in this file.
+
+**Concurrency, tested properly this time:** upstream's README directly
+addresses `MAX_SEQS` at `CTX=huge`: *"Fire 8 concurrent requests... the server
+runs two, with the other six queued - because this mode sets MAX_SEQS=2. That
+is a deliberate default for long-document sessions, not an engine limit...
+MAX_SEQS=8 lifts it: peak 5 concurrent on the same 8-stream test, with the KV
+pool unchanged at 268,169 tokens (a recurrent-state slot costs ~8 MiB)."` This
+directly contradicts the prior entry's assumption that `--max-num-seqs 2` was
+a hard ceiling worth matching exactly rather than a low default worth
+raising.
+
+Raised `MAX_SEQS` 2 -> 4 in `launchers/start_huge.sh` (a conservative middle
+step versus upstream's own tested 8) and verified live on this box, not just
+trusted from docs: rebooted, watched the boot log directly (confirmed the
+process was alive and progressing via `ps`/`nvidia-smi` during a slower
+cold-compile pass - the CUDA graph capture list grew from `[1,2,4,8,16]` to
+`[1,2,4,8,16,24,32]`, so compilation cache invalidated and had to redo, ~37s),
+and confirmed the final numbers: **KV cache size: 268,169 tokens - identical
+to the MAX_SEQS=2 boot**, `max_num_scheduled_tokens` shifted from 2034 to
+2020 (config genuinely took effect), no new errors, no CUDA/OOM issues,
+`HTTP server started` reached cleanly. Matched `MAX_CONCURRENT_GOOSE` in
+`mcp-qwen/index.js` (2 -> 4) to the new ceiling. Room to raise both further
+toward upstream's tested 8 if 4 proves stable in real use - 4 was chosen as a
+verified floor, not asserted as the optimum.
+
+## Design: MCP-level concurrency raised to 2 (2026-08-23)
+
+Given the subagent path above isn't ready, used the confirmed 2-slot engine
+capacity a different way: `runQueued` was previously a strict FIFO chain
+(exactly 1 Goose process at a time, always). Failure #1 in this file's first
+section ("3 of 4 concurrent calls timed out") was the historical reason for
+that - but re-read now with the actual `--max-num-seqs 2` figure in hand,
+that failure is 4 requests against a 2-slot engine, not evidence that any
+concurrency is unsafe. Replaced the FIFO chain with a small semaphore
+(`MAX_CONCURRENT_GOOSE = 2`, `activeGooseCount`/`gooseWaitQueue`) allowing up
+to 2 genuinely simultaneous Goose runs, a 3rd queuing until a slot frees -
+matching the server's real ceiling exactly, not guessing at a new number.
+
+One real race this introduces and had to design around: two concurrent calls
+both needing a **mode switch** (huge<->fast) at the same moment would both
+hit `ensureMode`'s `pkill` + relaunch sequence simultaneously and could
+corrupt each other's boot. Mode switches are rare (`huge` is the default and
+stays booted) but not impossible under real concurrency. Fixed by keeping the
+boot/mode-check step (`ensureMode` + `getApiKey`) serialized through a
+separate `bootMutex`, independent of the 2-way concurrency gate on the actual
+Goose subprocess execution - cheap in the common case (a single fast HTTP
+check when no switch is needed), and eliminates the race entirely rather than
+accepting the risk.
+
+**Not yet live-tested** - needs a restart to load, then two real concurrent
+`delegate_coding_task` calls to confirm they actually overlap in wall-clock
+time (not just that neither errors).
+
+## Resolved: Playwright root cause found and fixed (2026-08-23, same day)
+
+The stderr-capture fix (next entry, chronologically first) immediately
+revealed the actual cause on the very next live test: `Warning: Failed to
+start extension 'npx' (IO error: program not found), continuing without it`.
+Goose's Rust process spawner cannot execute `npx` directly on Windows because
+`npx` resolves to `npx.cmd` (an npm shim), not a real `.exe` - the identical
+class of bug this project's own `startGooseTask` was specifically written to
+avoid for *our* spawn of `goose.exe` (see "Goose subprocess design" above),
+just occurring one level down, inside Goose's own spawning of the extension
+process.
+
+Fix confirmed live: `extensions: ['npx.cmd -y @playwright/mcp@latest']`
+(bare `npx.cmd`, not `npx`) - Qwen reported real Playwright browser tools
+available. Also tested `uvx free-search-mcp` (see deep-research entry below)
+in the same session: registered successfully as extension `uvx` with
+`search`/`research`/`fetch`/`fetch_batch`/`read_doc` tools, unaffected by the
+npx bug since `uvx` is a real `.exe` (confirmed via `where uvx`), not a shim.
+
+One remaining Playwright-specific limitation, not a bug: it blocks `file://`
+URLs by default (a real security restriction in the package itself) - use
+headless Chrome for local file verification, Playwright for real sites.
+
+Also confirmed while investigating: `gh` CLI is installed and already
+authenticated (repo/workflow/gist/read:org scopes) - Qwen can do real GitHub
+work directly via its `shell` tool with no extension needed at all, a
+capability that existed the whole time and was never documented or used.
+
+Also ran `goose update` (official self-update command, Sigstore-verified) -
+already on latest stable (1.47.0), so the update path itself carried no risk
+and ruled out "outdated Goose" as a contributing factor.
+
+## Architecture validated against external research (2026-08-23)
+
+Before treating the orchestrator/worker split as settled, checked it against
+2026 multi-agent production literature rather than just internal telemetry.
+Relevant finding: delegation quality has a floor on the *delegating* model -
+one study found reliable task decomposition/delegation only on the strongest
+models tested (~0.85), falling to "unusable" (~0.45) on fast/cheap tiers, and
+a separate planner-executor study found larger planners measurably improve
+smaller executors' output. This directly argues against ever "cheapening" the
+orchestrator itself (e.g. routing Sonnet's own planning/decomposition/judging
+through a lighter model) even while aggressively minimizing what work it
+executes directly. Orchestrator-worker (one capable lead agent decomposes and
+delegates to workers, assembles/judges results) is independently confirmed as
+the standard production pattern for this shape of problem, not a bespoke
+design here.
+
+## Considered and rejected (so far): Claude Code CLI instead of Goose
+
+Investigated spawning `claude -p --output-format stream-json
+--dangerously-skip-permissions --mcp-config <file>` instead of `goose.exe`,
+pointed at the local vLLM server via `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`
+in that subprocess's own env (Sonnet stays the orchestrating session,
+unaffected — same relationship Goose has today, just swapping the engine).
+
+Architecturally plausible: vLLM documents native Anthropic Messages API
+support ([docs.vllm.ai](https://docs.vllm.ai/en/latest/serving/integrations/claude_code/)),
+and Claude Code's CLI fully supports headless subprocess use with the flags
+above. **Not attempted** — two open questions cut against it: (1) unverified
+against this box's actual vLLM launch flags (needs Anthropic-format tool-call
+parsing, not just the OpenAI-format `qwen3_coder` parser already configured),
+and (2) Claude Code's own system-prompt/tool-schema overhead is substantially
+heavier than Goose's lean agent loop — at the same ~77 tok/s, a heavier
+per-turn prompt means *less* of the 400s budget reaches actual work, which
+cuts directly against the exact timeout problem being fought. Current
+decision: keep hardening Goose (two consecutive rounds of real, narrow,
+fixable bugs so far — not evidence of a dead end); treat a Claude-Code-as-
+subprocess swap as a separate, isolated prototype to validate before ever
+wiring it into production.
+
+Also noted: [claude-code-router](https://github.com/musistudio/claude-code-router)
+claims native per-subagent model routing (`<CCR-SUBAGENT-MODEL>` syntax) which
+would be the more "native" version of this idea (Sonnet's own `Task` tool
+dispatching straight to Qwen). Unverified whether tokens routed this way
+bypass Anthropic billing entirely or still transit Anthropic's infra first —
+that's the question that actually matters here and wasn't answered by its
+docs. Not prototyped.
+
+## Serving-stack corruption incident (KV quantization, unresolved)
+
+A one-off garbled-output ("!" character burst) incident in real use. Ruled
+out: KV quant precision (perplexity impact measured negligible, speculation is
+exact by construction), the LOOKUP_ADAPTIVE prefix-cache bug (not reachable at
+this box's draft-token count), vLLM upstream issue #43713 (lives in a parser
+class this stack's `qwen3_coder` architecture doesn't use). Never reproduced
+despite dedicated repro attempts. Not fully closed: one academic paper (arXiv
+2606.09864) flags this box's exact KV quantization shape (4-bit K / 2-bit V)
+as a plausible risk class for speculative decoding specifically, but live
+PPL/GSM8K/needle-in-haystack numbers show no measurable effect — treated as a
+low-probability tail event, not a known bug, unless it recurs. Mitigation
+(not a fix — root cause lives in third-party binary inference code):
+`detectCorruption()` in `mcp-qwen/index.js` flags a repeated non-benign
+character (5+) or a 40-char block repeating 3+ times on every response;
+`ask_qwen`/`ask_qwen_fast` auto-retry once (safe, no side effects);
+`delegate_coding_task` cannot safely auto-retry (Goose may have already
+written files) so it surfaces a loud warning instead.
+
+## vLLM serving recipe knobs (tracks upstream syv-ai/qwen38-27b-rtx3090)
+
+Two correctness-relevant defaults, both verified via `bench/quality_battery.py`
+(PPL + 200-question GSM8K):
+- `VLLM_DFLASH2_LOOKUP_ADAPTIVE=0`, set permanently in `launchers/start_huge.sh`.
+  No-op at this box's `DFLASH_TOKENS=7` (the adaptive path only activates above
+  7 drafts), kept to document intent if `DFLASH_TOKENS` is ever raised.
+- `SPEC=dflash2 CTX=huge` runs `cudagraph_mode=FULL_AND_PIECEWISE` (upstream
+  default as of `82bd62d`/`b356e31`). GSM8K 96.5% (FULL) vs 95.0% (PIECEWISE),
+  matching upstream's own measurement. `SPEC=mtp CTX=huge` must stay on
+  `PIECEWISE` — confirmed correctness bug under FULL (empty answer at one
+  prompt-length residue in 128) that dflash2 doesn't share.
+
+## Claude Desktop config file gotcha
+
+Registration lives in `mcpServers` inside
+`C:\Users\Apath\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
+— **not** `~/.mcp.json` or `~/.claude/settings.json`, and not the
+normal-looking `AppData\Roaming\Claude\claude_desktop_config.json` either (this
+MSIX-packaged install silently redirects writes to the `Packages\...\LocalCache`
+path; editing the normal-looking path does nothing). Check the Developer tab in
+Settings ("Local MCP servers" > "Edit Config") to confirm which file is live.
+
+## Claude Code / Desktop MCP timeout research (2026-08-23)
+
+Whether `MCP_TOOL_TIMEOUT` is actually configurable and honored, since the
+async taskId/poll design is only worth keeping if it can't just be raised.
+Docs describe it as configurable with a very long default (~28h) for
+local/stdio servers like this one — on paper this server shouldn't need the
+workaround. In practice, multiple open, unresolved `anthropics/claude-code`
+issues report it isn't honored for Claude Code specifically, not just Desktop:
+[#16837](https://github.com/anthropics/claude-code/issues/16837),
+[#22058](https://github.com/anthropics/claude-code/issues/22058),
+[#47076](https://github.com/anthropics/claude-code/issues/47076) (reopened 6+
+times, closed stale each time). Decision: keep the taskId/poll pattern
+regardless of transport or client — it doesn't depend on the timeout config
+being honored, so can't be broken by this bug class. Do not trade it for an
+env var on the strength of docs alone.
+
+## FlashInfer relevance, CTX=long vs CTX=huge, and MAX_SEQS raised to 8 (2026-08-24)
+
+Three linked questions from the user after the 2026-08-24 boot-warning
+cross-check first landed (MAX_SEQS at 4, FlashInfer/CUDA toolkit flagged but
+not installed): is FlashInfer actually irrelevant to our config, is `CTX=long`
+maybe better than `CTX=huge`, and why stop MAX_SEQS at 4 — with explicit
+authorization this time to install a system CUDA toolkit if warranted and to
+keep testing MAX_SEQS further.
+
+**FlashInfer.** Re-grepped the full repo (README, docs/*.md, every .py/.sh
+that mentions it) rather than re-reasoning from memory. Two separate
+FlashInfer usages exist in vLLM, and neither applies to us:
+1. The fp8-KV attention backend, used only when `CTX=long` (150k, int8/fp8 KV)
+   is selected — README, verbatim: "vLLM 0.27.1's FlashInfer backend (needed
+   for fp8 KV, i.e. for 150k context) four drafts crash the engine...". Our
+   default is `CTX=huge`, which uses KVarN (a Triton-kernel 4/2-bit KV cache)
+   and never touches this backend regardless of whether FlashInfer is
+   installed.
+2. The optional FlashInfer top-k/top-p *sampler* — this is what the boot
+   warning ("DFlash2 selector uses torch.topk... at roughly half the speed")
+   is actually about. Checked whether it's even reachable: `grep -rn
+   VLLM_USE_FLASHINFER_SAMPLER` shows it hardcoded to `0` in
+   `single-user/start_qwen.sh` (and in every calibration/drafter script), with
+   an inline comment explaining why — "flashinfer's sampling.cu does not build
+   with older system nvcc (12.0)". So this repo already deliberately disables
+   the exact FlashInfer path the warning refers to, on correctness/build
+   grounds unrelated to whether CUDA_HOME is set. Separately, "the DFlash2
+   selector" in the boot warning's own wording is misleading — DFlash2's real
+   candidate selector is a named submodule of the drafter's own weights
+   (`candidate_selector`, referenced in `drafter/quant_dflash2.py`), not a
+   FlashInfer consumer at all. The warning is vLLM's stock generic message for
+   a code path this recipe's own patches (small-topk-fast-softmax, documented
+   in `docs/optimizations.md` point 6) already replace with a *deliberately
+   chosen* `torch.topk`-based implementation — described there as a genuine
+   optimization ("+4% at default sampling"), not a fallback being tolerated.
+   **Conclusion: installing the CUDA toolkit would fix a warning that already
+   doesn't describe an active code path for CTX=huge. Not installed** — this
+   supersedes the earlier "flagged, not fixed" framing; it's now "investigated
+   and confirmed unnecessary," not merely deferred.
+
+**CTX=long vs CTX=huge.** Re-read the README's own single-stream and
+speculator-depth tables directly rather than trusting an earlier summary.
+`CTX=long` (114-139k effective, fp8 KV via FlashInfer, k=3 drafts — k=4
+crashes the FlashInfer backend under concurrent finish/mid-generation,
+"club-3090 reports the same n=4 eventually dies, n=3 stable" pattern) is
+*slower* on single-stream decode than even `CTX=fast`: 96/102 tok/s vs
+`CTX=fast`'s 121/120, vs `CTX=huge`'s DFlash2 path at 130/133 tok/s C1 (up to
+259-381 tok/s reproducing context via lookup drafting, which `CTX=huge` alone
+supports at 245k). `docs/long-context.md`'s own description of `CTX=long`:
+"worth it only for context reproduction" — i.e. upstream's own docs already
+scope it as a narrow-use-case config, not a general-purpose alternative to
+`CTX=huge`. Given our actual use (single orchestrator session, general
+coding/research delegation, not verbatim-document-reproduction workloads),
+`CTX=huge` wins on both context size (245k vs 114-139k) and speed. **No
+config change** — confirms the existing default was already correct, not a
+lucky guess.
+
+**MAX_SEQS raised 4 -> 8.** Read the README's own MAX_SEQS section in full
+this time (previously only the summary sentence had been read): raising it
+"grows the captured decode graphs, which is why the default stays low rather
+than because it would cost you context" — i.e. the tradeoff is one-time boot
+memory/time, not runtime throughput or context budget. Confirmed this is
+orthogonal to the separate PIECEWISE-vs-FULL_AND_PIECEWISE correctness
+question (also re-verified while in there — see below). Bumped
+`launchers/start_huge.sh`'s `MAX_SEQS` to 8 (upstream's own fully-tested
+ceiling — going further would be extrapolation, not verification, so 8 is
+being treated as the practical top absent new evidence) and rebooted live.
+
+Verified, not assumed: `GPU KV cache size: 268,169 tokens` — byte-for-byte the
+same figure as the MAX_SEQS=2 and MAX_SEQS=4 boots. No new errors anywhere in
+the boot log (grepped for error/fail/crash/illegal-memory-access, excluding
+the four already-known cosmetic lines). Only observed change:
+`max_cudagraph_capture_size` went 32 → 64 and `cudagraph_capture_sizes`
+lengthened to `[1,2,4,8,16,24,32,40,48,56,64]`, adding ~15s of one-time
+compile/capture time (torch.compile itself: 36.00s, unchanged in kind from the
+MAX_SEQS=4 boot). Matched `MAX_CONCURRENT_GOOSE` in `mcp-qwen/index.js` to 8,
+updated the tool-description text, and re-ran `node --check index.js` (OK).
+
+**Process note, for future long-boot waits from this shell:** three separate
+booby traps hit in a row while trying to background this reboot from the
+Windows/Git-Bash side of the Bash tool, worth remembering:
+1. `wsl -d Ubuntu -- bash -c "cmd &"` (job backgrounded *inside* the `bash -c`
+   string) does not survive — the `wsl.exe` process exits as soon as the
+   backgrounded job returns control, and WSL kills the child with it. `setsid`
+   inside the same string did not fix this either.
+2. Git Bash (MSYS) expands `~` in `wsl -d Ubuntu -- bash ~/foo.sh` *before*
+   `wsl.exe` ever sees the argument, producing a garbled Windows-side path
+   (`C:/Users/Apath/...`). Use the absolute WSL path instead.
+3. Git Bash *also* auto-translates any argument that merely looks like a
+   POSIX absolute path (`/home/apath/...`) into a Windows path by its own
+   pathconv heuristic, even when it's meant for `wsl.exe` verbatim — turning
+   `/home/apath/foo.sh` into `C:/Program Files/Git/home/apath/foo.sh`. Fix:
+   prefix the call with `MSYS_NO_PATHCONV=1`.
+The combination that actually worked: `MSYS_NO_PATHCONV=1 wsl -d Ubuntu --
+bash /home/apath/qwen-serving/launchers/start_huge.sh` run via the Bash tool's
+own `run_in_background:true` (letting the harness hold `wsl.exe` open, rather
+than trying to background anything inside WSL itself). For polling a
+long-running boot without spending a turn per check: watch the harness output
+file directly for a *specific* marker string (`Application startup complete`
+or `Uvicorn running`) — a broad `grep -qi error` against vLLM's own boot log
+false-positives immediately on benign lines already present at cold boot
+(`AssertionError` from the expected/known `deep_gemm`/`CUDA_HOME` import
+failure, and the literal string `Traceback (most recent call last):` from
+that same benign exception's own printed stack). Both false-positives were hit
+live this session before landing on a marker specific enough to be reliable.

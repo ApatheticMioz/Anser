@@ -1,0 +1,53 @@
+# ====================================================================
+# LLM_Ecosystem .gitignore
+# ====================================================================
+
+# Python environments & caches
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# Secrets, Credentials, & Private Keys (CRITICAL)
+api_key.txt
+.webui_secret_key
+*.key
+*.pem
+*.token
+.env
+.env.*
+.git-credentials
+
+# Large binaries & pre-compiled distributions
+llama-cpp/*.exe
+llama-cpp/*.dll
+llama-cpp/*.lib
+llama-cpp/*.pdb
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.onnx
+
+# Node.js dependencies & debug logs
+node_modules/
+mcp-qwen/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Benchmarks scratch directories & raw evaluation runs
+benchmarks/swe-rebench/scratch/
+benchmarks/swe-rebench/__pycache__/
+*.log
+
+# IDE & AI Assistant internal / lock files
+.claude/
+.gemini/
+.idea/
+.vscode/
+*.swp
+*~
