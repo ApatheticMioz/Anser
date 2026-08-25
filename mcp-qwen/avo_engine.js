@@ -118,7 +118,7 @@ export class AvoLineageEngine {
       metricScore: metricScore ?? null,
       status,
       timestamp: new Date().toISOString(),
-      errorLog: !passed ? (stderr || stdout || "").slice(-500) : null,
+      errorLog: !passed ? (stderr || stdout || "").slice(-800) : null,
     };
 
     this.state.candidates.push(candidateNode);
@@ -130,24 +130,14 @@ export class AvoLineageEngine {
       return {
         status: "ACCEPTED",
         candidateId,
-        message: `Candidate ${candidateId} improved metric to ${metricScore} and is now the new lineage baseline!`,
+        message: `Candidate ${candidateId} improved metric to ${metricScore} (new active baseline).`,
       };
     } else {
-      // Deterministic Git rollback to parent baseline
       await this.save();
-      let rollbackMsg = `Candidate ${candidateId} did not improve metric (Status: ${status}).`;
-      try {
-        if (parentCommit && parentCommit !== "uncommitted_init") {
-          await execFileAsync("git", ["reset", "--hard", parentCommit], { cwd: this.cwd });
-          rollbackMsg += ` Cleanly rolled back working tree to ${parentCommit}.`;
-        }
-      } catch (err) {
-        rollbackMsg += ` (Warning: automatic git rollback encountered: ${err.message})`;
-      }
       return {
         status,
         candidateId,
-        message: rollbackMsg,
+        message: `Candidate ${candidateId} evaluated (Status: ${status}). Working tree preserved for inspection and iterative refinement.`,
       };
     }
   }

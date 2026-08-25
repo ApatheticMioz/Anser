@@ -881,14 +881,13 @@ server.registerTool(
 server.registerTool(
   "qwen_avo_step",
   {
-    title: "NVIDIA AVO Candidate Variation Step with Git Lineage & Rollback",
+    title: "NVIDIA AVO Candidate Variation Step with Lineage Tracking",
     description:
       "Executes ONE grounded candidate variation step in an NVIDIA AVO-style loop: " +
-      "1. Injects grounded lineage history (what failed previously and why). " +
+      "1. Injects grounded lineage history (previous hypotheses, metric results, and failure logs). " +
       "2. Dispatches Qwen via Goose to implement the specific hypothesis in `cwd`. " +
       "3. Runs `test_command` to measure real performance metrics. " +
-      "4. Records result in `.avo/lineage.json`. If test fails or metric regresses, " +
-      "automatically performs `git reset --hard` back to the active best baseline.",
+      "4. Records result and compiler/test stderr in `.avo/lineage.json` for iterative refinement.",
     inputSchema: {
       cwd: z.string().describe("Target workspace directory containing a git repository"),
       hypothesis: z.string().describe("Specific hypothesis being tested (e.g. 'Replace AdamW with PCGrad gradient projection')"),
