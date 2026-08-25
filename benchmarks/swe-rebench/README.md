@@ -4,6 +4,14 @@ Validates the actual served, quantized model (not the self-reported 61.7
 SWE-bench Pro figure, which was almost certainly measured on a different
 checkpoint/precision) against a **contamination-resistant** benchmark.
 
+**Status: complete.** Result: **32.0% Resolved Rate (16/50)**, best-of-1,
+44% of the sample never got a solve attempt within the 900s timeout — see
+[results/results.md](results/results.md) for the full breakdown (including
+the more informative 57.1% per-attempt rate) and an honest log of the five
+real bugs (two in the solve script, three in the grading path — one of
+which was upstream, in SWE-rebench's own `eval.py`) found and fixed before
+this number could be trusted.
+
 ## Why this benchmark and not SWE-bench Verified/Pro
 
 OpenAI retired SWE-bench Verified in Feb 2026 after an audit found 59.4% of
@@ -74,7 +82,7 @@ Output: `predictions/sample_2026_03_50.jsonl` - 50 tasks, `problem_statement`
 `PASS_TO_PASS` - the harness pulls those straight from the HF dataset by
 `instance_id` at grading time, so the solve step never sees them.
 
-### 2. Solve (NOT run - GPU-intensive, needs your go-ahead)
+### 2. Solve (done)
 
 ```powershell
 # Windows, from this directory
@@ -85,22 +93,32 @@ same `GOOSE_PROVIDER=openai` / `GOOSE_MODEL=qwen3.8-27b` / `OPENAI_HOST` /
 `OPENAI_BASE_PATH` env pattern `mcp-qwen/index.js` uses for
 `delegate_coding_task` - kept in sync with it deliberately; if that env
 setup changes there, mirror it here. Resumable (skips `instance_id`s already
-in `--out`), so a killed run just re-invokes cleanly. 50 tasks × up to 900s
-each (`--timeout`, matching this repo's own extension-call ceiling) is a
-multi-hour worst case; real per-task time will mostly be far under that
-based on this session's own delegate timings.
+in `--out`), so a killed run just re-invokes cleanly. Took several hours in
+practice - 22/50 tasks genuinely exhausted the 900s per-task budget without
+producing a patch (real signal about task difficulty in unfamiliar large
+repos, not a bug - see results/results.md). Two real script bugs were found
+and fixed mid-run (Windows codepage crash on Goose's UTF-8 output; a locked
+leftover scratch dir colliding with a fresh `mkdir`) - both fixes are in
+the current version of this script.
 
-### 3. Grade (NOT run - needs step 2's output, and pulls Docker images)
+### 3. Grade (done)
 
 ```bash
 # WSL
 bash grade.sh predictions/goose_qwen_2026_03_50.jsonl
 ```
-Wraps `swebench.harness.run_evaluation` against
-`nebius/SWE-rebench-leaderboard`/`2026_03` with our predictions. Pulls one
-Docker image per distinct repo in the sample (not per task), applies
-`model_patch`, runs `FAIL_TO_PASS`+`PASS_TO_PASS`, reports Resolved Rate.
-Results land in `results/`.
+Uses SWE-rebench's own `scripts/eval.py` (cloned from
+`SWE-rebench/SWE-rebench-V2` to `~/swe-rebench-eval/repo`, patched - see
+below) - **not** the generic PyPI `swebench` package, which does not work
+against this dataset's schema (confirmed by reading its source: it expects
+a pre-baked `eval_script`/`eval_type` per instance that this dataset
+doesn't carry). Pulls one Docker image per instance, applies the patch,
+runs `FAIL_TO_PASS`+`PASS_TO_PASS`, reports per-instance results.
+**One upstream bug found and patched locally**: `eval.py` assumed the repo
+is checked out at `/{repo-name}` inside the container; live inspection of
+an actual container showed it's at the standard SWE-bench `/testbed` path
+instead, which made every single `git apply` fail with a false "not a git
+repository" error until fixed. Result: [results/results.md](results/results.md).
 
 ## Repos in the current 50-task sample
 
