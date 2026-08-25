@@ -37,6 +37,7 @@ import { z } from "zod";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { createServer } from "http";
+import { AvoLineageEngine } from "./avo_engine.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -224,6 +225,114 @@ async function ask(mode, prompt, system, maxTokens, reasoningEffort) {
     ? `[note: first response looked corrupted (${firstProblem}) and was discarded; this is a clean retry.]\n\n`
     : "";
   return `${note}${warn}${text}\n\n---\n(${usage.completion_tokens ?? "?"} completion tokens, ${usage.prompt_tokens ?? "?"} prompt tokens)`;
+}
+
+// --- Stateful Multi-Turn Conversational Sessions ---
+// Persistent conversational threads map directly to vLLM's internal KV prefix cache.
+// Consecutive turns in the same session benefit from near-instantaneous prefill (~3,000+ tok/s).
+const sessions = new Map();
+
+function getOrCreateSession(sessionId) {
+  let s = sessions.get(sessionId);
+  if (!s) {
+    s = {
+      id: sessionId,
+      createdAt: Date.now(),
+      lastAccessedAt: Date.now(),
+      messages: [],
+    };
+    sessions.set(sessionId, s);
+  } else {
+    s.lastAccessedAt = Date.now();
+  }
+  return s;
+}
+
+async function chatSession(sessionId, message, system, maxTokens, reasoningEffort) {
+  const { switched } = await ensureMode("huge");
+  const key = await getApiKey();
+  const session = getOrCreateSession(sessionId);
+
+  if (system && session.messages.length === 0) {
+    session.messages.push({ role: "system", content: system });
+  }
+  session.messages.push({ role: "user", content: message });
+
+  const thinkingOff = reasoningEffort === "off";
+  const defaultMax = 16384;
+  const body = {
+    model: "qwen3.8-27b",
+    messages: session.messages,
+    max_tokens: maxTokens ?? defaultMax,
+    ...(thinkingOff
+      ? { temperature: 0.7, top_p: 0.8, top_k: 20, chat_template_kwargs: { enable_thinking: false } }
+      : { temperature: 1.0, top_p: 0.95, top_k: 20 }),
+  };
+  if (!thinkingOff && reasoningEffort) {
+    body.chat_template_kwargs = { reasoning_effort: reasoningEffort };
+  }
+
+  async function once() {
+    const res = await fetch(`${BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(180_000),
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      throw new Error(`vLLM request failed: HTTP ${res.status} ${errBody.slice(0, 500)}`);
+    }
+    const j = await res.json();
+    return { text: j.choices?.[0]?.message?.content ?? "", usage: j.usage ?? {} };
+  }
+
+  let { text, usage } = await once();
+  const firstProblem = detectCorruption(text);
+  let retryProblem = null;
+  if (firstProblem) {
+    ({ text, usage } = await once());
+    retryProblem = detectCorruption(text);
+  }
+
+  session.messages.push({ role: "assistant", content: text });
+
+  const warn = retryProblem
+    ? `[WARNING: response looks corrupted (${retryProblem})]\n\n`
+    : "";
+  const userTurns = session.messages.filter((m) => m.role === "user").length;
+  return `${warn}${text}\n\n---\n(Session: "${sessionId}" | Turn ${userTurns} | ${usage.completion_tokens ?? "?"} completion tokens, ${usage.prompt_tokens ?? "?"} prompt tokens)`;
+}
+
+async function debatePlan(topic, initialProposal, maxRounds = 2, reasoningEffort = "medium") {
+  const sessionId = `debate_${Date.now().toString(36)}`;
+  const system =
+    "You are an elite Adversarial Red-Teamer and Senior Architect. In this multi-round debate, your goal is to rigorously attack hypotheses, find data leaks and math errors, and iteratively synthesize a bulletproof consensus.";
+
+  const r1Prompt =
+    `### Topic / Plan to Attack:\n${topic}\n\n### Initial Proposal:\n${initialProposal}\n\n` +
+    `CRITIQUE INSTRUCTIONS:\n` +
+    `1. Identify all fatal flaws, hidden assumptions, mathematical errors, and implementation risks.\n` +
+    `2. Pinpoint potential data leaks, edge cases, and framework incompatibilities.\n` +
+    `3. Conclude with 3 specific required amendments.`;
+
+  const r1Response = await chatSession(sessionId, r1Prompt, system, 8192, reasoningEffort);
+
+  const r2Prompt =
+    `Based on your critique in Round 1, now act as Lead System Architect and synthesize the **Consensus Architecture**:\n` +
+    `1. Address each flaw raised in Round 1 with a concrete mitigation.\n` +
+    `2. Provide the finalized, hardened implementation specification.\n` +
+    `3. Highlight the trade-offs accepted.`;
+
+  const r2Response = await chatSession(sessionId, r2Prompt, null, 12288, reasoningEffort);
+  sessions.delete(sessionId);
+
+  return (
+    `# SOTA Multi-Round Adversarial Debate: "${topic}"\n\n` +
+    `## Round 1: Adversarial Attack & Flaw Identification\n${r1Response}\n\n` +
+    `---\n\n` +
+    `## Round 2: Hardened Consensus Specification\n${r2Response}`
+  );
 }
 
 // --- delegate_coding_task: spawns the Goose CLI as a subprocess ---
@@ -687,6 +796,180 @@ server.registerTool(
   async ({ prompt, system, max_tokens, reasoning_effort }) => {
     const text = await ask("huge", prompt, system, max_tokens, reasoning_effort);
     return { content: [{ type: "text", text }] };
+  }
+);
+
+server.registerTool(
+  "ask_qwen_chat",
+  {
+    title: "Stateful Multi-Turn Conversation with Qwen3.8-27B (245K Context)",
+    description:
+      "Interactive, persistent multi-turn conversational session with local Qwen3.8-27B. " +
+      "Maintains dialogue history under `session_id`. Consecutive turns benefit from vLLM's " +
+      "KV prefix caching for near-instant prefill (~3,000+ tok/s). Use for iterative " +
+      "planning, socratic debugging, and back-and-forth collaborative discussions.",
+    inputSchema: {
+      session_id: z.string().describe("Unique identifier for this conversation thread (e.g. 'arch_discussion_1')"),
+      message: z.string().describe("Your message to Qwen in this conversational turn"),
+      system: z.string().optional().describe("Optional system prompt (set on first turn of the session)"),
+      max_tokens: z.number().int().positive().max(65536).optional().describe("Max output tokens (default 16384)"),
+      reasoning_effort: z.enum(["off", "low", "medium", "xhigh"]).optional().describe("Reasoning depth (default medium)"),
+    },
+  },
+  async ({ session_id, message, system, max_tokens, reasoning_effort }) => {
+    const text = await chatSession(session_id, message, system, max_tokens, reasoning_effort);
+    return { content: [{ type: "text", text }] };
+  }
+);
+
+server.registerTool(
+  "qwen_session_info",
+  {
+    title: "Inspect or Clear an Active Multi-Turn Conversation Session",
+    description:
+      "Returns turn count, message history overview, or clears an active session thread under `session_id`.",
+    inputSchema: {
+      session_id: z.string().describe("The session_id to inspect"),
+      clear: z.boolean().optional().describe("If true, clears this session from memory"),
+    },
+  },
+  async ({ session_id, clear }) => {
+    if (clear) {
+      sessions.delete(session_id);
+      return { content: [{ type: "text", text: `Cleared session "${session_id}" from memory.` }] };
+    }
+    const session = sessions.get(session_id);
+    if (!session) {
+      return { content: [{ type: "text", text: `Session "${session_id}" does not exist or has expired.` }] };
+    }
+    const userTurns = session.messages.filter((m) => m.role === "user");
+    const summary = userTurns
+      .map((m, i) => `Turn ${i + 1}: ${m.content.slice(0, 100).replace(/\n/g, " ")}...`)
+      .join("\n");
+    return {
+      content: [
+        {
+          type: "text",
+          text: `### Session: "${session_id}"\n- Total Messages: ${session.messages.length}\n- User Turns: ${userTurns.length}\n- Created: ${new Date(session.createdAt).toISOString()}\n- Last Active: ${new Date(session.lastAccessedAt).toISOString()}\n\nRecent Turns:\n${summary}`,
+        },
+      ],
+    };
+  }
+);
+
+server.registerTool(
+  "qwen_debate",
+  {
+    title: "Autonomous Multi-Round Socratic Debate & Consensus with Qwen3.8-27B",
+    description:
+      "Executes an autonomous 2-round adversarial debate loop inside Qwen in a single turn. " +
+      "Round 1 attacks the initial proposal (identifying edge cases, mathematical flaws, and leaks). " +
+      "Round 2 synthesizes an airtight, hardened consensus specification addressing all critiques.",
+    inputSchema: {
+      topic: z.string().describe("The core topic, research problem, or feature under debate"),
+      initial_proposal: z.string().describe("The initial architecture, plan, or hypothesis to attack and refine"),
+      max_rounds: z.number().int().min(1).max(3).optional().describe("Number of debate rounds (default 2)"),
+      reasoning_effort: z.enum(["off", "low", "medium", "xhigh"]).optional().describe("Reasoning depth (default medium)"),
+    },
+  },
+  async ({ topic, initial_proposal, max_rounds, reasoning_effort }) => {
+    const text = await debatePlan(topic, initial_proposal, max_rounds ?? 2, reasoning_effort);
+    return { content: [{ type: "text", text }] };
+  }
+);
+
+server.registerTool(
+  "qwen_avo_step",
+  {
+    title: "NVIDIA AVO Candidate Variation Step with Git Lineage & Rollback",
+    description:
+      "Executes ONE grounded candidate variation step in an NVIDIA AVO-style loop: " +
+      "1. Injects grounded lineage history (what failed previously and why). " +
+      "2. Dispatches Qwen via Goose to implement the specific hypothesis in `cwd`. " +
+      "3. Runs `test_command` to measure real performance metrics. " +
+      "4. Records result in `.avo/lineage.json`. If test fails or metric regresses, " +
+      "automatically performs `git reset --hard` back to the active best baseline.",
+    inputSchema: {
+      cwd: z.string().describe("Target workspace directory containing a git repository"),
+      hypothesis: z.string().describe("Specific hypothesis being tested (e.g. 'Replace AdamW with PCGrad gradient projection')"),
+      task_description: z.string().describe("Detailed code modification instructions for Goose"),
+      test_command: z.string().describe("Shell command to run test/benchmark and verify candidate (e.g. 'pytest tests/test_model.py')"),
+      target_metric_name: z.string().optional().describe("Name of target metric in stdout (e.g. 'dice', 'val_acc', 'throughput')"),
+      higher_is_better: z.boolean().optional().describe("Whether higher metric values represent improvement (default true)"),
+    },
+  },
+  async ({ cwd, hypothesis, task_description, test_command, target_metric_name, higher_is_better }) => {
+    const engine = new AvoLineageEngine(cwd);
+    const lineageBrief = await engine.getLineageBrief();
+
+    const enhancedTask =
+      `${lineageBrief}\n\n` +
+      `### Current AVO Candidate Objective:\n` +
+      `Hypothesis to Test: "${hypothesis}"\n` +
+      `Task Specification: ${task_description}\n\n` +
+      `GROUNDING RULES:\n` +
+      `- Inspect the files in cwd, apply ONLY the changes required for this hypothesis.\n` +
+      `- Do NOT self-verify in an endless loop; stop after applying the edits.`;
+
+    const { taskId, promise } = startGooseTask({ cwd, task: enhancedTask, mode: "huge" });
+    const gooseResult = await promise;
+
+    if (gooseResult.isError) {
+      return {
+        content: [{ type: "text", text: `AVO Candidate Implementation Failed during edit:\n${gooseResult.text}` }],
+        isError: true,
+      };
+    }
+
+    let testStdout = "";
+    let testStderr = "";
+    let exitCode = 0;
+    let extractedMetric = null;
+
+    try {
+      const parts = test_command.trim().split(/\s+/);
+      const cmd = parts[0];
+      const cmdArgs = parts.slice(1);
+      const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, { cwd, timeout: 300_000 });
+      testStdout = stdout;
+      testStderr = stderr;
+
+      if (target_metric_name) {
+        const metricRegex = new RegExp(`${target_metric_name}[:=]\\s*([0-9.]+)`, "i");
+        const match = stdout.match(metricRegex);
+        if (match) {
+          extractedMetric = parseFloat(match[1]);
+        }
+      }
+    } catch (err) {
+      exitCode = err.code ?? 1;
+      testStderr = err.stderr ?? err.message;
+      testStdout = err.stdout ?? "";
+    }
+
+    const recordResult = await engine.recordCandidate({
+      hypothesis,
+      testCommand: test_command,
+      metricScore: extractedMetric,
+      targetMetricName: target_metric_name,
+      higherIsBetter: higher_is_better ?? true,
+      stdout: testStdout,
+      stderr: testStderr,
+      exitCode,
+    });
+
+    const report =
+      `### NVIDIA AVO Candidate Evaluation Report\n` +
+      `- Candidate Status: **${recordResult.status}**\n` +
+      `- Hypothesis: "${hypothesis}"\n` +
+      `- Metric (${target_metric_name ?? "test"}): ${extractedMetric ?? (exitCode === 0 ? "PASSED (No numerical metric extracted)" : "FAILED")}\n` +
+      `- Lineage Action: ${recordResult.message}\n\n` +
+      `#### Test Execution Output Snippet:\n\`\`\`\n${(testStderr || testStdout).slice(-800)}\n\`\`\``;
+
+    return {
+      content: [{ type: "text", text: report }],
+      isError: recordResult.status === "FAILED",
+    };
   }
 );
 

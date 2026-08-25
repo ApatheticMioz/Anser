@@ -19,7 +19,10 @@ async function main() {
 
   const scenario = process.argv[2] ?? "success";
 
-  if (scenario === "success") {
+  if (scenario === "list") {
+    console.log("Registered tool count:", tools.tools.length);
+    process.exit(0);
+  } else if (scenario === "success") {
     console.log("\n=== calling delegate_coding_task (should succeed) ===");
     const result = await client.callTool({
       name: "delegate_coding_task",
