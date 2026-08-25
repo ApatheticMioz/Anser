@@ -133,19 +133,31 @@ const BENIGN_REPEAT_CHARS = new Set([..."-=_*~#`^+."]);
 
 function detectCorruption(text) {
   if (!text || text.length < 20) return null;
+  // 1. Non-benign character run (e.g. "!!!!!!" or "?????")
   const runMatch = text.match(/([^\w\s])\1{4,}/);
   if (runMatch && !BENIGN_REPEAT_CHARS.has(runMatch[1])) {
     return `${runMatch[0].length}x repeated '${runMatch[1]}' character`;
   }
-  for (let i = 0; i + 40 <= text.length; i += 40) {
-    const chunk = text.slice(i, i + 40);
-    // A chunk that's just a divider (all benign chars/whitespace) repeating
-    // is a banner, not degenerate output - e.g. a long "====" section rule.
-    if ([...chunk].every((c) => BENIGN_REPEAT_CHARS.has(c) || /\s/.test(c))) continue;
-    let count = 0;
-    let idx = -1;
-    while ((idx = text.indexOf(chunk, idx + 1)) !== -1) count++;
-    if (count >= 3) return `40-char block repeated ${count}x verbatim`;
+  // 2. Consecutive identical line repetition (e.g. 4+ identical lines in a row)
+  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 5);
+  let consecutiveCount = 1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i] === lines[i - 1] && ![...lines[i]].every((c) => BENIGN_REPEAT_CHARS.has(c))) {
+      consecutiveCount++;
+      if (consecutiveCount >= 4) return `Identical line repeated ${consecutiveCount}x consecutively`;
+    } else {
+      consecutiveCount = 1;
+    }
+  }
+  // 3. Consecutive phrase/block loop (e.g. chunk repeating consecutively >= 3x without intervening text)
+  for (let len = 20; len <= 80; len += 10) {
+    for (let i = 0; i + len * 3 <= text.length; i += 10) {
+      const chunk = text.slice(i, i + len);
+      if ([...chunk].every((c) => BENIGN_REPEAT_CHARS.has(c) || /\s/.test(c))) continue;
+      if (text.slice(i + len, i + len * 2) === chunk && text.slice(i + len * 2, i + len * 3) === chunk) {
+        return `${len}-char block repeated 3x consecutively`;
+      }
+    }
   }
   return null;
 }
@@ -165,10 +177,11 @@ async function ask(mode, prompt, system, maxTokens, reasoningEffort) {
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
   const thinkingOff = reasoningEffort === "off";
+  const defaultMax = mode === "huge" ? 16384 : 8192;
   const body = {
     model: "qwen3.8-27b",
     messages,
-    max_tokens: maxTokens ?? 4096,
+    max_tokens: maxTokens ?? defaultMax,
     ...(thinkingOff
       ? { temperature: 0.7, top_p: 0.8, top_k: 20, chat_template_kwargs: { enable_thinking: false } }
       : { temperature: 1.0, top_p: 0.95, top_k: 20 }),
@@ -647,7 +660,7 @@ const server = new McpServer({ name: "qwen38-local", version: "1.1.0" });
 const commonSchema = {
   prompt: z.string().describe("The task or question to send to Qwen3.8-27B"),
   system: z.string().optional().describe("Optional system prompt"),
-  max_tokens: z.number().int().positive().max(8192).optional().describe("Max output tokens (default 4096 - reasoning consumes a real chunk of this budget)"),
+  max_tokens: z.number().int().positive().max(65536).optional().describe("Max output tokens (default 16384 for huge, 8192 for fast)"),
   reasoning_effort: z
     .enum(["off", "low", "medium", "xhigh"])
     .optional()
