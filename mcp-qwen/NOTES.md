@@ -668,3 +668,30 @@ false-positives immediately on benign lines already present at cold boot
 failure, and the literal string `Traceback (most recent call last):` from
 that same benign exception's own printed stack). Both false-positives were hit
 live this session before landing on a marker specific enough to be reliable.
+
+## WSL environment MCP gap & cross-environment sync (2026-08-25)
+
+An audit of a live session where Gemini 3.7F in Antigravity IDE connected to a
+remote WSL workspace (`/home/apath/Work/temp/final`) revealed that the model
+never invoked `delegate_coding_task` despite starting the vLLM server.
+Root-cause analysis showed:
+
+1. **Remote-WSL Config Asymmetry**: Antigravity running via Remote-WSL resolves
+   global customization roots from Linux paths (`/home/apath/.gemini/config/`),
+   not the Windows host (`C:\Users\Apath\.gemini\config\`).
+2. `/home/apath/.gemini/config/mcp_config.json` was 0 bytes, and
+   `/home/apath/.gemini/GEMINI.md` did not exist. The remote agent context
+   received 0 MCP tools and no delegation rules.
+3. Path translation: Spawning Node on Windows from within WSL requires
+   explicit paths (`/mnt/c/Program Files/nodejs/node.exe D:\LLM_Ecosystem\mcp-qwen\index.js`),
+   as bare POSIX paths (`/mnt/d/...`) fail module resolution when passed to a Windows binary.
+
+**Fix Applied & Verified**:
+- Populated `/home/apath/.gemini/config/mcp_config.json` with the `node.exe` command
+  and `D:\LLM_Ecosystem\mcp-qwen\index.js`.
+- Created `/home/apath/.local/bin/node` wrapper executable in WSL.
+- Mirrored `GEMINI.md` to `/home/apath/.gemini/GEMINI.md` and `CLAUDE.md` to
+  `/home/apath/.claude/CLAUDE.md`.
+- Live verified from WSL via `mcp_client_test.js`: all 6 tools registered,
+  Goose subprocess executed, written files created and tested with 0 errors.
+

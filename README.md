@@ -3,10 +3,10 @@
 Local-first LLM delegation stack: Claude Sonnet 5 (in Claude Code / Antigravity)
 orchestrates, a locally-served Qwen3.8-27B does the bounded implementation work
 for free via a real agentic harness (Goose). Agent-facing rules live in
-[CLAUDE.md](CLAUDE.md) (and its mirror at `~/.claude/CLAUDE.md`) and
-[~/.gemini/GEMINI.md](file:///C:/Users/Apath/.gemini/GEMINI.md) for Antigravity —
-this file is the human-readable map and model/architecture reference; it is not
-loaded into any agent's context automatically.
+[CLAUDE.md](CLAUDE.md) (and its mirrors at `~/.claude/CLAUDE.md` and
+`~/.gemini/GEMINI.md` on both Windows and WSL) — this file is the human-readable
+map and model/architecture reference; it is not loaded into any agent's context
+automatically.
 
 ## Layout
 

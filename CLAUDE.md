@@ -71,15 +71,18 @@ or raw HTTP).
 
 `qwen38-local` (`ask_qwen`, `ask_qwen_fast`, `qwen_status`,
 `delegate_coding_task`, `qwen_check_task`, `qwen_cancel_task`) is registered
-globally. Server implementation: `mcp-qwen/index.js`.
+globally across both Windows and WSL environments. Server implementation:
+`mcp-qwen/index.js`.
 
-Claude Desktop's config lives at
-`C:\Users\Apath\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
-- not `~/.mcp.json`, not `~/.claude/settings.json`, and not the
-normal-looking `AppData\Roaming\Claude\claude_desktop_config.json` (this
-MSIX-packaged install silently redirects writes elsewhere). Confirm which file
-is live via Settings > Developer > "Local MCP servers" > "Edit Config" before
-assuming an edit didn't take effect.
+- **Windows Antigravity IDE**: Registered at `C:\Users\Apath\.gemini\config\mcp_config.json`
+  and rules at `C:\Users\Apath\.gemini\GEMINI.md`.
+- **WSL Remote Antigravity IDE**: Registered at `/home/apath/.gemini/config/mcp_config.json`
+  (using `/mnt/c/Program Files/nodejs/node.exe D:\LLM_Ecosystem\mcp-qwen\index.js`),
+  rules at `/home/apath/.gemini/GEMINI.md`, and wrapper at `/home/apath/.local/bin/node`.
+- **Claude Code**: Registered at `~/.claude/CLAUDE.md` (both on Windows and at `/home/apath/.claude/CLAUDE.md`).
+- **Claude Desktop**: Config lives at
+  `C:\Users\Apath\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
+  (not `~/.mcp.json` or standard AppData roaming; confirm via Settings > Developer > "Local MCP servers" > "Edit Config").
 
 `delegate_coding_task` spawns `goose.exe` (`C:\Users\Apath\.local\bin\goose.exe`)
 as a subprocess per call - it is not a text relay, it runs a real agentic loop
