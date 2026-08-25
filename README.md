@@ -243,17 +243,18 @@ Public leaderboard reference points (best-of-5 Resolved Rate, Aug 2026):
 Claude Opus 4.6 65.3%, and — same architecture family as what's served
 here — **Qwen3.5-35B-A3B 53.7%**.
 
-**The actual pipeline is implemented and ready to run:**
-[benchmarks/swe-rebench/](benchmarks/swe-rebench/) — a 50-task deterministic
-sample already drawn (`predictions/sample_2026_03_50.jsonl`, seed
-`20260824`), a Goose+Qwen solve driver (`run_goose_solve.py`, not yet run —
-GPU-intensive, needs explicit go-ahead), and a grading wrapper (`grade.sh`)
-around the standard `swebench.harness.run_evaluation` harness (the dataset
-is schema-compatible, so no custom grader was needed). Scoped to Goose+Qwen
-alone, best-of-1 (not SWE-rebench's own best-of-5 protocol, so treat the
-result as directional relative to the published figures, not a strict
-apples-to-apples score). See that directory's README for the full pipeline,
-what's already done vs. pending, and why `2026_03` rather than a newer split.
+**Done: [benchmarks/swe-rebench/](benchmarks/swe-rebench/) — 32.0% Resolved
+Rate (16/50), best-of-1**, 44% of the sample never got a solve attempt
+within the 900s per-task budget (57.1% among the 28 that did get attempted
+- the more informative number, since the timeout is a tunable knob, not a
+capability ceiling). See [results/results.md](benchmarks/swe-rebench/results/results.md)
+for the full breakdown, including an honest log of five real bugs (two in
+the solve script, three in the grading path — one of them upstream, in
+SWE-rebench's own `eval.py`) found and fixed before this number could be
+trusted; the first two grading attempts produced a false 0% before the
+root cause (a wrong hardcoded container path in the upstream eval tool)
+was found via direct container inspection rather than accepted at face
+value.
 
 **Separately** — if the delegation-architecture question (is Sonnet
 decomposing + Qwen executing actually worth it, vs either extreme) becomes
