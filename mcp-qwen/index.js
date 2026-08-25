@@ -676,39 +676,16 @@ const commonSchema = {
 server.registerTool(
   "ask_qwen",
   {
-    title: "Ask Qwen3.8-27B (default — 245K context)",
+    title: "Ask Qwen3.8-27B (245K context)",
     description:
-      "DEFAULT tool for delegating a pure-text task (no file/tool access) to the local " +
-      "Qwen3.8-27B model: explaining an error, drafting text, answering a question about " +
-      "code already pasted into the conversation. For anything that needs to touch files " +
-      "or run commands, use delegate_coding_task instead. Runs the huge configuration " +
-      "(245,760 token context, ~77 tok/s decode) - fast enough for essentially all " +
-      "delegated text work. Auto-boots this config if the rarely-used fast config is " +
-      "currently running (costs ~45-90s once, only on the first call after a switch).",
+      "Primary tool for pure-text reasoning, adversarial red-teaming, mathematical audits, and " +
+      "large-context document digestion with local Qwen3.8-27B. Runs the huge configuration " +
+      "(245,760 token context, ~77-133 tok/s decode, $0 token cost). For anything touching files " +
+      "or running commands, use delegate_coding_task instead.",
     inputSchema: commonSchema,
   },
   async ({ prompt, system, max_tokens, reasoning_effort }) => {
     const text = await ask("huge", prompt, system, max_tokens, reasoning_effort);
-    return { content: [{ type: "text", text }] };
-  }
-);
-
-server.registerTool(
-  "ask_qwen_fast",
-  {
-    title: "Ask Qwen3.8-27B (fast, 57K context - rarely needed)",
-    description:
-      "NOT the default - prefer ask_qwen. Only use this if you have already confirmed " +
-      "ask_qwen's ~77 tok/s is a genuine bottleneck for a specific, tight, latency-critical " +
-      "loop (many small sequential calls where cumulative delay matters more than context " +
-      "headroom). Trades context (57,344 vs 245,760 tokens) for higher throughput " +
-      "(~107-130 tok/s). Switching back and forth between this and ask_qwen costs ~45-90s " +
-      "each time, so do not alternate between the two within the same task - pick one and " +
-      "stay on it. Auto-boots this config if ask_qwen's huge config is currently running.",
-    inputSchema: commonSchema,
-  },
-  async ({ prompt, system, max_tokens, reasoning_effort }) => {
-    const text = await ask("fast", prompt, system, max_tokens, reasoning_effort);
     return { content: [{ type: "text", text }] };
   }
 );

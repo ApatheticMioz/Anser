@@ -13,7 +13,7 @@ You operate within a dual-agent, cost-efficient, state-of-the-art hybrid archite
   5. Final synthesis and presentation to the user.
   
 - **Worker's Role (Local Qwen3.8-27B via Goose & vLLM on RTX 3090)**:
-  The local model is your **Autonomous Implementation Worker, Adversarial Co-Advisor, and Large-Context Engine** (free, uncapped, 245K context, ~77-133 tok/s, 8-way concurrent).
+  The local model is your **Autonomous Implementation Worker, Senior Technical Coworker, and Large-Context Engine** (free, uncapped, 245K context, ~77-133 tok/s, 8-way concurrent).
   **MAXIMIZE QWEN'S COGNITIVE & MECHANICAL SKILLS**:
   - **Adversarial Red-Teaming & 2nd Opinions**: Attack plans, identify mathematical/framework traps, detect data leakage, and audit logic before code is written (`ask_qwen`).
   - **Large-Context Ingestion & Document Digestion**: Ingest 50k–200k token repositories, papers, datasets, or logs locally for $0 and return concise technical briefs (`ask_qwen`).
@@ -22,7 +22,10 @@ You operate within a dual-agent, cost-efficient, state-of-the-art hybrid archite
   - **Deep Research**: Multi-source web/document research (`extensions: ['uvx free-search-mcp']`, reads PDF/DOCX/XLSX/CSV via `read_doc()`).
   - **GitHub Operations**: Executing authenticated GitHub actions (`gh` CLI via shell).
 
-**STRICT ORCHESTRATION INVARIANT**: Do NOT burn cloud tokens typing out repetitive boilerplate, large file rewrites, or direct code implementations using file-editing tools when Qwen can execute it for $0. Decompose the task, utilize Qwen's adversarial reasoning, and dispatch to Qwen via `delegate_coding_task` / `ask_qwen`.
+**STRICT ORCHESTRATION INVARIANTS**:
+1. **No Direct Code Rewrites**: Do NOT burn cloud tokens typing out repetitive boilerplate, large file rewrites, or direct code implementations using file-editing tools when Qwen can execute it for $0. Decompose the task and dispatch to Qwen via `delegate_coding_task`.
+2. **No Conversational / Readiness Pings**: Treat Qwen as an autonomous coworker, not a chat endpoint. NEVER send trivial "Hello", "Are you online?", or "Confirm readiness" pings. Always dispatch substantive, self-contained domain tasks directly.
+3. **No Greedy Tool Racing**: When delegating research (`extensions: ['uvx free-search-mcp']`) or implementation to Qwen, do NOT race the worker by greedily firing duplicate cloud tools (`search_web`, manual file edits) in parallel. Let the worker execute, collect its structured deliverable, and collaboratively synthesize the results.
 
 ---
 
@@ -55,14 +58,13 @@ Spawns a local Goose agentic subprocess (`goose.exe`) with filesystem, shell, an
 
 ---
 
-## 4. Delegation via `ask_qwen` / `ask_qwen_fast` (Pure Text Reasoning & Audits)
+## 4. Pure Text Reasoning & Audits (`ask_qwen`)
 
-Use for pure text tasks with zero filesystem access:
+`ask_qwen` is the canonical, single-endpoint tool for pure text tasks with zero filesystem access:
 - **Adversarial Red-Teaming & Logic Audits**: Challenge plans, check mathematical proofs, and find framework edge cases (e.g. PyTorch AMP autograd traps).
 - **Large-Context Distillation**: Ingest large technical documents, raw logs, or multi-file context without filling cloud context windows.
 - **Code Pre-Commit Audits**: Second opinions on generated diffs before final verification.
-- `ask_qwen` runs the `huge` 245K context configuration (default max output: 16,384 tokens, up to 65,536).
-- `ask_qwen_fast` (57K context, ~107-130 tok/s) is for high-throughput, latency-critical loops.
+- Runs the `huge` 245K context configuration (default max output: 16,384 tokens, up to 65,536).
 - Reasoning effort defaults to `medium` server-side (do not override to `xhigh` unless genuinely needed).
 
 ---
@@ -74,7 +76,6 @@ Use for pure text tasks with zero filesystem access:
 - **Status Mirror**: `http://127.0.0.1:18021/task/<taskId>` (localhost out-of-band task status).
 - **Launchers** (`scripts/main/`):
   - `start.bat` / `start_huge.bat`: default, 245,760 context, ~77 tok/s.
-  - `start_fast.bat`: 57,344 context, ~107-130 tok/s.
   - `stop.bat` / `status.bat`.
 - **Global MCP Registrations**:
   - Windows Antigravity: `C:\Users\Apath\.gemini\config\mcp_config.json`
