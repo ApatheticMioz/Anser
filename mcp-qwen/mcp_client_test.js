@@ -13,12 +13,11 @@ async function main() {
   const tools = await client.listTools();
   console.log("=== registered tools ===");
   console.log(tools.tools.map((t) => t.name).join(", "));
+  console.log("Registered tool count:", tools.tools.length);
 
   const scenario = process.argv[2] ?? "list";
 
-  if (scenario === "list") {
-    console.log("Registered tool count:", tools.tools.length);
-  } else if (scenario === "server_status") {
+  if (scenario === "server_status") {
     console.log("\n=== checking qwen_server status ===");
     const res = await client.callTool({
       name: "qwen_server",
@@ -30,11 +29,18 @@ async function main() {
     const res = await client.callTool({
       name: "qwen_coworker",
       arguments: {
-        prompt: "Print the current working directory and exit.",
+        prompt: "Say hello and return immediately.",
       },
     });
     console.log("isError:", res.isError);
-    console.log(res.content[0].text);
+    console.log("Response:", res.content[0].text);
+  } else if (scenario === "list_tasks") {
+    console.log("\n=== calling qwen_list_active_tasks ===");
+    const res = await client.callTool({
+      name: "qwen_list_active_tasks",
+      arguments: {},
+    });
+    console.log("Result:", res.content[0].text);
   }
 
   await client.close();

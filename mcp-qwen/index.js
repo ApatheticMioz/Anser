@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (2026 SOTA - v3.5.0)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.0.0)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
  * - Local Coworker (Variation & Execution Operator): Qwen3.8-27B via Goose Harness
  * - Serving: Universal 245K context (vLLM + DFlash2 + KVarN @ localhost:18020)
- * - Evolutionary Optimization: Hierarchical NVIDIA AVO (persistent .avo/lineage.json)
- * - True Windows <-> WSL Agnosticism with Synchronous Execution and In-Memory Caching
- * - 1-Hour Default Time Budget with Stream Inactivity Heartbeat Watchdog
- * - Self-Healing Harness: Pre-Flight Health Probes, In-Flight Network Retry & Deterministic Session Continuity
+ * - Zero-Turn Async Architecture: Blocking Long-Poll HTTP Wait Endpoint (localhost:18021)
+ * - True Windows <-> WSL Agnosticism with 45s Safe Synchronous Race & 1-Hour Background Budget
+ * - Self-Healing: Pre-Flight Health Probes, Process Tree Kill, and Clean Session Continuity
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -18,23 +17,28 @@ import { z } from "zod";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { existsSync, readFileSync } from "fs";
+import http from "http";
 import path from "path";
 import crypto from "crypto";
 import { AvoLineageEngine } from "./avo_engine.js";
 
 const execFileAsync = promisify(execFile);
 
-const PORT = 18020;
-const BASE_URL = `http://localhost:${PORT}/v1`;
+const VLLM_PORT = 18020;
+const STATUS_PORT = 18021;
+const BASE_URL = `http://localhost:${VLLM_PORT}/v1`;
 const MAX_LEN_HUGE = 245760;
 const BOOT_TIMEOUT_MS = 180_000;
 const BOOT_POLL_MS = 3000;
 
-// 1-Hour Default Time Budget to support extensive benchmark matrices and deep refactorings
+// Safe sync race threshold: 45s (guaranteed safe across Claude Desktop 60s & Antigravity 180s)
+const RACE_MS = 45_000;
+// Full 1-Hour Default Time Budget for background execution
 const DEFAULT_TIMEOUT_MS = 3_600_000;
-// Inactivity Heartbeat: Kill only if process produces 0 stdout/stderr events for 10 minutes
+// Inactivity Heartbeat: Kill only if process produces 0 stream chunks for 10 minutes
 const INACTIVITY_TIMEOUT_MS = 600_000;
 const EXTENSION_BONUS_TIMEOUT_MS = 600_000;
+const TASK_RETENTION_MS = 10_800_000; // 3 hours
 
 const IS_WINDOWS = process.platform === "win32";
 
@@ -46,11 +50,9 @@ function normalizeWorkspacePath(inputPath) {
   let p = inputPath.trim();
 
   if (IS_WINDOWS) {
-    // Translate WSL POSIX path (/home/apath/... -> \\wsl.localhost\Ubuntu\home\apath\...)
     if (p.startsWith("/home/")) {
       return `\\\\wsl.localhost\\Ubuntu${p.replace(/\//g, "\\")}`;
     }
-    // Translate WSL mount path (/mnt/d/... -> D:\...)
     const mntMatch = p.match(/^\/mnt\/([a-zA-Z])\/(.*)/);
     if (mntMatch) {
       const drive = mntMatch[1].toUpperCase();
@@ -59,15 +61,12 @@ function normalizeWorkspacePath(inputPath) {
     }
     return p;
   } else {
-    // Inside Linux / WSL
-    // Translate Windows drive path (D:\... -> /mnt/d/...)
     const winMatch = p.match(/^([a-zA-Z]):[\\/](.*)/);
     if (winMatch) {
       const drive = winMatch[1].toLowerCase();
       const sub = winMatch[2].replace(/\\/g, "/");
       return `/mnt/${drive}/${sub}`;
     }
-    // Translate Windows UNC path (\\wsl.localhost\Ubuntu\home\... -> /home/...)
     const uncMatch = p.match(/^\\\\wsl(?:\.localhost|\$)\\[^\\]+\\(.*)/i);
     if (uncMatch) {
       return `/${uncMatch[1].replace(/\\/g, "/")}`;
@@ -87,7 +86,6 @@ function getGooseExecutable() {
 }
 
 let cachedApiKey = null;
-
 function getApiKeySync() {
   if (cachedApiKey) return cachedApiKey;
   const candidatePaths = IS_WINDOWS
@@ -151,7 +149,7 @@ async function currentMode() {
     const len = j?.data?.[0]?.max_model_len;
     return len ? "huge" : "unknown";
   } catch {
-    return null; // not running
+    return null;
   }
 }
 
@@ -322,246 +320,413 @@ function resolveSessionId(cwd, requestedSessionId) {
   return `workspace_${hash}`;
 }
 
-async function runGooseSubprocess({ cwd, prompt, sessionId, extensions, system, timeoutMs, hypothesis, testCommand, metricName, higherIsBetter }) {
-  const totalTimeoutMs = (timeoutMs ?? DEFAULT_TIMEOUT_MS) + (extensions && extensions.length ? EXTENSION_BONUS_TIMEOUT_MS : 0);
+// -----------------------------------------------------------------------------
+// Durable Task Registry & Zero-Turn HTTP Server
+// -----------------------------------------------------------------------------
 
-  let lineageEngine = null;
-  let avoContext = null;
-  if (testCommand) {
+const tasks = new Map();
+
+function cleanOldTasks() {
+  const now = Date.now();
+  for (const [id, task] of tasks.entries()) {
+    if (task.done && now - task.createdAt > TASK_RETENTION_MS) {
+      tasks.delete(id);
+    }
+  }
+}
+
+setInterval(cleanOldTasks, 300_000);
+
+function notifyWaiters(task) {
+  if (!task.waiters || task.waiters.length === 0) return;
+  const payload = task.result?.text || (task.isError ? "Task failed." : "Task completed with no output.");
+  for (const res of task.waiters) {
     try {
-      lineageEngine = new AvoLineageEngine(cwd);
-      avoContext = lineageEngine.getLineageContext();
-    } catch {
-      // Non-git or uninitialized lineage
-    }
-  }
-
-  let finalTaskPrompt = `Your working directory is exactly: ${cwd}\n\n`;
-  if (avoContext) {
-    finalTaskPrompt += `=== NVIDIA AVO Lineage Context ===\n${avoContext}\n\n`;
-  }
-  if (hypothesis) {
-    finalTaskPrompt += `=== Current Hypothesis ===\n${hypothesis}\n\n`;
-  }
-  finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
-  if (IS_WINDOWS) {
-    finalTaskPrompt += `If a shell command fails with "'Get-Content'/'Select-String' is not recognized", you're in cmd.exe - use powershell -NoProfile -Command "..." or type and findstr.\n`;
-  }
-
-  return new Promise(async (resolve) => {
-    const startedAt = Date.now();
-    let lastActivityAt = Date.now();
-    const lines = [];
-    let stderr = "";
-
-    const args = ["run"];
-    if (sessionId) {
-      const exists = await sessionExistsOnDisk(sessionId);
-      if (exists) {
-        args.push("--name", sessionId, "--resume");
-      } else {
-        args.push("--name", sessionId);
-      }
-    } else {
-      args.push("--no-session");
-    }
-    args.push("--output-format", "stream-json");
-    if (system) {
-      args.push("--system", system);
-    }
-    args.push("-t", finalTaskPrompt);
-    for (const ext of extensions ?? []) {
-      args.push("--with-extension", ext);
-    }
-
-    const gooseExe = getGooseExecutable();
-    const child = spawn(gooseExe, args, {
-      cwd,
-      env: {
-        ...process.env,
-        GOOSE_WORKING_DIR: cwd,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let lineBuf = "";
-    child.stdout.on("data", (chunk) => {
-      lastActivityAt = Date.now();
-      lineBuf += chunk.toString("utf8");
-      const chunkLines = lineBuf.split("\n");
-      lineBuf = chunkLines.pop() ?? "";
-      for (const l of chunkLines) {
-        if (l.trim()) lines.push(l);
-      }
-    });
-
-    child.stderr.on("data", (chunk) => {
-      lastActivityAt = Date.now();
-      stderr += chunk.toString("utf8");
-      if (stderr.length > 50_000) {
-        stderr = stderr.slice(-50_000);
-      }
-    });
-
-    let settled = false;
-    const finish = async (timedOut, timeoutReason = "") => {
-      if (settled) return;
-      settled = true;
-      if (lineBuf.trim()) lines.push(lineBuf.trim());
-      const summary = summarizeGooseRun(lines, {
-        timedOut,
-        timeoutReason,
-        timeoutMs: totalTimeoutMs,
-        stderr,
+      res.writeHead(task.isError ? 500 : 200, {
+        "Content-Type": "text/markdown; charset=utf-8",
+        "X-Task-ID": task.id,
+        "X-Task-Status": task.status,
       });
-
-      // If test_command is specified, run AVO verification & record lineage
-      if (testCommand && lineageEngine) {
-        try {
-          const shellCmd = IS_WINDOWS
-            ? { bin: "powershell.exe", args: ["-NoProfile", "-Command", testCommand] }
-            : { bin: "bash", args: ["-c", testCommand] };
-
-          const { stdout: testOut, stderr: testErr } = await execFileAsync(
-            shellCmd.bin,
-            shellCmd.args,
-            { cwd, timeout: 300_000 }
-          ).catch((err) => ({ stdout: err.stdout ?? "", stderr: err.stderr ?? err.message }));
-
-          const metricVal = metricName ? lineageEngine.extractMetric(testOut, metricName) : null;
-          const status = metricVal !== null || !summary.isError ? "IMPROVED" : "FAILED";
-          lineageEngine.recordCandidate({
-            hypothesis: hypothesis ?? prompt,
-            filesModified: summary.fileOps,
-            metricName: metricName ?? "test_execution",
-            metricValue: metricVal,
-            higherIsBetter: higherIsBetter ?? true,
-            status,
-            testStderr: testErr || testOut,
-          });
-          summary.text += `\n\n=== NVIDIA AVO Verification ===\nTest Command: \`${testCommand}\`\nStatus: ${status}\nMetric: ${metricVal ?? "Executed"}`;
-        } catch (e) {
-          summary.text += `\n\n=== NVIDIA AVO Error ===\nFailed to run test command: ${e.message}`;
-        }
-      }
-
-      resolve(summary);
-    };
-
-    // Heartbeat & Watchdog Monitor (Checks every 5s)
-    const watchdog = setInterval(() => {
-      if (settled) {
-        clearInterval(watchdog);
-        return;
-      }
-      const now = Date.now();
-      const inactiveMs = now - lastActivityAt;
-      const totalElapsedMs = now - startedAt;
-
-      // 1. Inactivity Watchdog: Silence threshold reached with zero stream chunks
-      if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
-        clearInterval(watchdog);
-        killProcessTree(child);
-        finish(
-          true,
-          `Inactivity Timeout: Goose subprocess produced zero stream activity or output for ${Math.round(inactiveMs / 1000)}s.`
-        );
-      }
-      // 2. Absolute Wall-Clock Cap: 1-hour total budget
-      else if (totalElapsedMs >= totalTimeoutMs) {
-        clearInterval(watchdog);
-        killProcessTree(child);
-        finish(
-          true,
-          `Total Budget Timeout: Reached maximum execution budget of ${Math.round(totalTimeoutMs / 1000)}s (1 hour).`
-        );
-      }
-    }, 5000);
-
-    child.on("close", () => {
-      clearInterval(watchdog);
-      finish(false);
-    });
-    child.on("error", (err) => {
-      clearInterval(watchdog);
-      if (settled) return;
-      settled = true;
-      const result = { isError: true, text: `Failed to spawn goose (${gooseExe}): ${err.message}` };
-      resolve(result);
-    });
-  });
+      res.end(payload);
+    } catch {}
+  }
+  task.waiters = [];
 }
 
-function executeGooseTaskWithAutoRetry({ cwd, prompt, sessionId, extensions, system, timeoutMs, hypothesis, testCommand, metricName, higherIsBetter }) {
-  const resolvedSession = resolveSessionId(cwd, sessionId);
+const statusHttpServer = http.createServer((req, res) => {
+  const parsedUrl = new URL(req.url, `http://localhost:${STATUS_PORT}`);
+  const pathname = parsedUrl.pathname;
 
-  return runQueued(async () => {
-    const MAX_ATTEMPTS = 3;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        await withBootMutex(async () => {
-          await ensureServerRunning();
-        });
-      } catch (err) {
-        if (attempt === MAX_ATTEMPTS) {
-          return { isError: true, text: `Failed to boot model server: ${err.message}` };
-        }
-        await new Promise((r) => setTimeout(r, 2000));
-        continue;
-      }
+  // GET /tasks
+  if (req.method === "GET" && pathname === "/tasks") {
+    const list = Array.from(tasks.values()).map((t) => ({
+      id: t.id,
+      sessionId: t.sessionId,
+      cwd: t.cwd,
+      status: t.status,
+      createdAt: t.createdAt,
+      elapsed_s: Math.round((Date.now() - t.createdAt) / 1000),
+      done: t.done,
+      isError: t.isError,
+    }));
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ active_tasks: list }, null, 2));
+  }
 
-      const result = await runGooseSubprocess({
-        cwd,
-        prompt,
-        sessionId: resolvedSession,
-        extensions,
-        system,
-        timeoutMs,
-        hypothesis,
-        testCommand,
-        metricName,
-        higherIsBetter,
-      });
-
-      const isNetworkError =
-        result.isError &&
-        /Network error|Could not connect to localhost:18020|ECONNREFUSED|socket hang up/i.test(result.text);
-
-      if (isNetworkError && attempt < MAX_ATTEMPTS) {
-        // Transparent self-healing: reboot vLLM and retry session seamlessly
-        await withBootMutex(async () => {
-          await stopServer();
-          await ensureServerRunning();
-        });
-        continue;
-      }
-
-      return result;
+  // GET /task/:id/wait (Blocking long-poll)
+  const waitMatch = pathname.match(/^\/task\/([^/]+)\/wait$/);
+  if (req.method === "GET" && waitMatch) {
+    const taskId = waitMatch[1];
+    const task = tasks.get(taskId);
+    if (!task) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end(`Task not found: ${taskId}`);
     }
-  });
-}
 
-// MCP Server Initialization
-const server = new McpServer({
-  name: "qwen38-local",
-  version: "3.5.0",
+    if (task.done) {
+      const payload = task.result?.text || (task.isError ? "Task failed." : "Task completed.");
+      res.writeHead(task.isError ? 500 : 200, { "Content-Type": "text/markdown; charset=utf-8" });
+      return res.end(payload);
+    }
+
+    // Register long-poll waiter
+    task.waiters = task.waiters || [];
+    task.waiters.push(res);
+    req.on("close", () => {
+      task.waiters = task.waiters.filter((w) => w !== res);
+    });
+    return;
+  }
+
+  // GET /task/:id (Immediate JSON status check)
+  const getMatch = pathname.match(/^\/task\/([^/]+)$/);
+  if (req.method === "GET" && getMatch) {
+    const taskId = getMatch[1];
+    const task = tasks.get(taskId);
+    if (!task) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ found: false, id: taskId }));
+    }
+    const elapsed_s = Math.round(((task.finishedAt || Date.now()) - task.createdAt) / 1000);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(
+      JSON.stringify(
+        {
+          found: true,
+          id: task.id,
+          sessionId: task.sessionId,
+          cwd: task.cwd,
+          status: task.status,
+          done: task.done,
+          isError: task.isError,
+          elapsed_s,
+          fileOps: task.fileOps || [],
+          toolCallsCount: task.toolCallsCount || 0,
+        },
+        null,
+        2
+      )
+    );
+  }
+
+  // POST /task/:id/cancel
+  const cancelMatch = pathname.match(/^\/task\/([^/]+)\/cancel$/);
+  if ((req.method === "POST" || req.method === "DELETE") && cancelMatch) {
+    const taskId = cancelMatch[1];
+    const task = tasks.get(taskId);
+    if (!task) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ cancelled: false, error: "Not found" }));
+    }
+    if (!task.done && task.child) {
+      killProcessTree(task.child);
+      task.status = "cancelled";
+      task.done = true;
+      task.isError = true;
+      task.result = { isError: true, text: `Task ${taskId} cancelled by request.` };
+      notifyWaiters(task);
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ cancelled: true, id: taskId }));
+  }
+
+  res.writeHead(404, { "Content-Type": "text/plain" });
+  res.end("Not found");
 });
 
-// Tool 1: qwen_coworker (Unified Autonomous Senior Coworker - Strictly Synchronous with Self-Healing)
+statusHttpServer.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    // Another instance already binds the status port; continue without crashing
+  } else {
+    console.error("Status HTTP Server Error:", err);
+  }
+});
+
+statusHttpServer.listen(STATUS_PORT, "127.0.0.1", () => {});
+
+// -----------------------------------------------------------------------------
+// Core Task Execution
+// -----------------------------------------------------------------------------
+
+function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs, hypothesis, testCommand, metricName, higherIsBetter }) {
+  const taskId = `task_${sessionId}_${Date.now()}`;
+  const totalTimeoutMs = (timeoutMs ?? DEFAULT_TIMEOUT_MS) + (extensions && extensions.length ? EXTENSION_BONUS_TIMEOUT_MS : 0);
+
+  const taskEntry = {
+    id: taskId,
+    sessionId,
+    cwd,
+    prompt,
+    createdAt: Date.now(),
+    startedAt: Date.now(),
+    finishedAt: null,
+    status: "executing",
+    done: false,
+    isError: false,
+    child: null,
+    lines: [],
+    fileOps: [],
+    toolCallsCount: 0,
+    result: null,
+    waiters: [],
+  };
+
+  tasks.set(taskId, taskEntry);
+
+  const executionPromise = runQueued(async () => {
+    try {
+      await withBootMutex(async () => {
+        await ensureServerRunning();
+      });
+    } catch (err) {
+      taskEntry.done = true;
+      taskEntry.isError = true;
+      taskEntry.status = "failed";
+      taskEntry.result = { isError: true, text: `Failed to boot model server: ${err.message}` };
+      notifyWaiters(taskEntry);
+      return taskEntry.result;
+    }
+
+    let lineageEngine = null;
+    let avoContext = null;
+    if (testCommand) {
+      try {
+        lineageEngine = new AvoLineageEngine(cwd);
+        avoContext = lineageEngine.getLineageContext();
+      } catch {}
+    }
+
+    let finalTaskPrompt = `Your working directory is exactly: ${cwd}\n\n`;
+    if (avoContext) {
+      finalTaskPrompt += `=== NVIDIA AVO Lineage Context ===\n${avoContext}\n\n`;
+    }
+    if (hypothesis) {
+      finalTaskPrompt += `=== Current Hypothesis ===\n${hypothesis}\n\n`;
+    }
+    finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
+    if (IS_WINDOWS) {
+      finalTaskPrompt += `If a shell command fails with "'Get-Content'/'Select-String' is not recognized", you're in cmd.exe - use powershell -NoProfile -Command "..." or type and findstr.\n`;
+    }
+
+    return new Promise(async (resolve) => {
+      let lastActivityAt = Date.now();
+      const lines = taskEntry.lines;
+      let stderr = "";
+
+      const args = ["run"];
+      if (sessionId) {
+        const exists = await sessionExistsOnDisk(sessionId);
+        if (exists) {
+          args.push("--name", sessionId, "--resume");
+        } else {
+          args.push("--name", sessionId);
+        }
+      } else {
+        args.push("--no-session");
+      }
+      args.push("--output-format", "stream-json");
+      if (system) {
+        args.push("--system", system);
+      }
+      args.push("-t", finalTaskPrompt);
+      for (const ext of extensions ?? []) {
+        args.push("--with-extension", ext);
+      }
+
+      const gooseExe = getGooseExecutable();
+      const child = spawn(gooseExe, args, {
+        cwd,
+        env: {
+          ...process.env,
+          GOOSE_WORKING_DIR: cwd,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      taskEntry.child = child;
+
+      let lineBuf = "";
+      child.stdout.on("data", (chunk) => {
+        lastActivityAt = Date.now();
+        lineBuf += chunk.toString("utf8");
+        const chunkLines = lineBuf.split("\n");
+        lineBuf = chunkLines.pop() ?? "";
+        for (const l of chunkLines) {
+          if (l.trim()) {
+            lines.push(l);
+            try {
+              const obj = JSON.parse(l);
+              const content = obj?.message?.content;
+              if (Array.isArray(content)) {
+                for (const c of content) {
+                  if (c.type === "toolRequest") {
+                    taskEntry.toolCallsCount++;
+                    const name = c.toolCall?.value?.name;
+                    if (["write", "edit", "str_replace", "patch"].includes(name)) {
+                      taskEntry.fileOps.push(`${name}:${c.toolCall.value.arguments?.path ?? "?"}`);
+                    }
+                  }
+                }
+              }
+            } catch {}
+          }
+        }
+      });
+
+      child.stderr.on("data", (chunk) => {
+        lastActivityAt = Date.now();
+        stderr += chunk.toString("utf8");
+        if (stderr.length > 50_000) {
+          stderr = stderr.slice(-50_000);
+        }
+      });
+
+      let settled = false;
+      const finish = async (timedOut, timeoutReason = "") => {
+        if (settled) return;
+        settled = true;
+        if (lineBuf.trim()) lines.push(lineBuf.trim());
+        const summary = summarizeGooseRun(lines, {
+          timedOut,
+          timeoutReason,
+          timeoutMs: totalTimeoutMs,
+          stderr,
+        });
+
+        if (testCommand && lineageEngine) {
+          try {
+            const shellCmd = IS_WINDOWS
+              ? { bin: "powershell.exe", args: ["-NoProfile", "-Command", testCommand] }
+              : { bin: "bash", args: ["-c", testCommand] };
+
+            const { stdout: testOut, stderr: testErr } = await execFileAsync(
+              shellCmd.bin,
+              shellCmd.args,
+              { cwd, timeout: 300_000 }
+            ).catch((err) => ({ stdout: err.stdout ?? "", stderr: err.stderr ?? err.message }));
+
+            const metricVal = metricName ? lineageEngine.extractMetric(testOut, metricName) : null;
+            const status = metricVal !== null || !summary.isError ? "IMPROVED" : "FAILED";
+            lineageEngine.recordCandidate({
+              hypothesis: hypothesis ?? prompt,
+              filesModified: summary.fileOps,
+              metricName: metricName ?? "test_execution",
+              metricValue: metricVal,
+              higherIsBetter: higherIsBetter ?? true,
+              status,
+              testStderr: testErr || testOut,
+            });
+            summary.text += `\n\n=== NVIDIA AVO Verification ===\nTest Command: \`${testCommand}\`\nStatus: ${status}\nMetric: ${metricVal ?? "Executed"}`;
+          } catch (e) {
+            summary.text += `\n\n=== NVIDIA AVO Error ===\nFailed to run test command: ${e.message}`;
+          }
+        }
+
+        taskEntry.done = true;
+        taskEntry.finishedAt = Date.now();
+        taskEntry.isError = summary.isError;
+        taskEntry.status = summary.isError ? "failed" : "completed";
+        taskEntry.result = summary;
+
+        notifyWaiters(taskEntry);
+        resolve(summary);
+      };
+
+      const watchdog = setInterval(() => {
+        if (settled) {
+          clearInterval(watchdog);
+          return;
+        }
+        const now = Date.now();
+        const inactiveMs = now - lastActivityAt;
+        const totalElapsedMs = now - taskEntry.startedAt;
+
+        if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
+          clearInterval(watchdog);
+          killProcessTree(child);
+          finish(
+            true,
+            `Inactivity Timeout: Goose subprocess produced zero stream activity for ${Math.round(inactiveMs / 1000)}s.`
+          );
+        } else if (totalElapsedMs >= totalTimeoutMs) {
+          clearInterval(watchdog);
+          killProcessTree(child);
+          finish(
+            true,
+            `Total Budget Timeout: Reached maximum execution budget of ${Math.round(totalTimeoutMs / 1000)}s (1 hour).`
+          );
+        }
+      }, 5000);
+
+      child.on("close", () => {
+        clearInterval(watchdog);
+        finish(false);
+      });
+
+      child.on("error", (err) => {
+        clearInterval(watchdog);
+        if (settled) return;
+        settled = true;
+        const result = { isError: true, text: `Failed to spawn goose (${gooseExe}): ${err.message}` };
+        taskEntry.done = true;
+        taskEntry.isError = true;
+        taskEntry.status = "failed";
+        taskEntry.result = result;
+        notifyWaiters(taskEntry);
+        resolve(result);
+      });
+    });
+  });
+
+  return { taskId, taskEntry, executionPromise };
+}
+
+// -----------------------------------------------------------------------------
+// MCP Server Initialization
+// -----------------------------------------------------------------------------
+
+const server = new McpServer({
+  name: "qwen38-local",
+  version: "4.0.0",
+});
+
+// Tool 1: qwen_coworker (Hybrid Dual-Mode Execution)
 server.registerTool(
   "qwen_coworker",
   {
     title: "Autonomous Senior Coworker (Goose Agent + Universal 245K vLLM)",
     description:
       "Primary agentic interface for local Qwen3.8-27B running inside the Goose agent harness for $0. " +
-      "Has native access to Filesystem, Shell, and Git across Windows and WSL environments. Pure text-only model with Universal 245K context (VRAM dedicated to text/KV-cache; visual QA belongs to Lead Architect). " +
-      "Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, code refactoring, and AVO lineage tracking. " +
-      "Runs synchronously and blocks until completion (with 1-hour budget, 10-minute stream inactivity watchdog, pre-flight health probe, and transparent network auto-retry with session resume). " +
-      "Supported SOTA Text Extensions:\n" +
-      "  - `uvx free-search-mcp` (Web Search, Live Documentation, PDF/DOCX Ingestion)\n" +
+      "Has native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. " +
+      "Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and AVO candidate mutations. " +
+      "Execution Contract:\n" +
+      "  - Fast tasks (< 45s): Returns full deliverable directly in Turn 1.\n" +
+      "  - Long tasks (>= 45s): Safely yields `taskId` and a `wait_command` before client deadlines.\n" +
+      "    Run `wait_command` via native shell to block and wake up automatically with the result at $0 token cost.\n" +
+      "Supported Extensions:\n" +
+      "  - `uvx free-search-mcp` (Deep Web Search, Live Docs, PDF/DOCX Ingestion)\n" +
       "  - `npx.cmd -y context7@latest` / `npx -y context7@latest` (Version-Accurate Framework & Library Docs)\n" +
-      "  - `gh` CLI / `git` (Authenticated GitHub operations and atomic git branch/commit workflows)\n" +
-      "When passed `hypothesis` and `test_command`, executes as an NVIDIA AVO candidate variation step with `.avo/lineage.json` tracking.",
+      "  - `gh` CLI / `git` (Authenticated GitHub operations and atomic git branch/commit workflows)",
     inputSchema: {
       prompt: z.string().describe("Task, inquiry, or architectural instruction for Qwen"),
       session_id: z.string().optional().describe("Named persistent session ID (maintains KV-cache and conversation context across turns)"),
@@ -576,10 +741,12 @@ server.registerTool(
   },
   async ({ prompt, session_id, cwd, extensions, hypothesis, test_command, metric_name, higher_is_better, timeout_ms }) => {
     const workingDir = normalizeWorkspacePath(cwd ?? process.cwd());
-    const result = await executeGooseTaskWithAutoRetry({
+    const resolvedSession = resolveSessionId(workingDir, session_id);
+
+    const { taskId, taskEntry, executionPromise } = startGooseTask({
       cwd: workingDir,
       prompt,
-      sessionId: session_id,
+      sessionId: resolvedSession,
       extensions,
       timeoutMs: timeout_ms,
       hypothesis,
@@ -588,14 +755,144 @@ server.registerTool(
       higherIsBetter: higher_is_better,
     });
 
+    // Synchronous race against 45s safe client window
+    const raceTimer = new Promise((resolve) => setTimeout(() => resolve({ timedOutOnClientRace: true }), RACE_MS));
+    const winner = await Promise.race([executionPromise, raceTimer]);
+
+    if (!winner.timedOutOnClientRace) {
+      // Completed fast within the safe window
+      return {
+        content: [{ type: "text", text: winner.text }],
+        isError: winner.isError,
+      };
+    }
+
+    // Still executing: yield durable Task Handle and blocking wait command
+    const waitCmd = `curl -s http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
+    const responseText = [
+      `### Qwen Task Dispatched (Background Execution)`,
+      `- **Task ID**: \`${taskId}\``,
+      `- **Session**: \`${resolvedSession}\``,
+      `- **Working Directory**: \`${workingDir}\``,
+      `- **Time Elapsed**: 45s (Task continuing in background with 1-hour budget)`,
+      ``,
+      `> [!TIP]`,
+      `> **Zero-Turn Reactive Wait**: Execute the following command via \`run_command\` (or background shell). It will sleep at $0 token cost and automatically wake you when Qwen completes:`,
+      `\`\`\`bash`,
+      `${waitCmd}`,
+      `\`\`\``,
+      ``,
+      `Or check status via tool: \`qwen_check_task(task_id: "${taskId}")\`.`,
+    ].join("\n");
+
     return {
-      content: [{ type: "text", text: result.text }],
-      isError: result.isError,
+      content: [{ type: "text", text: responseText }],
+      isError: false,
     };
   }
 );
 
-// Tool 2: qwen_server (Unified Server Lifecycle)
+// Tool 2: qwen_check_task (Immediate Status Check & Retrieval)
+server.registerTool(
+  "qwen_check_task",
+  {
+    title: "Check Qwen Coworker Task Status or Retrieve Result",
+    description: "Queries the status of an in-flight or completed background Qwen task. Returns the deliverable if complete.",
+    inputSchema: {
+      task_id: z.string().describe("Task ID returned by qwen_coworker"),
+    },
+  },
+  async ({ task_id }) => {
+    const task = tasks.get(task_id);
+    if (!task) {
+      return {
+        content: [{ type: "text", text: `Task \`${task_id}\` not found in memory (retention is 3 hours).` }],
+        isError: true,
+      };
+    }
+
+    if (task.done) {
+      return {
+        content: [{ type: "text", text: task.result?.text || "Task completed." }],
+        isError: task.isError,
+      };
+    }
+
+    const elapsed_s = Math.round((Date.now() - task.createdAt) / 1000);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Task \`${task_id}\` is actively EXECUTING (${elapsed_s}s elapsed, ${task.toolCallsCount} tool calls made).\n\nWait with:\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``,
+        },
+      ],
+      isError: false,
+    };
+  }
+);
+
+// Tool 3: qwen_cancel_task (Process Tree Cancellation)
+server.registerTool(
+  "qwen_cancel_task",
+  {
+    title: "Cancel Active Qwen Task",
+    description: "Gracefully cancels an active background Qwen task and kills its process tree.",
+    inputSchema: {
+      task_id: z.string().describe("Task ID to cancel"),
+    },
+  },
+  async ({ task_id }) => {
+    const task = tasks.get(task_id);
+    if (!task) {
+      return {
+        content: [{ type: "text", text: `Task \`${task_id}\` not found.` }],
+        isError: true,
+      };
+    }
+
+    if (!task.done && task.child) {
+      killProcessTree(task.child);
+      task.status = "cancelled";
+      task.done = true;
+      task.isError = true;
+      task.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
+      notifyWaiters(task);
+      return {
+        content: [{ type: "text", text: `Task \`${task_id}\` cancelled and process tree killed.` }],
+      };
+    }
+
+    return {
+      content: [{ type: "text", text: `Task \`${task_id}\` was already finished.` }],
+    };
+  }
+);
+
+// Tool 4: qwen_list_active_tasks (Task Registry Inspection)
+server.registerTool(
+  "qwen_list_active_tasks",
+  {
+    title: "List Active and Recent Qwen Tasks",
+    description: "Lists all currently executing and recently finished tasks managed by this MCP server.",
+    inputSchema: {},
+  },
+  async () => {
+    const list = Array.from(tasks.values()).map((t) => ({
+      id: t.id,
+      sessionId: t.sessionId,
+      status: t.status,
+      elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
+      done: t.done,
+      isError: t.isError,
+    }));
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({ tasks: list }, null, 2) }],
+    };
+  }
+);
+
+// Tool 5: qwen_server (Unified Server Lifecycle)
 server.registerTool(
   "qwen_server",
   {
@@ -618,6 +915,7 @@ server.registerTool(
                 endpoint: BASE_URL,
                 context_window: MAX_LEN_HUGE,
                 stack: "vLLM + DFlash2 + KVarN (Universal 245K)",
+                status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
               },
               null,
               2
