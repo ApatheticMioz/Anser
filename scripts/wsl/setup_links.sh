@@ -22,7 +22,13 @@ ln -sf "$SOURCE_DIR/wait_ready.sh" ~/wait_ready.sh
 ln -sf "$SOURCE_DIR/run_qb.sh" ~/run_qb.sh
 ln -sf "$SOURCE_DIR/wait_qb.sh" ~/wait_qb.sh
 
+# Link global Antigravity & Claude configuration to Windows canonical masters
+mkdir -p ~/.gemini/config ~/.claude
+ln -sf /mnt/c/Users/Apath/.gemini/GEMINI.md ~/.gemini/GEMINI.md
+ln -sf /mnt/c/Users/Apath/.claude/CLAUDE.md ~/.claude/CLAUDE.md
+ln -sf /mnt/c/Users/Apath/.gemini/config/mcp_config.json ~/.gemini/config/mcp_config.json
+
 # Make executable
 chmod +x "$SOURCE_DIR"/*.sh
 
-echo "All WSL symlinks successfully created and pointing to $SOURCE_DIR."
+echo "All WSL symlinks successfully created and pointing to Windows canonical master files."
