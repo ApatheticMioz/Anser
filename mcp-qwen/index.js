@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (2026 SOTA - v3.4.0)
+ * Unified Local Qwen3.8-27B MCP Server (2026 SOTA - v3.5.0)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
@@ -9,7 +9,7 @@
  * - Evolutionary Optimization: Hierarchical NVIDIA AVO (persistent .avo/lineage.json)
  * - True Windows <-> WSL Agnosticism with Synchronous Execution and In-Memory Caching
  * - 1-Hour Default Time Budget with Stream Inactivity Heartbeat Watchdog
- * - Zero Bloat: Strictly Synchronous (Zero Async Detachment, Zero Polling Loop Hazards)
+ * - Self-Healing Harness: Pre-Flight Health Probes, In-Flight Network Retry & Deterministic Session Continuity
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -19,6 +19,7 @@ import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { existsSync, readFileSync } from "fs";
 import path from "path";
+import crypto from "crypto";
 import { AvoLineageEngine } from "./avo_engine.js";
 
 const execFileAsync = promisify(execFile);
@@ -313,7 +314,15 @@ async function sessionExistsOnDisk(sessionId) {
   }
 }
 
-function executeGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs, hypothesis, testCommand, metricName, higherIsBetter }) {
+function resolveSessionId(cwd, requestedSessionId) {
+  if (requestedSessionId && requestedSessionId.trim()) {
+    return requestedSessionId.trim();
+  }
+  const hash = crypto.createHash("md5").update(cwd.toLowerCase()).digest("hex").slice(0, 8);
+  return `workspace_${hash}`;
+}
+
+async function runGooseSubprocess({ cwd, prompt, sessionId, extensions, system, timeoutMs, hypothesis, testCommand, metricName, higherIsBetter }) {
   const totalTimeoutMs = (timeoutMs ?? DEFAULT_TIMEOUT_MS) + (extensions && extensions.length ? EXTENSION_BONUS_TIMEOUT_MS : 0);
 
   let lineageEngine = null;
@@ -339,167 +348,206 @@ function executeGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutM
     finalTaskPrompt += `If a shell command fails with "'Get-Content'/'Select-String' is not recognized", you're in cmd.exe - use powershell -NoProfile -Command "..." or type and findstr.\n`;
   }
 
-  return runQueued(async () => {
-    try {
-      await withBootMutex(async () => {
-        await ensureServerRunning();
-      });
-    } catch (err) {
-      return { isError: true, text: `Failed to boot model server: ${err.message}` };
+  return new Promise(async (resolve) => {
+    const startedAt = Date.now();
+    let lastActivityAt = Date.now();
+    const lines = [];
+    let stderr = "";
+
+    const args = ["run"];
+    if (sessionId) {
+      const exists = await sessionExistsOnDisk(sessionId);
+      if (exists) {
+        args.push("--name", sessionId, "--resume");
+      } else {
+        args.push("--name", sessionId);
+      }
+    } else {
+      args.push("--no-session");
+    }
+    args.push("--output-format", "stream-json");
+    if (system) {
+      args.push("--system", system);
+    }
+    args.push("-t", finalTaskPrompt);
+    for (const ext of extensions ?? []) {
+      args.push("--with-extension", ext);
     }
 
-    return new Promise(async (resolve) => {
-      const startedAt = Date.now();
-      let lastActivityAt = Date.now();
-      const lines = [];
-      let stderr = "";
-
-      const args = ["run"];
-      if (sessionId) {
-        const exists = await sessionExistsOnDisk(sessionId);
-        if (exists) {
-          args.push("--name", sessionId, "--resume");
-        } else {
-          args.push("--name", sessionId);
-        }
-      } else {
-        args.push("--no-session");
-      }
-      args.push("--output-format", "stream-json");
-      if (system) {
-        args.push("--system", system);
-      }
-      args.push("-t", finalTaskPrompt);
-      for (const ext of extensions ?? []) {
-        args.push("--with-extension", ext);
-      }
-
-      const gooseExe = getGooseExecutable();
-      const child = spawn(gooseExe, args, {
-        cwd,
-        env: {
-          ...process.env,
-          GOOSE_WORKING_DIR: cwd,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      let lineBuf = "";
-      child.stdout.on("data", (chunk) => {
-        lastActivityAt = Date.now();
-        lineBuf += chunk.toString("utf8");
-        const chunkLines = lineBuf.split("\n");
-        lineBuf = chunkLines.pop() ?? "";
-        for (const l of chunkLines) {
-          if (l.trim()) lines.push(l);
-        }
-      });
-
-      child.stderr.on("data", (chunk) => {
-        lastActivityAt = Date.now();
-        stderr += chunk.toString("utf8");
-        if (stderr.length > 50_000) {
-          stderr = stderr.slice(-50_000);
-        }
-      });
-
-      let settled = false;
-      const finish = async (timedOut, timeoutReason = "") => {
-        if (settled) return;
-        settled = true;
-        if (lineBuf.trim()) lines.push(lineBuf.trim());
-        const summary = summarizeGooseRun(lines, {
-          timedOut,
-          timeoutReason,
-          timeoutMs: totalTimeoutMs,
-          stderr,
-        });
-
-        // If test_command is specified, run AVO verification & record lineage
-        if (testCommand && lineageEngine) {
-          try {
-            const shellCmd = IS_WINDOWS
-              ? { bin: "powershell.exe", args: ["-NoProfile", "-Command", testCommand] }
-              : { bin: "bash", args: ["-c", testCommand] };
-
-            const { stdout: testOut, stderr: testErr } = await execFileAsync(
-              shellCmd.bin,
-              shellCmd.args,
-              { cwd, timeout: 300_000 }
-            ).catch((err) => ({ stdout: err.stdout ?? "", stderr: err.stderr ?? err.message }));
-
-            const metricVal = metricName ? lineageEngine.extractMetric(testOut, metricName) : null;
-            const status = metricVal !== null || !summary.isError ? "IMPROVED" : "FAILED";
-            lineageEngine.recordCandidate({
-              hypothesis: hypothesis ?? prompt,
-              filesModified: summary.fileOps,
-              metricName: metricName ?? "test_execution",
-              metricValue: metricVal,
-              higherIsBetter: higherIsBetter ?? true,
-              status,
-              testStderr: testErr || testOut,
-            });
-            summary.text += `\n\n=== NVIDIA AVO Verification ===\nTest Command: \`${testCommand}\`\nStatus: ${status}\nMetric: ${metricVal ?? "Executed"}`;
-          } catch (e) {
-            summary.text += `\n\n=== NVIDIA AVO Error ===\nFailed to run test command: ${e.message}`;
-          }
-        }
-
-        resolve(summary);
-      };
-
-      // Heartbeat & Watchdog Monitor (Checks every 5s)
-      const watchdog = setInterval(() => {
-        if (settled) {
-          clearInterval(watchdog);
-          return;
-        }
-        const now = Date.now();
-        const inactiveMs = now - lastActivityAt;
-        const totalElapsedMs = now - startedAt;
-
-        // 1. Inactivity Watchdog: Silence threshold reached with zero stream chunks
-        if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
-          clearInterval(watchdog);
-          killProcessTree(child);
-          finish(
-            true,
-            `Inactivity Timeout: Goose subprocess produced zero stream activity or output for ${Math.round(inactiveMs / 1000)}s.`
-          );
-        }
-        // 2. Absolute Wall-Clock Cap: 1-hour total budget
-        else if (totalElapsedMs >= totalTimeoutMs) {
-          clearInterval(watchdog);
-          killProcessTree(child);
-          finish(
-            true,
-            `Total Budget Timeout: Reached maximum execution budget of ${Math.round(totalTimeoutMs / 1000)}s (1 hour).`
-          );
-        }
-      }, 5000);
-
-      child.on("close", () => {
-        clearInterval(watchdog);
-        finish(false);
-      });
-      child.on("error", (err) => {
-        clearInterval(watchdog);
-        if (settled) return;
-        settled = true;
-        const result = { isError: true, text: `Failed to spawn goose (${gooseExe}): ${err.message}` };
-        resolve(result);
-      });
+    const gooseExe = getGooseExecutable();
+    const child = spawn(gooseExe, args, {
+      cwd,
+      env: {
+        ...process.env,
+        GOOSE_WORKING_DIR: cwd,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
     });
+
+    let lineBuf = "";
+    child.stdout.on("data", (chunk) => {
+      lastActivityAt = Date.now();
+      lineBuf += chunk.toString("utf8");
+      const chunkLines = lineBuf.split("\n");
+      lineBuf = chunkLines.pop() ?? "";
+      for (const l of chunkLines) {
+        if (l.trim()) lines.push(l);
+      }
+    });
+
+    child.stderr.on("data", (chunk) => {
+      lastActivityAt = Date.now();
+      stderr += chunk.toString("utf8");
+      if (stderr.length > 50_000) {
+        stderr = stderr.slice(-50_000);
+      }
+    });
+
+    let settled = false;
+    const finish = async (timedOut, timeoutReason = "") => {
+      if (settled) return;
+      settled = true;
+      if (lineBuf.trim()) lines.push(lineBuf.trim());
+      const summary = summarizeGooseRun(lines, {
+        timedOut,
+        timeoutReason,
+        timeoutMs: totalTimeoutMs,
+        stderr,
+      });
+
+      // If test_command is specified, run AVO verification & record lineage
+      if (testCommand && lineageEngine) {
+        try {
+          const shellCmd = IS_WINDOWS
+            ? { bin: "powershell.exe", args: ["-NoProfile", "-Command", testCommand] }
+            : { bin: "bash", args: ["-c", testCommand] };
+
+          const { stdout: testOut, stderr: testErr } = await execFileAsync(
+            shellCmd.bin,
+            shellCmd.args,
+            { cwd, timeout: 300_000 }
+          ).catch((err) => ({ stdout: err.stdout ?? "", stderr: err.stderr ?? err.message }));
+
+          const metricVal = metricName ? lineageEngine.extractMetric(testOut, metricName) : null;
+          const status = metricVal !== null || !summary.isError ? "IMPROVED" : "FAILED";
+          lineageEngine.recordCandidate({
+            hypothesis: hypothesis ?? prompt,
+            filesModified: summary.fileOps,
+            metricName: metricName ?? "test_execution",
+            metricValue: metricVal,
+            higherIsBetter: higherIsBetter ?? true,
+            status,
+            testStderr: testErr || testOut,
+          });
+          summary.text += `\n\n=== NVIDIA AVO Verification ===\nTest Command: \`${testCommand}\`\nStatus: ${status}\nMetric: ${metricVal ?? "Executed"}`;
+        } catch (e) {
+          summary.text += `\n\n=== NVIDIA AVO Error ===\nFailed to run test command: ${e.message}`;
+        }
+      }
+
+      resolve(summary);
+    };
+
+    // Heartbeat & Watchdog Monitor (Checks every 5s)
+    const watchdog = setInterval(() => {
+      if (settled) {
+        clearInterval(watchdog);
+        return;
+      }
+      const now = Date.now();
+      const inactiveMs = now - lastActivityAt;
+      const totalElapsedMs = now - startedAt;
+
+      // 1. Inactivity Watchdog: Silence threshold reached with zero stream chunks
+      if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
+        clearInterval(watchdog);
+        killProcessTree(child);
+        finish(
+          true,
+          `Inactivity Timeout: Goose subprocess produced zero stream activity or output for ${Math.round(inactiveMs / 1000)}s.`
+        );
+      }
+      // 2. Absolute Wall-Clock Cap: 1-hour total budget
+      else if (totalElapsedMs >= totalTimeoutMs) {
+        clearInterval(watchdog);
+        killProcessTree(child);
+        finish(
+          true,
+          `Total Budget Timeout: Reached maximum execution budget of ${Math.round(totalTimeoutMs / 1000)}s (1 hour).`
+        );
+      }
+    }, 5000);
+
+    child.on("close", () => {
+      clearInterval(watchdog);
+      finish(false);
+    });
+    child.on("error", (err) => {
+      clearInterval(watchdog);
+      if (settled) return;
+      settled = true;
+      const result = { isError: true, text: `Failed to spawn goose (${gooseExe}): ${err.message}` };
+      resolve(result);
+    });
+  });
+}
+
+function executeGooseTaskWithAutoRetry({ cwd, prompt, sessionId, extensions, system, timeoutMs, hypothesis, testCommand, metricName, higherIsBetter }) {
+  const resolvedSession = resolveSessionId(cwd, sessionId);
+
+  return runQueued(async () => {
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await withBootMutex(async () => {
+          await ensureServerRunning();
+        });
+      } catch (err) {
+        if (attempt === MAX_ATTEMPTS) {
+          return { isError: true, text: `Failed to boot model server: ${err.message}` };
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+
+      const result = await runGooseSubprocess({
+        cwd,
+        prompt,
+        sessionId: resolvedSession,
+        extensions,
+        system,
+        timeoutMs,
+        hypothesis,
+        testCommand,
+        metricName,
+        higherIsBetter,
+      });
+
+      const isNetworkError =
+        result.isError &&
+        /Network error|Could not connect to localhost:18020|ECONNREFUSED|socket hang up/i.test(result.text);
+
+      if (isNetworkError && attempt < MAX_ATTEMPTS) {
+        // Transparent self-healing: reboot vLLM and retry session seamlessly
+        await withBootMutex(async () => {
+          await stopServer();
+          await ensureServerRunning();
+        });
+        continue;
+      }
+
+      return result;
+    }
   });
 }
 
 // MCP Server Initialization
 const server = new McpServer({
   name: "qwen38-local",
-  version: "3.4.0",
+  version: "3.5.0",
 });
 
-// Tool 1: qwen_coworker (Unified Autonomous Senior Coworker - Strictly Synchronous)
+// Tool 1: qwen_coworker (Unified Autonomous Senior Coworker - Strictly Synchronous with Self-Healing)
 server.registerTool(
   "qwen_coworker",
   {
@@ -508,7 +556,7 @@ server.registerTool(
       "Primary agentic interface for local Qwen3.8-27B running inside the Goose agent harness for $0. " +
       "Has native access to Filesystem, Shell, and Git across Windows and WSL environments. Pure text-only model with Universal 245K context (VRAM dedicated to text/KV-cache; visual QA belongs to Lead Architect). " +
       "Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, code refactoring, and AVO lineage tracking. " +
-      "Runs SYNCHRONOUSLY and blocks until completion (with 1-hour budget and 10-minute stream inactivity watchdog), returning complete results directly in the same turn without polling. " +
+      "Runs synchronously and blocks until completion (with 1-hour budget, 10-minute stream inactivity watchdog, pre-flight health probe, and transparent network auto-retry with session resume). " +
       "Supported SOTA Text Extensions:\n" +
       "  - `uvx free-search-mcp` (Web Search, Live Documentation, PDF/DOCX Ingestion)\n" +
       "  - `npx.cmd -y context7@latest` / `npx -y context7@latest` (Version-Accurate Framework & Library Docs)\n" +
@@ -528,7 +576,7 @@ server.registerTool(
   },
   async ({ prompt, session_id, cwd, extensions, hypothesis, test_command, metric_name, higher_is_better, timeout_ms }) => {
     const workingDir = normalizeWorkspacePath(cwd ?? process.cwd());
-    const result = await executeGooseTask({
+    const result = await executeGooseTaskWithAutoRetry({
       cwd: workingDir,
       prompt,
       sessionId: session_id,
