@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.0.0)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.1.0)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
  * - Local Coworker (Variation & Execution Operator): Qwen3.8-27B via Goose Harness
  * - Serving: Universal 245K context (vLLM + DFlash2 + KVarN @ localhost:18020)
  * - Zero-Turn Async Architecture: Blocking Long-Poll HTTP Wait Endpoint (localhost:18021)
+ * - 3 Consolidated SOTA Tools: qwen_coworker, qwen_task, qwen_server
  * - True Windows <-> WSL Agnosticism with 45s Safe Synchronous Race & 1-Hour Background Budget
- * - Self-Healing: Pre-Flight Health Probes, Process Tree Kill, and Clean Session Continuity
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -456,7 +456,7 @@ const statusHttpServer = http.createServer((req, res) => {
 
 statusHttpServer.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
-    // Another instance already binds the status port; continue without crashing
+    // Another instance already binds status port; continue safely
   } else {
     console.error("Status HTTP Server Error:", err);
   }
@@ -702,15 +702,15 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 }
 
 // -----------------------------------------------------------------------------
-// MCP Server Initialization
+// MCP Server Initialization (3 Consolidated SOTA Tools)
 // -----------------------------------------------------------------------------
 
 const server = new McpServer({
   name: "qwen38-local",
-  version: "4.0.0",
+  version: "4.1.0",
 });
 
-// Tool 1: qwen_coworker (Hybrid Dual-Mode Execution)
+// Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
 server.registerTool(
   "qwen_coworker",
   {
@@ -755,19 +755,16 @@ server.registerTool(
       higherIsBetter: higher_is_better,
     });
 
-    // Synchronous race against 45s safe client window
     const raceTimer = new Promise((resolve) => setTimeout(() => resolve({ timedOutOnClientRace: true }), RACE_MS));
     const winner = await Promise.race([executionPromise, raceTimer]);
 
     if (!winner.timedOutOnClientRace) {
-      // Completed fast within the safe window
       return {
         content: [{ type: "text", text: winner.text }],
         isError: winner.isError,
       };
     }
 
-    // Still executing: yield durable Task Handle and blocking wait command
     const waitCmd = `curl -s http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
     const responseText = [
       `### Qwen Task Dispatched (Background Execution)`,
@@ -782,7 +779,7 @@ server.registerTool(
       `${waitCmd}`,
       `\`\`\``,
       ``,
-      `Or check status via tool: \`qwen_check_task(task_id: "${taskId}")\`.`,
+      `Or manage via tool: \`qwen_task(action: "status", task_id: "${taskId}")\`.`,
     ].join("\n");
 
     return {
@@ -792,17 +789,39 @@ server.registerTool(
   }
 );
 
-// Tool 2: qwen_check_task (Immediate Status Check & Retrieval)
+// Tool 2: qwen_task (Unified Background Task Management)
 server.registerTool(
-  "qwen_check_task",
+  "qwen_task",
   {
-    title: "Check Qwen Coworker Task Status or Retrieve Result",
-    description: "Queries the status of an in-flight or completed background Qwen task. Returns the deliverable if complete.",
+    title: "Manage Background Qwen Tasks",
+    description: "Check status, retrieve output, cancel, or list background Qwen coworker tasks.",
     inputSchema: {
-      task_id: z.string().describe("Task ID returned by qwen_coworker"),
+      action: z.enum(["status", "cancel", "list"]).describe("Action to perform on background tasks"),
+      task_id: z.string().optional().describe("Task ID (required for 'status' and 'cancel')"),
     },
   },
-  async ({ task_id }) => {
+  async ({ action, task_id }) => {
+    if (action === "list") {
+      const list = Array.from(tasks.values()).map((t) => ({
+        id: t.id,
+        sessionId: t.sessionId,
+        status: t.status,
+        elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
+        done: t.done,
+        isError: t.isError,
+      }));
+      return {
+        content: [{ type: "text", text: JSON.stringify({ tasks: list }, null, 2) }],
+      };
+    }
+
+    if (!task_id) {
+      return {
+        content: [{ type: "text", text: "Error: `task_id` parameter is required for action: '" + action + "'." }],
+        isError: true,
+      };
+    }
+
     const task = tasks.get(task_id);
     if (!task) {
       return {
@@ -811,88 +830,45 @@ server.registerTool(
       };
     }
 
-    if (task.done) {
+    if (action === "status") {
+      if (task.done) {
+        return {
+          content: [{ type: "text", text: task.result?.text || "Task completed." }],
+          isError: task.isError,
+        };
+      }
+      const elapsed_s = Math.round((Date.now() - task.createdAt) / 1000);
       return {
-        content: [{ type: "text", text: task.result?.text || "Task completed." }],
-        isError: task.isError,
+        content: [
+          {
+            type: "text",
+            text: `Task \`${task_id}\` is actively EXECUTING (${elapsed_s}s elapsed, ${task.toolCallsCount} tool calls made).\n\nWait command:\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``,
+          },
+        ],
+        isError: false,
       };
     }
 
-    const elapsed_s = Math.round((Date.now() - task.createdAt) / 1000);
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Task \`${task_id}\` is actively EXECUTING (${elapsed_s}s elapsed, ${task.toolCallsCount} tool calls made).\n\nWait with:\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``,
-        },
-      ],
-      isError: false,
-    };
-  }
-);
-
-// Tool 3: qwen_cancel_task (Process Tree Cancellation)
-server.registerTool(
-  "qwen_cancel_task",
-  {
-    title: "Cancel Active Qwen Task",
-    description: "Gracefully cancels an active background Qwen task and kills its process tree.",
-    inputSchema: {
-      task_id: z.string().describe("Task ID to cancel"),
-    },
-  },
-  async ({ task_id }) => {
-    const task = tasks.get(task_id);
-    if (!task) {
+    if (action === "cancel") {
+      if (!task.done && task.child) {
+        killProcessTree(task.child);
+        task.status = "cancelled";
+        task.done = true;
+        task.isError = true;
+        task.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
+        notifyWaiters(task);
+        return {
+          content: [{ type: "text", text: `Task \`${task_id}\` cancelled and process tree killed.` }],
+        };
+      }
       return {
-        content: [{ type: "text", text: `Task \`${task_id}\` not found.` }],
-        isError: true,
+        content: [{ type: "text", text: `Task \`${task_id}\` was already finished.` }],
       };
     }
-
-    if (!task.done && task.child) {
-      killProcessTree(task.child);
-      task.status = "cancelled";
-      task.done = true;
-      task.isError = true;
-      task.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
-      notifyWaiters(task);
-      return {
-        content: [{ type: "text", text: `Task \`${task_id}\` cancelled and process tree killed.` }],
-      };
-    }
-
-    return {
-      content: [{ type: "text", text: `Task \`${task_id}\` was already finished.` }],
-    };
   }
 );
 
-// Tool 4: qwen_list_active_tasks (Task Registry Inspection)
-server.registerTool(
-  "qwen_list_active_tasks",
-  {
-    title: "List Active and Recent Qwen Tasks",
-    description: "Lists all currently executing and recently finished tasks managed by this MCP server.",
-    inputSchema: {},
-  },
-  async () => {
-    const list = Array.from(tasks.values()).map((t) => ({
-      id: t.id,
-      sessionId: t.sessionId,
-      status: t.status,
-      elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
-      done: t.done,
-      isError: t.isError,
-    }));
-
-    return {
-      content: [{ type: "text", text: JSON.stringify({ tasks: list }, null, 2) }],
-    };
-  }
-);
-
-// Tool 5: qwen_server (Unified Server Lifecycle)
+// Tool 3: qwen_server (Unified Server Lifecycle)
 server.registerTool(
   "qwen_server",
   {

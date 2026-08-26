@@ -34,11 +34,11 @@ async function main() {
     });
     console.log("isError:", res.isError);
     console.log("Response:", res.content[0].text);
-  } else if (scenario === "list_tasks") {
-    console.log("\n=== calling qwen_list_active_tasks ===");
+  } else if (scenario === "task_list") {
+    console.log("\n=== calling qwen_task (list) ===");
     const res = await client.callTool({
-      name: "qwen_list_active_tasks",
-      arguments: {},
+      name: "qwen_task",
+      arguments: { action: "list" },
     });
     console.log("Result:", res.content[0].text);
   }

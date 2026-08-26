@@ -1,6 +1,14 @@
-import json, os
+import json, os, glob
 
 mcp_dir = r'C:\Users\Apath\.gemini\antigravity-ide\mcp\qwen38-local'
+
+# Clean old schemas
+for f in glob.glob(os.path.join(mcp_dir, '*.json')):
+    try:
+        os.remove(f)
+        print(f'Removed old schema {f}')
+    except Exception:
+        pass
 
 tools = {
     'qwen_coworker': {
@@ -23,37 +31,17 @@ tools = {
             'required': ['prompt']
         }
     },
-    'qwen_check_task': {
-        'name': 'qwen_check_task',
-        'description': 'Queries the status of an in-flight or completed background Qwen task. Returns the deliverable if complete.',
+    'qwen_task': {
+        'name': 'qwen_task',
+        'description': 'Manage background Qwen coworker tasks: check status, retrieve output, cancel, or list tasks.',
         'parameters': {
             '$schema': 'http://json-schema.org/draft-07/schema#',
             'type': 'object',
             'properties': {
-                'task_id': {'type': 'string', 'description': 'Task ID returned by qwen_coworker'}
+                'action': {'type': 'string', 'enum': ['status', 'cancel', 'list'], 'description': 'Action to perform on background tasks'},
+                'task_id': {'type': 'string', 'description': 'Task ID (required for status and cancel)'}
             },
-            'required': ['task_id']
-        }
-    },
-    'qwen_cancel_task': {
-        'name': 'qwen_cancel_task',
-        'description': 'Gracefully cancels an active background Qwen task and kills its process tree.',
-        'parameters': {
-            '$schema': 'http://json-schema.org/draft-07/schema#',
-            'type': 'object',
-            'properties': {
-                'task_id': {'type': 'string', 'description': 'Task ID to cancel'}
-            },
-            'required': ['task_id']
-        }
-    },
-    'qwen_list_active_tasks': {
-        'name': 'qwen_list_active_tasks',
-        'description': 'Lists all currently executing and recently finished tasks managed by this MCP server.',
-        'parameters': {
-            '$schema': 'http://json-schema.org/draft-07/schema#',
-            'type': 'object',
-            'properties': {}
+            'required': ['action']
         }
     },
     'qwen_server': {

@@ -39,14 +39,14 @@ You are paired with a local **Qwen3.8-27B** model (vLLM + DFlash2 + KVarN @ `htt
 
 ---
 
-## 3. MCP Tool Suite (`qwen38-local`)
+## 3. Consolidated MCP Tool Suite (`qwen38-local`)
 
 - **`qwen_coworker`**: Primary agentic interface. Executes multi-turn Socratic collaboration, codebase exploration, deep web research, and AVO candidate mutations. Runs with 1-hour background budget and 45s fast sync race.
   - Parameters: `prompt`, `session_id?`, `cwd?`, `extensions?`, `hypothesis?`, `test_command?`, `metric_name?`, `higher_is_better?`, `timeout_ms?`.
-- **`qwen_check_task`**: Queries status or retrieves completed deliverables for a given `task_id`.
-- **`qwen_cancel_task`**: Cancels an active task and terminates its process tree (`taskkill` / `SIGKILL`).
-- **`qwen_list_active_tasks`**: Lists all running and recent tasks in memory.
-- **`qwen_server`**: Manages the local 245K vLLM instance lifecycle (`action: "status" | "start" | "stop"`).
+- **`qwen_task`**: Manages background Qwen coworker tasks.
+  - Parameters: `action: "status" | "cancel" | "list"`, `task_id?`.
+- **`qwen_server`**: Manages the local 245K vLLM instance lifecycle.
+  - Parameters: `action: "status" | "start" | "stop"`.
 
 ---
 
