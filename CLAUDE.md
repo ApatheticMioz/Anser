@@ -40,21 +40,14 @@ You are paired with a local **Qwen3.8-27B** model (served via vLLM on RTX 3090 w
    > - Check working tree status (`git status`) prior to dispatching edits.
    > - In evolutionary AVO variations, execute mutations on clean feature/experiment branches. Failed attempts must be rolled back (`git reset --hard` / `git checkout`) while preserving the causal failure analysis in `.avo/lineage.json`.
    > - Completed milestones must produce atomic, conventional git commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`) and be pushed to remote tracking branches (`git push`).
-6. **Windows Shell Command Syntax Invariant**:
-   > [!IMPORTANT]
-   > The Windows host shell is **Windows PowerShell 5.1**.
-   > - **NEVER** use `&&` or `||` (invalid syntax in PowerShell 5.1).
-   > - Use `;` for sequential statements (e.g. `cmd1; cmd2`).
-   > - Use `if ($?) { cmd2 }` for conditional execution.
-   > - Use `bash -c "..."` or `wsl bash -c "..."` when POSIX shell syntax is needed.
-7. **SOTA Extension Selection & Visual Boundaries**:
+6. **SOTA Extension Selection & Visual Boundaries**:
    - Web research / live docs / CVEs $\to$ `extensions: ['uvx free-search-mcp']`
    - Version-accurate library APIs $\to$ `extensions: ['npx.cmd -y context7@latest']` (Windows) / `['npx -y context7@latest']` (WSL)
    - Authenticated GitHub workflows $\to$ `gh` CLI / `git` native shell
    - Visual inspection / UI layout QA $\to$ **Exclusively handled by Lead Architect** (never attach vision/screenshot extensions to text-only Qwen).
-8. **No Readiness Pings**: Treat Qwen as an autonomous coworker. Never send conversational "Hello" or "Are you online?" pings. Dispatch substantive, self-contained domain tasks directly.
-9. **No Tool Racing**: When delegating research or coding tasks to Qwen, do not execute duplicate search (`search_web`) or manual file edits in parallel. Let the worker complete its task and synthesize the deliverable.
-10. **NVIDIA AVO Lineage Tracking**: Candidate mutations with benchmark commands record execution metrics and causal lineages directly into `.avo/lineage.json`.
+7. **No Readiness Pings**: Treat Qwen as an autonomous coworker. Never send conversational "Hello" or "Are you online?" pings. Dispatch substantive, self-contained domain tasks directly.
+8. **No Tool Racing**: When delegating research or coding tasks to Qwen, do not execute duplicate search (`search_web`) or manual file edits in parallel. Let the worker complete its task and synthesize the deliverable.
+9. **NVIDIA AVO Lineage Tracking**: Candidate mutations with benchmark commands record execution metrics and causal lineages directly into `.avo/lineage.json`.
 
 ---
 
