@@ -695,3 +695,24 @@ Root-cause analysis showed:
 - Live verified from WSL via `mcp_client_test.js`: all 6 tools registered,
   Goose subprocess executed, written files created and tested with 0 errors.
 
+## SOTA Multi-Agent Hardening: Vision Role Division, Session Drift Fix, & Polling Invariants (2026-08-26)
+
+An architectural audit of session traces (`8233615f-6a9b-4b4b-b4b0-649b77f6dc36`) evaluating `TreeMap-Disk-Visualizer` surfaced three systemic operational findings:
+
+1. **Vision Tool Misalignment on Worker vs. Lead**:
+   - **Context**: The worker model (Qwen 3.8-27B) is served via vLLM with `Universal 245K Context` and `--language-model-only` (dropping the 2.7 GB vision tower to dedicate all 24 GB VRAM to KV pool and DFlash2 speculative decoding).
+   - **Problem**: Passing visual browser tools (`@playwright/mcp` with screenshot mode) to Qwen causes execution failures and hallucinations because the engine has no vision encoder.
+   - **Fix**: Codified strict Prescriptive Role Division in `CLAUDE.md`, `GEMINI.md`, and `mcp-qwen/index.js`:
+     - **Lead Architect**: Holds native vision capabilities for rendered UI inspection, screenshot audits, and multimodal QA (`browser_subagent`).
+     - **Local Worker**: Pure text-only execution for AST/code manipulation, text DOM inspection, accessibility trees, API/curl endpoints, and 245K-context document ingestion via `uvx free-search-mcp` and `npx.cmd -y context7@latest`.
+
+2. **Session Persistence Drift & `--resume` Crash**:
+   - **Problem**: `mcp-qwen/index.js` tracked session existence using an in-memory `Set` (`knownSessions`). If the process restarted or session files were not saved by Goose, passing `--name <id> --resume` caused Goose to immediately crash with `Error: No session found with name '<id>'`.
+   - **Fix**: Replaced in-memory tracking with dynamic disk-grounded session discovery (`sessionExistsOnDisk` querying `goose session list`), passing `--name <id>` for new sessions and `--name <id> --resume` only when verified on disk.
+
+3. **Status Polling Storms & Turn Inflation**:
+   - **Problem**: Lead agents executing 20s–30s polling loops on `qwen_task_status` burned ~150 conversational turns and accumulated massive cache-read tokens over 14 minutes.
+   - **Fix**: Added explicit Mandatory Invariant across all master documents:
+     - **Turn Conservation**: Highly prefer waiting on reactive system notifications. Polling intervals of **180+ seconds** are the minimum **IF AND ONLY IF NECESSARY**.
+
+

@@ -75,7 +75,7 @@ User <-> Claude Sonnet 5 (Claude Code / Antigravity, orchestrator)
              v
         Goose (block/goose, Rust binary) — spawned as a subprocess per call,
         real agentic loop: file/edit/shell tools + any attached MCP server
-        (Playwright, gh CLI, free-search-mcp, ...)
+        (free-search-mcp, context7, gh CLI, ...)
              |
              | OpenAI-compatible /v1/chat/completions
              v

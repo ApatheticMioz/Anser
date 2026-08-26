@@ -211,7 +211,26 @@ function summarizeGooseRun(lines, { timedOut, timeoutMs = DEFAULT_TIMEOUT_MS, st
   return { isError, text: parts.join("\n\n"), toolCalls, errors, fileOps, finalText };
 }
 
-const knownSessions = new Set();
+async function sessionExistsOnDisk(sessionId) {
+  if (!sessionId) return false;
+  try {
+    const { stdout } = await execFileAsync(GOOSE_EXE, ["session", "list"], { timeout: 5000 });
+    const lines = stdout.split("\n");
+    for (const line of lines) {
+      const parts = line.split(" - ");
+      if (parts.length >= 2) {
+        const id = parts[0].trim();
+        const name = parts[1].trim();
+        if (id === sessionId || name === sessionId) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs, hypothesis, testCommand, metricName, higherIsBetter }) {
   const taskId = makeTaskId();
@@ -255,26 +274,6 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
   finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
   finalTaskPrompt += `If a shell command fails with "'Get-Content'/'Select-String' is not recognized", you're in cmd.exe - use powershell -NoProfile -Command "..." or type and findstr.\n`;
 
-  const args = ["run"];
-  if (sessionId) {
-    if (knownSessions.has(sessionId)) {
-      args.push("--name", sessionId, "--resume");
-    } else {
-      args.push("--name", sessionId);
-      knownSessions.add(sessionId);
-    }
-  } else {
-    args.push("--no-session");
-  }
-  args.push("--output-format", "stream-json");
-  if (system) {
-    args.push("--system", system);
-  }
-  args.push("-t", finalTaskPrompt);
-  for (const ext of extensions ?? []) {
-    args.push("--with-extension", ext);
-  }
-
   const promise = runQueued(async () => {
     queueDepth--;
     if (entry.cancelled) {
@@ -298,8 +297,28 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     }
     entry.booting = false;
 
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
       entry.execStartedAt = Date.now();
+      const args = ["run"];
+      if (sessionId) {
+        const exists = await sessionExistsOnDisk(sessionId);
+        if (exists) {
+          args.push("--name", sessionId, "--resume");
+        } else {
+          args.push("--name", sessionId);
+        }
+      } else {
+        args.push("--no-session");
+      }
+      args.push("--output-format", "stream-json");
+      if (system) {
+        args.push("--system", system);
+      }
+      args.push("-t", finalTaskPrompt);
+      for (const ext of extensions ?? []) {
+        args.push("--with-extension", ext);
+      }
+
       const child = spawn(GOOSE_EXE, args, {
         cwd,
         env: {
@@ -366,17 +385,19 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         resolve(summary);
       };
 
-      const killTimer = setTimeout(() => {
-        execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], () => {});
+      const timer = setTimeout(() => {
+        if (child.pid) {
+          execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], () => {});
+        }
         finish(true);
       }, entry.timeoutMs);
 
       child.on("close", () => {
-        clearTimeout(killTimer);
+        clearTimeout(timer);
         finish(false);
       });
       child.on("error", (err) => {
-        clearTimeout(killTimer);
+        clearTimeout(timer);
         if (settled) return;
         settled = true;
         const result = { isError: true, text: `Failed to spawn goose: ${err.message}` };
@@ -394,7 +415,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 // MCP Server Initialization
 const server = new McpServer({
   name: "qwen38-local",
-  version: "3.0.0",
+  version: "3.1.0",
 });
 
 // Tool 1: qwen_coworker (Unified Agentic & Socratic Coworker)
@@ -404,13 +425,12 @@ server.registerTool(
     title: "Autonomous Senior Coworker (Goose Agent + Universal 245K vLLM)",
     description:
       "Primary agentic interface for local Qwen3.8-27B running inside the Goose agent harness for $0. " +
-      "Has native access to local Filesystem, Shell, and Git. " +
+      "Has native access to local Filesystem, Shell, and Git. Pure text-only model with Universal 245K context (VRAM dedicated to text/KV-cache; visual QA belongs to Lead Architect). " +
       "Supports multi-turn Socratic collaboration, code refactoring, adversarial threat modeling, deep research, and lineage tracking. " +
-      "Dynamic Extensions:\n" +
-      "  - `uvx free-search-mcp` (Web Search, Documentation, PDF/DOCX)\n" +
-      "  - `npx.cmd -y @playwright/mcp@latest` (Headless Browser & DOM Verification)\n" +
+      "Supported SOTA Text Extensions:\n" +
+      "  - `uvx free-search-mcp` (Web Search, Live Documentation, PDF/DOCX Ingestion)\n" +
       "  - `npx.cmd -y context7@latest` (Version-Accurate Framework & Library Docs)\n" +
-      "  - `gh` CLI (Authenticated GitHub PR/Issue/Repo workflows)\n" +
+      "  - `gh` CLI / `git` (Authenticated GitHub operations and atomic git branch/commit workflows)\n" +
       "When passed `hypothesis` and `test_command`, executes as an NVIDIA AVO candidate variation step with `.avo/lineage.json` tracking.",
     inputSchema: {
       prompt: z.string().describe("Task, inquiry, or architectural instruction for Qwen"),
@@ -453,7 +473,7 @@ server.registerTool(
           type: "text",
           text:
             `Task is executing in Goose (task ID: ${taskId}). ` +
-            `Check progress via qwen_task_status or poll http://127.0.0.1:${STATUS_PORT}/task/${taskId}. ` +
+            `Rely on reactive system notifications for completion. If polling is necessary, use intervals >=180s via qwen_task_status or check http://127.0.0.1:${STATUS_PORT}/task/${taskId}. ` +
             `(${unfinishedTaskCount()} unfinished task(s) active).`,
         },
       ],
@@ -466,7 +486,9 @@ server.registerTool(
   "qwen_task_status",
   {
     title: "Check Status or Output of Background Goose Task",
-    description: "Polls for the progress or final structured result of an active/completed task ID without burning LLM turns.",
+    description:
+      "Checks progress or final result of an active/completed task ID. " +
+      "RULE: Highly prefer waiting on reactive system notifications. Polling intervals of 180+s should be the minimum IF AND ONLY IF NECESSARY.",
     inputSchema: {
       task_id: z.string().describe("The task_id returned by qwen_coworker"),
     },
@@ -493,7 +515,7 @@ server.registerTool(
       content: [
         {
           type: "text",
-          text: `Task "${task_id}" is ${state} (${elapsed}s elapsed, budget ${Math.round(entry.timeoutMs / 1000)}s). Progress: ${entry.lines.length} events logged.`,
+          text: `Task "${task_id}" is ${state} (${elapsed}s elapsed, budget ${Math.round(entry.timeoutMs / 1000)}s, ${unfinishedTaskCount()} active task(s)). Progress: ${entry.lines.length} events logged. Tip: Wait for reactive completion notification.`,
         },
       ],
     };
