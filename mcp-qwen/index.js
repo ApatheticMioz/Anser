@@ -32,8 +32,11 @@ const MAX_LEN_HUGE = 245760;
 const BOOT_TIMEOUT_MS = 180_000;
 const BOOT_POLL_MS = 3000;
 
-// Safe sync race threshold: 45s (guaranteed safe across Claude Desktop 60s & Antigravity 180s)
-const RACE_MS = 45_000;
+// Safe sync race threshold: 45s for Claude Desktop/Code (~60s client timeout), 150s for Antigravity IDE (180s timeout)
+const DEFAULT_RACE_MS = 45_000;
+const RACE_MS = process.env.QWEN_RACE_MS
+  ? parseInt(process.env.QWEN_RACE_MS, 10)
+  : DEFAULT_RACE_MS;
 // Full 1-Hour Default Time Budget for background execution
 const DEFAULT_TIMEOUT_MS = 3_600_000;
 // Inactivity Heartbeat: Kill only if process produces 0 stream chunks for 10 minutes
@@ -44,36 +47,69 @@ const TASK_RETENTION_MS = 10_800_000; // 3 hours
 const IS_WINDOWS = process.platform === "win32";
 
 /**
+ * Checks if a target path resides inside the WSL filesystem.
+ */
+function isWslLocation(inputPath) {
+  if (!inputPath) return false;
+  const p = inputPath.trim();
+  return (
+    p.startsWith("/home/") ||
+    p.startsWith("/root/") ||
+    p.startsWith("/etc/") ||
+    p.startsWith("/var/") ||
+    p.startsWith("/usr/") ||
+    p.startsWith("/tmp/") ||
+    /^\\\\wsl(?:\.localhost|\$)\\/i.test(p)
+  );
+}
+
+/**
+ * Normalizes any path to a clean POSIX WSL path (e.g. /home/apath/Work).
+ */
+function toPosixWslPath(inputPath) {
+  if (!inputPath) return "/home/apath";
+  let p = inputPath.trim();
+  const uncMatch = p.match(/^\\\\wsl(?:\.localhost|\$)\\[^\\]+\\(.*)/i);
+  if (uncMatch) {
+    return `/${uncMatch[1].replace(/\\/g, "/")}`;
+  }
+  const winMatch = p.match(/^([a-zA-Z]):[\\/](.*)/);
+  if (winMatch) {
+    const drive = winMatch[1].toLowerCase();
+    const sub = winMatch[2].replace(/\\/g, "/");
+    return `/mnt/${drive}/${sub}`;
+  }
+  return p.replace(/\\/g, "/");
+}
+
+/**
+ * Normalizes any path to a valid Windows path (e.g. D:\LLM_Ecosystem or \\wsl.localhost\Ubuntu\home\...).
+ */
+function toWindowsPath(inputPath) {
+  if (!inputPath) return process.cwd();
+  let p = inputPath.trim();
+  if (p.startsWith("/home/")) {
+    return `\\\\wsl.localhost\\Ubuntu${p.replace(/\//g, "\\")}`;
+  }
+  const mntMatch = p.match(/^\/mnt\/([a-zA-Z])\/(.*)/);
+  if (mntMatch) {
+    const drive = mntMatch[1].toUpperCase();
+    const sub = mntMatch[2].replace(/\//g, "\\");
+    return `${drive}:\\${sub}`;
+  }
+  return p;
+}
+
+/**
  * Normalizes workspace paths bidirectionally across Windows host and WSL POSIX.
  */
 function normalizeWorkspacePath(inputPath) {
   if (!inputPath) return process.cwd();
   let p = inputPath.trim();
-
-  if (IS_WINDOWS) {
-    if (p.startsWith("/home/")) {
-      return `\\\\wsl.localhost\\Ubuntu${p.replace(/\//g, "\\")}`;
-    }
-    const mntMatch = p.match(/^\/mnt\/([a-zA-Z])\/(.*)/);
-    if (mntMatch) {
-      const drive = mntMatch[1].toUpperCase();
-      const sub = mntMatch[2].replace(/\//g, "\\");
-      return `${drive}:\\${sub}`;
-    }
-    return p;
-  } else {
-    const winMatch = p.match(/^([a-zA-Z]):[\\/](.*)/);
-    if (winMatch) {
-      const drive = winMatch[1].toLowerCase();
-      const sub = winMatch[2].replace(/\\/g, "/");
-      return `/mnt/${drive}/${sub}`;
-    }
-    const uncMatch = p.match(/^\\\\wsl(?:\.localhost|\$)\\[^\\]+\\(.*)/i);
-    if (uncMatch) {
-      return `/${uncMatch[1].replace(/\\/g, "/")}`;
-    }
-    return p;
+  if (isWslLocation(p)) {
+    return IS_WINDOWS ? toWindowsPath(p) : toPosixWslPath(p);
   }
+  return IS_WINDOWS ? toWindowsPath(p) : toPosixWslPath(p);
 }
 
 function getGooseExecutable() {
@@ -310,11 +346,18 @@ function summarizeGooseRun(lines, { timedOut, timeoutReason = "", timeoutMs = DE
   return { isError, text: parts.join("\n\n"), toolCalls, errors, fileOps, finalText };
 }
 
-async function sessionExistsOnDisk(sessionId) {
+async function sessionExistsOnDisk(sessionId, targetInWsl = false) {
   if (!sessionId) return false;
-  const gooseExe = getGooseExecutable();
   try {
-    const { stdout } = await execFileAsync(gooseExe, ["session", "list"], { timeout: 5000 });
+    let stdout = "";
+    if (targetInWsl && IS_WINDOWS) {
+      const res = await execFileAsync("wsl.exe", ["-d", "Ubuntu", "--", "/home/apath/.local/bin/goose", "session", "list"], { timeout: 5000 });
+      stdout = res.stdout;
+    } else {
+      const gooseExe = getGooseExecutable();
+      const res = await execFileAsync(gooseExe, ["session", "list"], { timeout: 5000 });
+      stdout = res.stdout;
+    }
     const lines = stdout.split("\n");
     for (const line of lines) {
       const parts = line.split(" - ");
@@ -659,7 +702,10 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
       } catch {}
     }
 
-    let finalTaskPrompt = `Your working directory is exactly: ${cwd}\n\n`;
+    const targetInWsl = isWslLocation(cwd);
+    const targetCwd = targetInWsl ? toPosixWslPath(cwd) : toWindowsPath(cwd);
+
+    let finalTaskPrompt = `Your working directory is exactly: ${targetCwd}\n\n`;
     if (avoContext) {
       finalTaskPrompt += `=== NVIDIA AVO Lineage Context ===\n${avoContext}\n\n`;
     }
@@ -669,11 +715,12 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
     finalTaskPrompt += `=== Operational & Tooling Directives ===\n`;
     finalTaskPrompt += `- Prefer native Goose tools (\`read\`, \`edit\`, \`write\`, \`patch\`, \`tree\`) over shell subprocesses for inspecting and modifying files for maximum efficiency.\n`;
-    if (IS_WINDOWS) {
+    if (IS_WINDOWS && !targetInWsl) {
       finalTaskPrompt += `- Windows Line Endings: Workspace files may use CRLF (\\r\\n). If \`edit\` or string replacement encounters matching issues, inspect exact line endings with \`read\` or write the normalized file.\n`;
       finalTaskPrompt += `- Shell execution: If executing PowerShell commands via shell, use \`powershell -NoProfile -Command "..."\` or native utilities directly.\n`;
+    } else {
+      finalTaskPrompt += `- Linux Environment: Executing natively in Linux/WSL. Use standard Linux commands and POSIX paths.\n`;
     }
-
 
     return new Promise(async (resolve) => {
       let lastActivityAt = Date.now();
@@ -682,7 +729,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
       const args = ["run"];
       if (sessionId) {
-        const exists = await sessionExistsOnDisk(sessionId);
+        const exists = await sessionExistsOnDisk(sessionId, targetInWsl);
         if (exists) {
           args.push("--name", sessionId, "--resume");
         } else {
@@ -700,19 +747,48 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         args.push("--with-extension", ext);
       }
 
-      const gooseExe = getGooseExecutable();
-      const child = spawn(gooseExe, args, {
-        cwd,
-        env: {
-          ...process.env,
-          GOOSE_WORKING_DIR: cwd,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-        // POSIX: give the child its own process group so killProcessTree can
-        // signal the whole tree via -pid. (Windows uses taskkill /T /F
-        // instead, so detached is left off there to keep console behavior.)
-        detached: !IS_WINDOWS,
-      });
+      let child;
+      if (targetInWsl) {
+        if (IS_WINDOWS) {
+          child = spawn("wsl.exe", ["-d", "Ubuntu", "--cd", targetCwd, "--", "/home/apath/.local/bin/goose", ...args], {
+            env: {
+              ...process.env,
+              GOOSE_PROVIDER: "openai",
+              GOOSE_MODEL: "qwen3.8-27b",
+              OPENAI_BASE_URL: "http://localhost:18020/v1",
+              OPENAI_API_KEY: "dummy",
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+            detached: false,
+          });
+        } else {
+          const gooseExe = getGooseExecutable();
+          child = spawn(gooseExe, args, {
+            cwd: targetCwd,
+            env: {
+              ...process.env,
+              GOOSE_PROVIDER: "openai",
+              GOOSE_MODEL: "qwen3.8-27b",
+              OPENAI_BASE_URL: "http://localhost:18020/v1",
+              OPENAI_API_KEY: "dummy",
+              GOOSE_WORKING_DIR: targetCwd,
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+            detached: true,
+          });
+        }
+      } else {
+        const gooseExe = getGooseExecutable();
+        child = spawn(gooseExe, args, {
+          cwd: targetCwd,
+          env: {
+            ...process.env,
+            GOOSE_WORKING_DIR: targetCwd,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: !IS_WINDOWS,
+        });
+      }
 
       taskEntry.child = child;
 
@@ -934,13 +1010,15 @@ server.registerTool(
       };
     }
 
-    const waitCmd = `curl -s http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
+    const curlBin = IS_WINDOWS ? "curl.exe" : "curl";
+    const waitCmd = `${curlBin} -s http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
+    const elapsedSec = Math.round(RACE_MS / 1000);
     const responseText = [
       `### Qwen Task Dispatched (Background Execution)`,
       `- **Task ID**: \`${taskId}\``,
       `- **Session**: \`${resolvedSession}\``,
       `- **Working Directory**: \`${workingDir}\``,
-      `- **Time Elapsed**: 45s (Task continuing in background with 1-hour budget)`,
+      `- **Time Elapsed**: ${elapsedSec}s (Task continuing in background with 1-hour budget)`,
       ``,
       `> [!TIP]`,
       `> **Zero-Turn Reactive Wait**: Execute the following command via \`run_command\` (or background shell). It will sleep at $0 token cost and automatically wake you when Qwen completes:`,
