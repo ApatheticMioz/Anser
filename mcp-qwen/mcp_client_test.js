@@ -3,9 +3,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 async function main() {
+  const scriptPath = process.platform === "win32" ? "D:\\LLM_Ecosystem\\mcp-qwen\\index.js" : "/mnt/d/LLM_Ecosystem/mcp-qwen/index.js";
   const transport = new StdioClientTransport({
     command: "node",
-    args: ["D:/LLM_Ecosystem/mcp-qwen/index.js"],
+    args: [scriptPath],
   });
   const client = new Client({ name: "test-harness", version: "1.0.0" });
   await client.connect(transport);

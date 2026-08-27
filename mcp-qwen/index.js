@@ -16,7 +16,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
-import { existsSync, readFileSync } from "fs";
+import fs, { existsSync, readFileSync } from "fs";
+import os from "os";
 import http from "http";
 import path from "path";
 import crypto from "crypto";
@@ -332,10 +333,74 @@ function resolveSessionId(cwd, requestedSessionId) {
 }
 
 // -----------------------------------------------------------------------------
-// Durable Task Registry & Zero-Turn HTTP Server
+// Durable Disk-Backed Task Registry & Universal Zero-Turn HTTP Server
 // -----------------------------------------------------------------------------
 
+const TASK_DIR = path.join(os.homedir(), ".qwen", "tasks");
+try {
+  fs.mkdirSync(TASK_DIR, { recursive: true });
+} catch {}
+
 const tasks = new Map();
+
+function saveTaskToDisk(task) {
+  if (!task || !task.id) return;
+  try {
+    const filePath = path.join(TASK_DIR, `${task.id}.json`);
+    const tmpPath = `${filePath}.tmp_${process.pid}_${Date.now()}`;
+    const payload = {
+      id: task.id,
+      sessionId: task.sessionId,
+      cwd: task.cwd,
+      prompt: task.prompt,
+      createdAt: task.createdAt,
+      startedAt: task.startedAt,
+      finishedAt: task.finishedAt,
+      status: task.status,
+      done: task.done,
+      isError: task.isError,
+      fileOps: task.fileOps || [],
+      toolCallsCount: task.toolCallsCount || 0,
+      result: task.result || null,
+      stderr: task.stderr ? task.stderr.slice(-2000) : "",
+    };
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+    fs.renameSync(tmpPath, filePath);
+  } catch {}
+}
+
+function readTaskFromDisk(taskId) {
+  try {
+    const filePath = path.join(TASK_DIR, `${taskId}.json`);
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    }
+  } catch {}
+  return null;
+}
+
+function listTasksFromDisk() {
+  const result = [];
+  try {
+    const files = fs.readdirSync(TASK_DIR);
+    const now = Date.now();
+    for (const f of files) {
+      if (f.endsWith(".json")) {
+        try {
+          const filePath = path.join(TASK_DIR, f);
+          const stat = fs.statSync(filePath);
+          if (now - stat.mtimeMs > TASK_RETENTION_MS) {
+            try { fs.unlinkSync(filePath); } catch {}
+            continue;
+          }
+          const task = JSON.parse(fs.readFileSync(filePath, "utf8"));
+          result.push(task);
+        } catch {}
+      }
+    }
+  } catch {}
+  return result;
+}
 
 function cleanOldTasks() {
   const now = Date.now();
@@ -344,11 +409,13 @@ function cleanOldTasks() {
       tasks.delete(id);
     }
   }
+  listTasksFromDisk(); // Triggers disk retention cleanup
 }
 
 setInterval(cleanOldTasks, 300_000);
 
 function notifyWaiters(task) {
+  saveTaskToDisk(task);
   if (!task.waiters || task.waiters.length === 0) return;
   const payload = task.result?.text || (task.isError ? "Task failed." : "Task completed with no output.");
   for (const res of task.waiters) {
@@ -370,41 +437,83 @@ const statusHttpServer = http.createServer((req, res) => {
 
   // GET /tasks
   if (req.method === "GET" && pathname === "/tasks") {
-    const list = Array.from(tasks.values()).map((t) => ({
-      id: t.id,
-      sessionId: t.sessionId,
-      cwd: t.cwd,
-      status: t.status,
-      createdAt: t.createdAt,
-      elapsed_s: Math.round((Date.now() - t.createdAt) / 1000),
-      done: t.done,
-      isError: t.isError,
-    }));
+    const merged = new Map();
+    for (const dt of listTasksFromDisk()) {
+      merged.set(dt.id, {
+        id: dt.id,
+        sessionId: dt.sessionId,
+        cwd: dt.cwd,
+        status: dt.status,
+        createdAt: dt.createdAt,
+        elapsed_s: Math.round(((dt.finishedAt || Date.now()) - dt.createdAt) / 1000),
+        done: dt.done,
+        isError: dt.isError,
+      });
+    }
+    for (const t of tasks.values()) {
+      merged.set(t.id, {
+        id: t.id,
+        sessionId: t.sessionId,
+        cwd: t.cwd,
+        status: t.status,
+        createdAt: t.createdAt,
+        elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
+        done: t.done,
+        isError: t.isError,
+      });
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ active_tasks: list }, null, 2));
+    return res.end(JSON.stringify({ active_tasks: Array.from(merged.values()) }, null, 2));
   }
 
-  // GET /task/:id/wait (Blocking long-poll)
+  // GET /task/:id/wait (Universal blocking long-poll across memory + disk)
   const waitMatch = pathname.match(/^\/task\/([^/]+)\/wait$/);
   if (req.method === "GET" && waitMatch) {
     const taskId = waitMatch[1];
-    const task = tasks.get(taskId);
+    let task = tasks.get(taskId);
+    let diskTask = null;
     if (!task) {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      return res.end(`Task not found: ${taskId}`);
+      diskTask = readTaskFromDisk(taskId);
+      if (!diskTask) {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        return res.end(`Task not found: ${taskId}`);
+      }
     }
 
-    if (task.done) {
-      const payload = task.result?.text || (task.isError ? "Task failed." : "Task completed.");
-      res.writeHead(task.isError ? 500 : 200, { "Content-Type": "text/markdown; charset=utf-8" });
-      return res.end(payload);
+    const isDone = task ? task.done : diskTask.done;
+    const isError = task ? task.isError : diskTask.isError;
+    const resText = (task ? task.result?.text : diskTask.result?.text) || (isError ? "Task failed." : "Task completed.");
+
+    if (isDone) {
+      res.writeHead(isError ? 500 : 200, { "Content-Type": "text/markdown; charset=utf-8" });
+      return res.end(resText);
     }
 
-    // Register long-poll waiter
-    task.waiters = task.waiters || [];
-    task.waiters.push(res);
+    if (task) {
+      task.waiters = task.waiters || [];
+      task.waiters.push(res);
+      req.on("close", () => {
+        task.waiters = task.waiters.filter((w) => w !== res);
+      });
+      return;
+    }
+
+    // Disk-based task from another instance: poll disk until done
+    const diskPoll = setInterval(() => {
+      const current = readTaskFromDisk(taskId);
+      if (!current || current.done) {
+        clearInterval(diskPoll);
+        const err = current ? current.isError : true;
+        const out = current?.result?.text || (err ? "Task failed." : "Task completed.");
+        try {
+          res.writeHead(err ? 500 : 200, { "Content-Type": "text/markdown; charset=utf-8" });
+          res.end(out);
+        } catch {}
+      }
+    }, 2000);
+
     req.on("close", () => {
-      task.waiters = task.waiters.filter((w) => w !== res);
+      clearInterval(diskPoll);
     });
     return;
   }
@@ -413,7 +522,7 @@ const statusHttpServer = http.createServer((req, res) => {
   const getMatch = pathname.match(/^\/task\/([^/]+)$/);
   if (req.method === "GET" && getMatch) {
     const taskId = getMatch[1];
-    const task = tasks.get(taskId);
+    let task = tasks.get(taskId) || readTaskFromDisk(taskId);
     if (!task) {
       res.writeHead(404, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ found: false, id: taskId }));
@@ -445,35 +554,39 @@ const statusHttpServer = http.createServer((req, res) => {
   if ((req.method === "POST" || req.method === "DELETE") && cancelMatch) {
     const taskId = cancelMatch[1];
     const task = tasks.get(taskId);
-    if (!task) {
-      res.writeHead(404, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ cancelled: false, error: "Not found" }));
+    if (task) {
+      if (!task.done && task.child) {
+        killProcessTree(task.child);
+        task.status = "cancelled";
+        task.done = true;
+        task.isError = true;
+        task.result = { isError: true, text: `Task ${taskId} cancelled by request.` };
+        notifyWaiters(task);
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ cancelled: true, id: taskId }));
     }
-    if (!task.done && task.child) {
-      killProcessTree(task.child);
-      task.status = "cancelled";
-      task.done = true;
-      task.isError = true;
-      task.result = { isError: true, text: `Task ${taskId} cancelled by request.` };
-      notifyWaiters(task);
+    const diskTask = readTaskFromDisk(taskId);
+    if (diskTask) {
+      diskTask.status = "cancelled";
+      diskTask.done = true;
+      diskTask.isError = true;
+      diskTask.result = { isError: true, text: `Task ${taskId} cancelled.` };
+      saveTaskToDisk(diskTask);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ cancelled: true, id: taskId }));
     }
-    res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ cancelled: true, id: taskId }));
+    res.writeHead(404, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ cancelled: false, error: "Not found" }));
   }
 
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not found");
 });
 
-// True only for the first index.js process to bind STATUS_PORT. Each Claude
-// surface (Desktop/Code/Antigravity) spawns its own OS process running this
-// same server, so later instances run with their own in-memory task registry
-// but a status port they do not own (see NOTES.md, 2026-08-23).
 let statusServerOwned = true;
 statusHttpServer.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
-    // Another instance already binds status port; continue safely, but make
-    // sure wait_commands we hand out don't point at the other instance.
     statusServerOwned = false;
   } else {
     console.error("Status HTTP Server Error:", err);
@@ -510,6 +623,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
   };
 
   tasks.set(taskId, taskEntry);
+  saveTaskToDisk(taskEntry);
 
   const executionPromise = runQueued(async () => {
     try {
@@ -594,6 +708,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
       taskEntry.child = child;
 
       let lineBuf = "";
+      let lastSaveAt = Date.now();
       child.stdout.on("data", (chunk) => {
         lastActivityAt = Date.now();
         lineBuf += chunk.toString("utf8");
@@ -618,6 +733,10 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
               }
             } catch {}
           }
+        }
+        if (Date.now() - lastSaveAt > 2000) {
+          lastSaveAt = Date.now();
+          saveTaskToDisk(taskEntry);
         }
       });
 
@@ -814,25 +933,14 @@ server.registerTool(
       `- **Working Directory**: \`${workingDir}\``,
       `- **Time Elapsed**: 45s (Task continuing in background with 1-hour budget)`,
       ``,
+      `> [!TIP]`,
+      `> **Zero-Turn Reactive Wait**: Execute the following command via \`run_command\` (or background shell). It will sleep at $0 token cost and automatically wake you when Qwen completes:`,
+      `\`\`\`bash`,
+      `${waitCmd}`,
+      `\`\`\``,
+      ``,
+      `Or inspect status via tool: \`qwen_task(action: "status", task_id: "${taskId}")\`.`,
     ];
-    if (statusServerOwned) {
-      responseText.push(
-        `> [!TIP]`,
-        `> **Zero-Turn Reactive Wait**: Execute the following command via \`run_command\` (or background shell). It will sleep at $0 token cost and automatically wake you when Qwen completes:`,
-        `\`\`\`bash`,
-        `${waitCmd}`,
-        `\`\`\``,
-        ``,
-        `Or manage via tool: \`qwen_task(action: "status", task_id: "${taskId}")\`.`
-      );
-    } else {
-      responseText.push(
-        `> [!CAUTION]`,
-        `> The long-poll wait endpoint (127.0.0.1:${STATUS_PORT}) is currently owned by another MCP server instance, so a \`curl\` for this task ID would 404 there.`,
-        `> Instead, poll \`qwen_task(action: "status", task_id: "${taskId}")\` at intervals of **180+ seconds** (never tighter) until it reports done.`,
-        ``
-      );
-    }
 
     return {
       content: [{ type: "text", text: responseText.join("\n") }],
@@ -854,16 +962,29 @@ server.registerTool(
   },
   async ({ action, task_id }) => {
     if (action === "list") {
-      const list = Array.from(tasks.values()).map((t) => ({
-        id: t.id,
-        sessionId: t.sessionId,
-        status: t.status,
-        elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
-        done: t.done,
-        isError: t.isError,
-      }));
+      const merged = new Map();
+      for (const dt of listTasksFromDisk()) {
+        merged.set(dt.id, {
+          id: dt.id,
+          sessionId: dt.sessionId,
+          status: dt.status,
+          elapsed_s: Math.round(((dt.finishedAt || Date.now()) - dt.createdAt) / 1000),
+          done: dt.done,
+          isError: dt.isError,
+        });
+      }
+      for (const t of tasks.values()) {
+        merged.set(t.id, {
+          id: t.id,
+          sessionId: t.sessionId,
+          status: t.status,
+          elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
+          done: t.done,
+          isError: t.isError,
+        });
+      }
       return {
-        content: [{ type: "text", text: JSON.stringify({ tasks: list }, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify({ tasks: Array.from(merged.values()) }, null, 2) }],
       };
     }
 
@@ -874,10 +995,10 @@ server.registerTool(
       };
     }
 
-    const task = tasks.get(task_id);
+    let task = tasks.get(task_id) || readTaskFromDisk(task_id);
     if (!task) {
       return {
-        content: [{ type: "text", text: `Task \`${task_id}\` not found in memory (retention is 3 hours).` }],
+        content: [{ type: "text", text: `Task \`${task_id}\` not found in memory or disk (retention is 3 hours).` }],
         isError: true,
       };
     }
@@ -890,14 +1011,12 @@ server.registerTool(
         };
       }
       const elapsed_s = Math.round((Date.now() - task.createdAt) / 1000);
-      const hint = statusServerOwned
-        ? `\n\nWait command (blocks at $0 until done):\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``
-        : `\n\n(Zero-turn wait endpoint is owned by another MCP instance - re-poll this tool in 180+ seconds.)`;
+      const hint = `\n\nWait command (blocks at $0 until done):\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``;
       return {
         content: [
           {
             type: "text",
-            text: `Task \`${task_id}\` is actively EXECUTING (${elapsed_s}s elapsed, ${task.toolCallsCount} tool calls made).${hint}`,
+            text: `Task \`${task_id}\` is actively EXECUTING (${elapsed_s}s elapsed, ${task.toolCallsCount || 0} tool calls made).${hint}`,
           },
         ],
         isError: false,
@@ -905,15 +1024,27 @@ server.registerTool(
     }
 
     if (action === "cancel") {
-      if (!task.done && task.child) {
-        killProcessTree(task.child);
-        task.status = "cancelled";
-        task.done = true;
-        task.isError = true;
-        task.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
-        notifyWaiters(task);
+      const memTask = tasks.get(task_id);
+      if (memTask && !memTask.done && memTask.child) {
+        killProcessTree(memTask.child);
+        memTask.status = "cancelled";
+        memTask.done = true;
+        memTask.isError = true;
+        memTask.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
+        notifyWaiters(memTask);
         return {
           content: [{ type: "text", text: `Task \`${task_id}\` cancelled and process tree killed.` }],
+        };
+      }
+      const diskTask = readTaskFromDisk(task_id);
+      if (diskTask && !diskTask.done) {
+        diskTask.status = "cancelled";
+        diskTask.done = true;
+        diskTask.isError = true;
+        diskTask.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
+        saveTaskToDisk(diskTask);
+        return {
+          content: [{ type: "text", text: `Task \`${task_id}\` marked as cancelled.` }],
         };
       }
       return {
