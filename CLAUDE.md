@@ -51,6 +51,9 @@ You are paired with a local **Qwen3.8-27B** model (vLLM + DFlash2 + KVarN @ `htt
 9. **Zero Manual Probing Invariant**:
    - Never execute manual health checks, network probes (e.g. `curl http://localhost:18020/v1/models` or `curl 18021`), or scratch node scripts to test MCP connectivity prior to dispatching.
    - The MCP infrastructure manages its own lifecycle automatically. Dispatch directly to `qwen_coworker` on Turn 1 without preliminary connectivity probing.
+10. **No Direct Goose Shell Invocations**:
+    - Never invoke the `goose` CLI binary directly via shell (`run_command` / `bash`).
+    - All coworker interactions **MUST** go exclusively through the `qwen_coworker` MCP tool, which manages `--output-format jsonl` stdio streaming, timeout budgets, process isolation, and disk persistence.
 
 ---
 
