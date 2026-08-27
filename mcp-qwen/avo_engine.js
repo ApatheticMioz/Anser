@@ -83,54 +83,103 @@ export class AvoLineageEngine {
   }
 
   /**
+   * Async alias of getLineageBrief() for callers that use "context" naming
+   * (e.g. mcp-qwen/index.js injects this into the task prompt).
+   * MUST be awaited before string interpolation (it is async).
+   */
+  async getLineageContext() {
+    return this.getLineageBrief();
+  }
+
+  /**
+   * Extracts the last numeric value for the named metric from raw benchmark
+   * output (case-insensitive match of the metric name per line, last number
+   * on that line wins). Returns null when absent or unparseable.
+   */
+  extractMetric(output, name) {
+    if (!output || !name) return null;
+    let value = null;
+    for (const line of String(output).split(/\r?\n/)) {
+      if (!line.toLowerCase().includes(String(name).toLowerCase())) continue;
+      const nums = line.match(/-?\d+(?:\.\d+)?/g);
+      if (nums && nums.length > 0) value = Number(nums[nums.length - 1]);
+    }
+    return value === null || Number.isNaN(value) ? null : value;
+  }
+
+  /**
    * Records a candidate result, managing deterministic Git checkpointing and rollbacks.
    */
-  async recordCandidate({ hypothesis, testCommand, metricScore, targetMetricName, higherIsBetter = true, stdout, stderr, exitCode }) {
+  async recordCandidate({
+    hypothesis,
+    testCommand,
+    metricScore,
+    metricValue,
+    targetMetricName,
+    metricName,
+    higherIsBetter = true,
+    stdout,
+    stderr,
+    testStderr,
+    exitCode,
+    filesModified,
+    status: callerStatus,
+  } = {}) {
     await this.init();
+    // Accept both this engine's native keys and the MCP server's caller keys.
+    const metric = metricScore ?? metricValue ?? null;
+    const errText = stderr ?? testStderr ?? "";
+    const passed =
+      exitCode !== undefined ? exitCode === 0 : callerStatus !== "FAILED";
     const candidateId = `cand_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     const parentCommit = this.state.bestCommit;
     const currentCommit = await this.getCurrentCommit();
 
-    this.state.targetMetricName = targetMetricName || this.state.targetMetricName;
+    this.state.targetMetricName =
+      targetMetricName ?? metricName ?? this.state.targetMetricName;
     this.state.higherIsBetter = higherIsBetter;
 
-    const passed = exitCode === 0;
     let isImprovement = false;
 
-    if (passed && metricScore !== null && metricScore !== undefined) {
+    if (passed && metric !== null && metric !== undefined) {
       if (this.state.bestMetric === null) {
         isImprovement = true;
-      } else if (higherIsBetter && metricScore > this.state.bestMetric) {
+      } else if (higherIsBetter && metric > this.state.bestMetric) {
         isImprovement = true;
-      } else if (!higherIsBetter && metricScore < this.state.bestMetric) {
+      } else if (!higherIsBetter && metric < this.state.bestMetric) {
         isImprovement = true;
       }
     }
 
-    const status = isImprovement ? "ACCEPTED" : passed ? "NEUTRAL_OR_REGRESSED" : "FAILED";
+    const status = isImprovement
+      ? "ACCEPTED"
+      : passed
+        ? "NEUTRAL_OR_REGRESSED"
+        : "FAILED";
 
     const candidateNode = {
       candidateId,
       parentCommit,
       commitSha: currentCommit,
       hypothesis,
-      testCommand,
-      metricScore: metricScore ?? null,
+      testCommand: testCommand ?? "",
+      filesModified: filesModified ?? null,
+      metricScore: metric ?? null,
       status,
       timestamp: new Date().toISOString(),
-      errorLog: !passed ? (stderr || stdout || "").slice(-800) : null,
+      errorLog: !passed ? (errText || stdout || "").slice(-800) : null,
     };
 
     this.state.candidates.push(candidateNode);
 
     if (isImprovement) {
       this.state.bestCommit = currentCommit;
-      this.state.bestMetric = metricScore;
+      this.state.bestMetric = metric;
       await this.save();
       return {
         status: "ACCEPTED",
         candidateId,
-        message: `Candidate ${candidateId} improved metric to ${metricScore} (new active baseline).`,
+        message: `Candidate ${candidateId} improved metric to ${metric} (new active baseline).`,
       };
     } else {
       await this.save();

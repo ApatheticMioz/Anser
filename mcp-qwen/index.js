@@ -137,7 +137,7 @@ function runWslCommand(cmd) {
   }
 }
 
-async function currentMode() {
+async function serverInfo() {
   try {
     const key = getApiKeySync();
     const res = await fetch(`${BASE_URL}/models`, {
@@ -147,10 +147,21 @@ async function currentMode() {
     if (!res.ok) return null;
     const j = await res.json();
     const len = j?.data?.[0]?.max_model_len;
-    return len ? "huge" : "unknown";
+    return { maxModelLen: len ?? 0 };
   } catch {
     return null;
   }
+}
+
+// Truthy = server is up. "huge" only when the advertised max_model_len is
+// actually in the 245K class (catches a manually-started fast/57K server
+// instead of misreporting it as the universal config).
+async function currentMode() {
+  const info = await serverInfo();
+  if (!info) return null;
+  if (info.maxModelLen >= 200_000) return "huge";
+  if (info.maxModelLen > 0) return "fast";
+  return "unknown";
 }
 
 async function ensureServerRunning() {
@@ -454,9 +465,16 @@ const statusHttpServer = http.createServer((req, res) => {
   res.end("Not found");
 });
 
+// True only for the first index.js process to bind STATUS_PORT. Each Claude
+// surface (Desktop/Code/Antigravity) spawns its own OS process running this
+// same server, so later instances run with their own in-memory task registry
+// but a status port they do not own (see NOTES.md, 2026-08-23).
+let statusServerOwned = true;
 statusHttpServer.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
-    // Another instance already binds status port; continue safely
+    // Another instance already binds status port; continue safely, but make
+    // sure wait_commands we hand out don't point at the other instance.
+    statusServerOwned = false;
   } else {
     console.error("Status HTTP Server Error:", err);
   }
@@ -512,7 +530,9 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     if (testCommand) {
       try {
         lineageEngine = new AvoLineageEngine(cwd);
-        avoContext = lineageEngine.getLineageContext();
+        // Async (reads/creates .avo/lineage.json) - must be awaited before
+        // the value is interpolated into the prompt.
+        avoContext = await lineageEngine.getLineageContext();
       } catch {}
     }
 
@@ -524,9 +544,13 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
       finalTaskPrompt += `=== Current Hypothesis ===\n${hypothesis}\n\n`;
     }
     finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
+    finalTaskPrompt += `=== Operational & Tooling Directives ===\n`;
+    finalTaskPrompt += `- Prefer native Goose tools (\`read\`, \`edit\`, \`write\`, \`patch\`, \`tree\`) over shell subprocesses for inspecting and modifying files for maximum efficiency.\n`;
     if (IS_WINDOWS) {
-      finalTaskPrompt += `If a shell command fails with "'Get-Content'/'Select-String' is not recognized", you're in cmd.exe - use powershell -NoProfile -Command "..." or type and findstr.\n`;
+      finalTaskPrompt += `- Windows Line Endings: Workspace files may use CRLF (\\r\\n). If \`edit\` or string replacement encounters matching issues, inspect exact line endings with \`read\` or write the normalized file.\n`;
+      finalTaskPrompt += `- Shell execution: If executing PowerShell commands via shell, use \`powershell -NoProfile -Command "..."\` or native utilities directly.\n`;
     }
+
 
     return new Promise(async (resolve) => {
       let lastActivityAt = Date.now();
@@ -561,6 +585,10 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           GOOSE_WORKING_DIR: cwd,
         },
         stdio: ["ignore", "pipe", "pipe"],
+        // POSIX: give the child its own process group so killProcessTree can
+        // signal the whole tree via -pid. (Windows uses taskkill /T /F
+        // instead, so detached is left off there to keep console behavior.)
+        detached: !IS_WINDOWS,
       });
 
       taskEntry.child = child;
@@ -619,24 +647,37 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
               ? { bin: "powershell.exe", args: ["-NoProfile", "-Command", testCommand] }
               : { bin: "bash", args: ["-c", testCommand] };
 
-            const { stdout: testOut, stderr: testErr } = await execFileAsync(
-              shellCmd.bin,
-              shellCmd.args,
-              { cwd, timeout: 300_000 }
-            ).catch((err) => ({ stdout: err.stdout ?? "", stderr: err.stderr ?? err.message }));
+            let testOut = "";
+            let testErr = "";
+            let testExitCode = 0;
+            try {
+              const r = await execFileAsync(shellCmd.bin, shellCmd.args, {
+                cwd,
+                timeout: 300_000,
+              });
+              testOut = r.stdout ?? "";
+              testErr = r.stderr ?? "";
+            } catch (err) {
+              // execFile sets .code to the numeric exit code on non-zero
+              // exits (or "ETIMEDOUT" for a killed timeout).
+              testExitCode = typeof err.code === "number" ? err.code : 1;
+              testOut = err.stdout ?? "";
+              testErr = err.stderr ?? err.message;
+            }
 
             const metricVal = metricName ? lineageEngine.extractMetric(testOut, metricName) : null;
-            const status = metricVal !== null || !summary.isError ? "IMPROVED" : "FAILED";
-            lineageEngine.recordCandidate({
+            const rec = await lineageEngine.recordCandidate({
               hypothesis: hypothesis ?? prompt,
+              testCommand,
               filesModified: summary.fileOps,
-              metricName: metricName ?? "test_execution",
-              metricValue: metricVal,
+              metricScore: metricVal,
+              targetMetricName: metricName ?? "test_execution",
               higherIsBetter: higherIsBetter ?? true,
-              status,
-              testStderr: testErr || testOut,
+              stdout: testOut,
+              stderr: testErr,
+              exitCode: testExitCode,
             });
-            summary.text += `\n\n=== NVIDIA AVO Verification ===\nTest Command: \`${testCommand}\`\nStatus: ${status}\nMetric: ${metricVal ?? "Executed"}`;
+            summary.text += `\n\n=== NVIDIA AVO Verification ===\nTest Command: \`${testCommand}\`\nCandidate: ${rec.candidateId}\nStatus: ${rec.status}\nMetric: ${metricVal ?? "Executed"}\n${rec.message}`;
           } catch (e) {
             summary.text += `\n\n=== NVIDIA AVO Error ===\nFailed to run test command: ${e.message}`;
           }
@@ -773,17 +814,28 @@ server.registerTool(
       `- **Working Directory**: \`${workingDir}\``,
       `- **Time Elapsed**: 45s (Task continuing in background with 1-hour budget)`,
       ``,
-      `> [!TIP]`,
-      `> **Zero-Turn Reactive Wait**: Execute the following command via \`run_command\` (or background shell). It will sleep at $0 token cost and automatically wake you when Qwen completes:`,
-      `\`\`\`bash`,
-      `${waitCmd}`,
-      `\`\`\``,
-      ``,
-      `Or manage via tool: \`qwen_task(action: "status", task_id: "${taskId}")\`.`,
-    ].join("\n");
+    ];
+    if (statusServerOwned) {
+      responseText.push(
+        `> [!TIP]`,
+        `> **Zero-Turn Reactive Wait**: Execute the following command via \`run_command\` (or background shell). It will sleep at $0 token cost and automatically wake you when Qwen completes:`,
+        `\`\`\`bash`,
+        `${waitCmd}`,
+        `\`\`\``,
+        ``,
+        `Or manage via tool: \`qwen_task(action: "status", task_id: "${taskId}")\`.`
+      );
+    } else {
+      responseText.push(
+        `> [!CAUTION]`,
+        `> The long-poll wait endpoint (127.0.0.1:${STATUS_PORT}) is currently owned by another MCP server instance, so a \`curl\` for this task ID would 404 there.`,
+        `> Instead, poll \`qwen_task(action: "status", task_id: "${taskId}")\` at intervals of **180+ seconds** (never tighter) until it reports done.`,
+        ``
+      );
+    }
 
     return {
-      content: [{ type: "text", text: responseText }],
+      content: [{ type: "text", text: responseText.join("\n") }],
       isError: false,
     };
   }
@@ -838,11 +890,14 @@ server.registerTool(
         };
       }
       const elapsed_s = Math.round((Date.now() - task.createdAt) / 1000);
+      const hint = statusServerOwned
+        ? `\n\nWait command (blocks at $0 until done):\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``
+        : `\n\n(Zero-turn wait endpoint is owned by another MCP instance - re-poll this tool in 180+ seconds.)`;
       return {
         content: [
           {
             type: "text",
-            text: `Task \`${task_id}\` is actively EXECUTING (${elapsed_s}s elapsed, ${task.toolCallsCount} tool calls made).\n\nWait command:\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``,
+            text: `Task \`${task_id}\` is actively EXECUTING (${elapsed_s}s elapsed, ${task.toolCallsCount} tool calls made).${hint}`,
           },
         ],
         isError: false,
@@ -880,18 +935,21 @@ server.registerTool(
   },
   async ({ action }) => {
     if (action === "status") {
-      const mode = await currentMode();
+      const info = await serverInfo();
+      const running = !!info;
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
               {
-                status: mode ? "running" : "stopped",
+                status: running ? "running" : "stopped",
                 endpoint: BASE_URL,
-                context_window: MAX_LEN_HUGE,
+                max_model_len: running ? info.maxModelLen : null,
+                context_window_nominal: MAX_LEN_HUGE,
                 stack: "vLLM + DFlash2 + KVarN (Universal 245K)",
                 status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
+                status_endpoint_owned_by_this_instance: statusServerOwned,
               },
               null,
               2

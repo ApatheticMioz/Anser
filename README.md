@@ -12,19 +12,30 @@ automatically.
 
 ```
 D:\LLM_Ecosystem\
-├── CLAUDE.md              agent rules: serving mechanics, known limits, gotchas
+├── CLAUDE.md              agent rules: hierarchical NVIDIA AVO & multi-agent
+│                             protocol (Aug 2026 SOTA - roles, execution contracts,
+│                             tool suite, single source of truth)
 ├── README.md               this file
 ├── scripts\                 Windows-side launchers, one subfolder per model
 │   │                         (reorganized 2026-08-24: grouped by model so
 │   │                         alphabetical sort clusters related files instead
 │   │                         of interleaving start/stop/status across models)
-│   ├── status.bat             unified - checks BOTH models below (they share
-│   │                           port 18020; only one is ever up at a time)
+│   ├── avo_runner.py          NVIDIA AVO loop driver: one round per invocation -
+│   │                           reads .avo/lineage.json, asks the local model for
+│   │                           the next hypothesis, emits a qwen_coworker dispatch
+│   │                           packet under .avo/avq/
 │   ├── main\                  the delegation model (MCP/Goose-wired)
 │   │   ├── start.bat            default entry point -> start_huge.bat
 │   │   ├── start_huge.bat        CTX=huge, 245,760 ctx, ~77-133 tok/s
 │   │   ├── start_fast.bat        CTX=fast, 57,344 ctx, ~107-130 tok/s (rare)
 │   │   └── stop.bat
+│   ├── status.bat             unified - checks BOTH models below (they share
+│   │                           port 18020; only one is ever up at a time)
+│   ├── wsl\                   the same launchers as WSL bash scripts - the .bat
+│   │                           files just call them via wsl -d Ubuntu;
+│   │                           setup_links.sh symlinks them into
+│   │                           ~/qwen-serving/launchers (wait_ready/run_qb/
+│   │                           wait_qb are home-level helpers)
 │   └── uncensored\            manual/academic-use only, NOT MCP-wired
 │       ├── download_model.sh    one-time GGUF fetch into WSL (already run)
 │       ├── start.bat            reasoning on
@@ -34,9 +45,16 @@ D:\LLM_Ecosystem\
 │                             scripts\uncensored\ - vLLM can't load that
 │                             model's GGUF architecture, see CLAUDE.md)
 ├── mcp-qwen\                the MCP server (Node.js) exposing the main model to any MCP client
-│   ├── index.js               server implementation (ask_qwen, delegate_coding_task, ...)
-│   ├── NOTES.md                full investigation history / rationale for every decision
+│   ├── index.js               3 consolidated SOTA tools: qwen_coworker (agent
+│   │                           + AVO fields), qwen_task (status/cancel/list),
+│   │                           qwen_server (lifecycle); zero-turn long-poll
+│   │                           wait HTTP endpoint @ localhost:18021
+│   ├── avo_engine.js          AVO lineage engine (git-grounded candidate records
+│   │                           in <cwd>/.avo/lineage.json)
+│   ├── NOTES.md               full investigation history / rationale for every decision
 │   ├── mcp_client_test.js
+│   ├── update_schemas.py      regenerates the per-tool JSON schemas into the
+│   │                           Antigravity IDE MCP directory
 │   └── package.json
 ├── benchmarks\
 │   └── swe-rebench\           Goose+Qwen validated against a contamination-resistant
@@ -71,26 +89,38 @@ the Sonnet→Goose→Qwen delegation path described below.
 ```
 User <-> Claude Sonnet 5 (Claude Code / Antigravity, orchestrator)
              |
-             | MCP: ask_qwen / delegate_coding_task (mcp-qwen/index.js, stdio)
+             | MCP (stdio): qwen_coworker / qwen_task / qwen_server
+             |   (mcp-qwen/index.js) - tasks under 45s return the deliverable in
+             |   Turn 1; longer tasks yield a taskId + wait_command (long-poll on
+             |   the MCP server's own HTTP endpoint, localhost:18021) which
+             |   blocks at $0 token cost and wakes the caller on completion
              v
-        Goose (block/goose, Rust binary) — spawned as a subprocess per call,
-        real agentic loop: file/edit/shell tools + any attached MCP server
+        Goose (block/goose, Rust binary) - spawned as a subprocess per call
+        (persistent named sessions with disk-grounded --resume), real agentic
+        loop: file/edit/shell tools + any attached MCP server
         (free-search-mcp, context7, gh CLI, ...)
              |
              | OpenAI-compatible /v1/chat/completions
              v
-        vLLM server (WSL Ubuntu, port 18020) — Qwen3.8-27B, DFlash2 speculative
-        decoding, KVarN 4/2-bit KV cache, prefix caching
+        vLLM server (WSL Ubuntu, port 18020) - Qwen3.8-27B, Universal 245K
+        context (DFlash2 speculative decoding, KVarN 4/2-bit KV cache,
+        prefix caching - persistent sessions reuse the cached KV)
              |
              v
         RTX 3090, 24 GB, 250 W power limit
 ```
 
-Sonnet decomposes work into single-file/bounded tasks, dispatches them to Qwen
-via Goose, and verifies the result against disk itself (Qwen never self-runs
-build/typecheck/test — see CLAUDE.md's "Known limits"). This keeps Sonnet's own
-token usage (the metered $20/mo resource) to planning, judgment, and
-verification, while Goose+Qwen (free, local, uncapped) does the mechanical work.
+Sonnet decomposes work into bounded tasks and dispatches them to Qwen via
+`qwen_coworker`; the MCP server enforces the execution contract (45s sync
+race, 1-hour budget with a 10-minute stream-inactivity watchdog,
+disk-grounded session resume for prefix-cache reuse), and the lead verifies
+results against disk itself. Qwen is instructed not to self-run
+build/typecheck/test; in AVO-style optimization loops the verification test
+instead runs in the MCP server's own process after the Goose run, with the
+outcome recorded in the git-grounded lineage by `avo_engine.js`. This keeps
+Sonnet's own token usage (the metered $20/mo resource) to planning,
+judgment, and verification, while Goose+Qwen (free, local, uncapped) does
+the mechanical work.
 
 ## The model, quantization, and every script that built it
 

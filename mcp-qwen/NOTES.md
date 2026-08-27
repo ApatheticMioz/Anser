@@ -715,4 +715,84 @@ An architectural audit of session traces (`8233615f-6a9b-4b4b-b4b0-649b77f6dc36`
    - **Fix**: Added explicit Mandatory Invariant across all master documents:
      - **Turn Conservation**: Highly prefer waiting on reactive system notifications. Polling intervals of **180+ seconds** are the minimum **IF AND ONLY IF NECESSARY**.
 
+## v4.0.0 -> v4.1.0: Zero-Turn Long-Poll Wait, 3-Tool Consolidation, 1-Hour Budget (2026-08-26/27)
+
+Closes the history gap left by the v3.5.0 -> v4.0.0 -> v4.1.0 commits
+(`8c1648f`, `78afe41`, `2276965`, plus the 2026-08-27 audit pass), which
+postdate the last entry above.
+
+**Tool surface consolidated to 3.** The five-tool surface (ask_qwen /
+ask_qwen_fast / delegate_coding_task / qwen_check_task / qwen_cancel_task)
+collapsed into: `qwen_coworker` (the delegate path, plus session_id/cwd/
+extensions and the AVO fields), `qwen_task` (status/cancel/list over one
+in-memory task registry), `qwen_server` (vLLM lifecycle). Rationale: the
+2026-08-23 post-mortems showed the caller drifting between overlapping
+async-semantics tools mid-session; three tools with mutually exclusive jobs
+don't. `update_schemas.py` regenerates the Antigravity-side JSON schemas
+from the same definitions, and package.json now tracks the server version
+(4.1.0).
+
+**RACE_MS 50s -> 45s.** 50s was "under Claude Desktop's 60s" with a 10s
+margin; 45s widens that to 15s on Desktop while staying far under
+Antigravity's 180s, so one constant is now documented as safe for both
+surfaces (index.js header).
+
+**Zero-turn long-poll wait endpoint (the big one).** The 2026-08-23
+read-only GET /task/<id> endpoint grew into the full zero-turn design:
+GET /task/<id>/wait now holds the HTTP connection open until the task
+finishes and streams the final summary as the response body - the caller's
+`curl` (or `run_command`) simply sleeps at $0 token cost and wakes with the
+answer, no LLM turns in between. This is what makes the 45s race actually
+useful: the client gets a `taskId` + `wait_command` before its own deadline,
+the long-poll carries it past the 1-hour budget, and completion is pushed,
+not polled. Added: GET /tasks (all active), POST /task/<id>/cancel
+(process-tree kill, same path as the watchdog), 3h retention. The
+multi-instance caveat (one 18021 owner per set of Claude surfaces, noted in
+the 2026-08-23 entry) is now handled instead of assumed: non-owning
+instances set `statusServerOwned=false`, and their 45s-yield/status messages
+tell the caller to poll qwen_task at 180s+ instead of handing out a curl
+that would 404 against the other instance.
+
+**400s fixed budget -> 1-hour budget + 10-minute inactivity watchdog.**
+DEFAULT_TIMEOUT_MS 400s -> 3,600,000ms and the kill logic split into two
+axes: a hard 1-hour total budget (AVO evolution loops and deep-research
+runs legitimately need it) plus a 10-minute zero-stream-chunk inactivity
+timeout as the real liveness guard (kill on silence, not on age). The old
+flat 400s was the wrong axis - it killed healthy long tasks while letting
+genuinely stuck ones burn the whole thing (the verify:true post-mortems).
+The extensions bonus (+10min) and the per-task total are still threaded
+through every status message.
+
+**AVO lineage engine (avo_engine.js) + AVO fields on qwen_coworker.**
+`hypothesis`/`test_command`/`metric_name`/`higher_is_better` drive
+AvoLineageEngine: after the Goose run, the MCP server itself executes the
+test command (powershell/bash, 5min cap), extracts the named metric from the
+output, and records an immutable candidate in <cwd>/.avo/lineage.json with
+git commit provenance (improvements move bestCommit; regressions stay in the
+record for inspection - no auto-rollback, per the 2026-08-25 "no destructive
+hard resets" decision). scripts/avo_runner.py is the standalone driver: one
+round per invocation - reads the lineage, asks the local model (direct
+/v1/chat/completions call) for the next hypothesis, writes a dispatch packet
+to .avo/avq/ and prints the exact qwen_coworker call. It never writes
+lineage.json itself - the engine owns that file.
+
+**2026-08-27 audit (this pass).** The first cut of the AVO wiring (committed
+in `2276965`) had a contract mismatch: index.js called `getLineageContext()`
+/ `extractMetric()` which didn't exist on the engine (silently swallowed ->
+AVO context never injected, candidates never recorded), and called
+`recordCandidate` with the wrong keys and no `await` (would have recorded
+garbage-FAILED entries). Fixed: the engine now provides `getLineageContext()`
+(async alias of getLineageBrief) and `extractMetric()`, and `recordCandidate`
+accepts both its native keys and the MCP server's caller keys; index.js
+awaits both calls and captures the real test exit code. Also: POSIX spawn is
+now `detached` so the process-group kill (-pid) in killProcessTree actually
+works (Windows still uses taskkill /T /F); qwen_server status now reports the
+server's actual advertised max_model_len instead of a hardcoded 245,760
+(and distinguishes huge vs fast). The previously-uncommitted "Operational &
+Tooling Directives" prompt block in index.js (prefer native read/edit/
+write/patch/tree over shell; CRLF line-ending guidance for Windows
+workspaces; powershell -NoProfile invocation guidance) was audited and kept
+- it replaces the single-line shell-mismatch counter-instruction from the
+2026-08-23 session-1 entry with a structured set of directives.
+
 
