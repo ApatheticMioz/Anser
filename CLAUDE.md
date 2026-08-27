@@ -38,13 +38,18 @@ You are paired with a local **Qwen3.8-27B** model (vLLM + DFlash2 + KVarN @ `htt
      - **NEVER fire an unprompted, duplicate `qwen_coworker` task on status inquiries**.
 4. **Honest Attribution Invariant**:
    - Never use "We" or claim coworker collaboration unless a `qwen_coworker` MCP call was genuinely dispatched and its completed output incorporated.
-5. **Directed Milestone Co-Design (The Persistent Session Pattern)**:
-   - Avoid open-ended monolithic monster prompts across multiple disjoint scopes that trigger 35-step unguided loops.
-   - Structure complex workflows into **directed milestone turns** within a persistent named session (`session_id: "..."`):
-     - **Turn 1 (Fact Ingestion & AST Extraction)**: Qwen maps the target files/tests at $0 and primes the 100k+ context into GPU VRAM.
-     - **Supervisor Alignment**: Lead Architect reviews concise extraction, aligns intent, and specifies exact target mutation.
-     - **Turn 2 (Directed Mutation / Patch)**: Dispatched to the *same* `session_id`. Hits 100% vLLM prefix cache (~3,000+ tok/s prefill), starts decoding in <0.5s at full ~130 tok/s, completing in 15–30s.
-     - **Turn 3 (Verification & Conventional Git Commit)**: Dispatched to the *same* `session_id` to run verification tests and commit.
+5. **Milestone-Scoped Session Architecture (Within vs. Between Lifecycle)**:
+   - **Within a Milestone (Stateful Continuity, 1–15 Turns)**:
+     - Prompt the **same named session** (`session_id: "<workspace>_<milestone>"`).
+     - Benefits: 100% vLLM prefix cache hit (~8,000–9,000 tok/s prefill, <0.5s wakeup), continuous episodic memory of compiler outputs, and uninterrupted pair programming at $0.
+   - **Between Milestones (Clean Context Reset)**:
+     - Once a feature milestone is verified, committed, and pushed to git (e.g. `feat(auth): ...`), step up to a **new milestone session ID** for the next objective (e.g. `session_id: "profile_resume_v8"` $\to$ `session_id: "profile_ats_benchmark"`).
+     - Benefits: Discards 100k+ tokens of dead terminal stdout from the prior milestone, returning the active context back to the **~15k–30k sweet spot** for maximum single-stream decode throughput (~120–133 tok/s).
+   - **Directed Milestone Turn Pattern**:
+     - **Turn 1 (Fact Ingestion & AST Extraction)**: Qwen maps target files/tests at $0 and primes the context into GPU VRAM.
+     - **Supervisor Alignment**: Lead Architect reviews extraction and confirms exact patch specification.
+     - **Turn 2 (Directed Mutation / Patch)**: Dispatched to the *same* `session_id` (hits 100% prefix cache, completes in 15–30s).
+     - **Turn 3 (Verification & Atomic Git Commit)**: Dispatched to the *same* `session_id` to verify builds and commit.
 6. **Universal Milestone Review Invariant**:
    > [!IMPORTANT]
    > A local `$0` review/audit call via `qwen_coworker` is **MANDATORY** after every major or minor milestone across **ANY domain** before presenting deliverables to the user.
