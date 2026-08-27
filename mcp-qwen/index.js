@@ -190,14 +190,19 @@ async function stopServer() {
   return { stopped: true };
 }
 
-const MAX_CONCURRENT_GOOSE = 8;
+const MAX_CONCURRENT_GOOSE = 1;
 let activeGooseCount = 0;
 const gooseWaitQueue = [];
 
-function runQueued(fn) {
+function runQueued(fn, taskEntry) {
   return new Promise((resolve, reject) => {
     const attempt = () => {
       activeGooseCount++;
+      if (taskEntry && !taskEntry.done) {
+        taskEntry.status = "executing";
+        taskEntry.startedAt = Date.now();
+        saveTaskToDisk(taskEntry);
+      }
       fn().then(
         (r) => {
           activeGooseCount--;
@@ -211,8 +216,11 @@ function runQueued(fn) {
         }
       );
     };
-    if (activeGooseCount < MAX_CONCURRENT_GOOSE) attempt();
-    else gooseWaitQueue.push(attempt);
+    if (activeGooseCount < MAX_CONCURRENT_GOOSE) {
+      attempt();
+    } else {
+      gooseWaitQueue.push(attempt);
+    }
   });
 }
 
@@ -603,15 +611,16 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
   const taskId = `task_${sessionId}_${Date.now()}`;
   const totalTimeoutMs = (timeoutMs ?? DEFAULT_TIMEOUT_MS) + (extensions && extensions.length ? EXTENSION_BONUS_TIMEOUT_MS : 0);
 
+  const isQueued = activeGooseCount >= MAX_CONCURRENT_GOOSE;
   const taskEntry = {
     id: taskId,
     sessionId,
     cwd,
     prompt,
     createdAt: Date.now(),
-    startedAt: Date.now(),
+    startedAt: isQueued ? null : Date.now(),
     finishedAt: null,
-    status: "executing",
+    status: isQueued ? "queued" : "executing",
     done: false,
     isError: false,
     child: null,
@@ -856,7 +865,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         resolve(result);
       });
     });
-  });
+  }, taskEntry);
 
   return { taskId, taskEntry, executionPromise };
 }
@@ -1012,6 +1021,17 @@ server.registerTool(
       }
       const elapsed_s = Math.round((Date.now() - task.createdAt) / 1000);
       const hint = `\n\nWait command (blocks at $0 until done):\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``;
+      if (task.status === "queued") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Task \`${task_id}\` is QUEUED in FIFO task pipeline (${elapsed_s}s elapsed waiting for prior task).${hint}`,
+            },
+          ],
+          isError: false,
+        };
+      }
       return {
         content: [
           {

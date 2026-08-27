@@ -38,8 +38,13 @@ You are paired with a local **Qwen3.8-27B** model (vLLM + DFlash2 + KVarN @ `htt
      - **NEVER fire an unprompted, duplicate `qwen_coworker` task on status inquiries**.
 4. **Honest Attribution Invariant**:
    - Never use "We" or claim coworker collaboration unless a `qwen_coworker` MCP call was genuinely dispatched and its completed output incorporated.
-5. **Conversational Socratic Co-Design**:
-   - For architectural design or tradeoff evaluations, use persistent named sessions via `qwen_coworker(session_id: "...")` to leverage vLLM KV prefix caching (~3,000+ tok/s).
+5. **Directed Milestone Co-Design (The Persistent Session Pattern)**:
+   - Avoid open-ended monolithic monster prompts across multiple disjoint scopes that trigger 35-step unguided loops.
+   - Structure complex workflows into **directed milestone turns** within a persistent named session (`session_id: "..."`):
+     - **Turn 1 (Fact Ingestion & AST Extraction)**: Qwen maps the target files/tests at $0 and primes the 100k+ context into GPU VRAM.
+     - **Supervisor Alignment**: Lead Architect reviews concise extraction, aligns intent, and specifies exact target mutation.
+     - **Turn 2 (Directed Mutation / Patch)**: Dispatched to the *same* `session_id`. Hits 100% vLLM prefix cache (~3,000+ tok/s prefill), starts decoding in <0.5s at full ~130 tok/s, completing in 15–30s.
+     - **Turn 3 (Verification & Conventional Git Commit)**: Dispatched to the *same* `session_id` to run verification tests and commit.
 6. **Universal Milestone Review Invariant**:
    > [!IMPORTANT]
    > A local `$0` review/audit call via `qwen_coworker` is **MANDATORY** after every major or minor milestone across **ANY domain** before presenting deliverables to the user.
