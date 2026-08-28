@@ -903,3 +903,37 @@ instance shares:
   fair and — with the default of 1 — ordering is all but irrelevant. Not built.
 
 
+
+## 2026-08-29: Recurring engine wedge root-caused to the KVarN packed-KV build path
+
+Four wedges in ~36h (two with `VLLM_DFLASH2_CHAIN=0`, falsifying CHAIN as the sole
+suspect), each minutes after boot and always mid-delegation (large-prompt tasks).
+A live py-spy capture of the wedged EngineCore (see
+`diagnostics/2026-08-29_kvarn_pyspy_dump.txt`) shows the core loop's MainThread
+spinning at ~100% CPU inside a single `execute_model` step:
+
+    _cached_multiquery_path  kvarn_attn.py:2496   (total_k = int(cu_k[-1].item()))
+    forward                  kvarn_attn.py:2171
+
+`.item()` is a GPU sync: the host waits forever on `_kvarn_build_packed_kv_kernel`
+(`triton_kvarn_decode.py`), which never retires - GPU pegged at 100%. Because the
+engine core is single-stepped, every other request starves (the observed
+"accepted-never-scheduled / stats-silent" signature; a lighter flavor shows empty
+queues + ~12% GPU).
+
+Trigger localization: `_cached_multiquery_path` is only reached for multi-query
+batches with `max_query_len > KVARN_FUSED_VERIFY_MAXQ (8)` - i.e. **chunked-prefill
+continuations of large prompts** (max-num-batched-tokens 2048). Small smoke-test
+requests use pre-warmed fused/decode shapes and never wedge; delegated repo-reading
+(10k+ token prefills) hits it within minutes. The jit_monitor warnings
+(`_prepare_dflash_inputs_kernel`, `_kvarn_build_packed_kv_kernel` JIT during
+inference) logged right before one wedge are a plausible co-factor (shape-triggered
+compile in-stream), not the hang itself.
+
+Interim mitigation (in place): the v4.5.0 canary-completion gate + auto-heal
+detects the stall end-to-end in <=30s and reboots the engine; the in-flight task
+dies with a clear watchdog message and can be re-dispatched. Real fix is upstream
+(KVarN Triton kernel / fork): candidate mechanism is a corrupt or unbounded
+`max_blocks`/grid for some long-context continuation shape. Upstream issue draft
+pending; evidence bundle: this entry + the dump + config (kvarn_k4v2_g128,
+dflash2 num_spec_tokens=7, async-scheduling, MAX_SEQS=8, chunked prefill 2048).
