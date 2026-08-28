@@ -6,10 +6,10 @@ approved.
 Runs on the WINDOWS side (not WSL) - Goose here is goose.exe
 (C:\\Users\\Apath\\.local\\bin\\goose.exe), a Windows binary, matching how
 mcp-qwen/index.js drives it. Repos are cloned to a Windows scratch directory
-and Goose talks to vLLM over http://localhost:18020, same env-var pattern
-index.js uses for delegate_coding_task (kept in sync with it - see
-GOOSE_ENV_TEMPLATE below; if index.js's env vars ever change, mirror the
-change here too).
+and Goose talks to vLLM over http://localhost:18020, same env-var contract
+as mcp-qwen/index.js's goose spawn (GOOSE_PROVIDER/GOOSE_MODEL/
+OPENAI_BASE_URL/OPENAI_API_KEY - kept in sync with index.js; if its env
+contract ever changes, mirror the change in goose_env() below).
 
 For each task: clone the repo at base_commit, run Goose (--no-session, one
 fresh process per task, no cross-task memory) with only problem_statement as
@@ -41,25 +41,20 @@ MODEL_NAME_OR_PATH = "qwen3.8-27b-goose-huge"  # CTX=huge/DFlash2/KVarN - this r
 VLLM_PORT = 18020
 
 
-def get_api_key():
-    # Mirrors mcp-qwen/index.js's getApiKey(): wsl -d Ubuntu -- cat ~/qwen-serving/api_key.txt
-    result = subprocess.run(
-        ["wsl.exe", "-d", "Ubuntu", "--", "bash", "-c", "cat ~/qwen-serving/api_key.txt"],
-        capture_output=True, text=True, check=True, timeout=15,
-    )
-    return result.stdout.strip()
-
-
-def goose_env(cwd, api_key):
+def goose_env(cwd):
     import os
+    # Mirrors mcp-qwen/index.js's goose env contract exactly (verified
+    # config-less on native goose.exe 1.39.0, 2026-08-29): OPENAI_BASE_URL,
+    # not the older OPENAI_HOST/OPENAI_BASE_PATH pair this script used before.
+    # vLLM does not authenticate, so the key is the same "dummy" placeholder
+    # the server sends.
     env = os.environ.copy()
     env.update({
         "GOOSE_WORKING_DIR": str(cwd),
         "GOOSE_PROVIDER": "openai",
         "GOOSE_MODEL": "qwen3.8-27b",
-        "OPENAI_HOST": f"http://localhost:{VLLM_PORT}",
-        "OPENAI_API_KEY": api_key,
-        "OPENAI_BASE_PATH": "v1/chat/completions",
+        "OPENAI_BASE_URL": f"http://localhost:{VLLM_PORT}/v1",
+        "OPENAI_API_KEY": "dummy",
     })
     return env
 
@@ -80,7 +75,7 @@ def already_done(out_path):
     return done
 
 
-def solve_one(task, workdir, timeout_s, api_key):
+def solve_one(task, workdir, timeout_s):
     import tempfile
     inst = task["instance_id"]
     Path(workdir).mkdir(parents=True, exist_ok=True)
@@ -115,7 +110,7 @@ def solve_one(task, workdir, timeout_s, api_key):
                 encoding="utf-8",
                 errors="replace",
                 timeout=timeout_s,
-                env=goose_env(repo_dir, api_key),
+                env=goose_env(repo_dir),
             )
             rc, stderr_tail = result.returncode, (result.stderr or "")[-2000:]
         except subprocess.TimeoutExpired:
@@ -158,7 +153,6 @@ def main():
     todo = [t for t in tasks if t["instance_id"] not in done]
     print(f"{len(done)} already done, {len(todo)} remaining of {len(tasks)}")
 
-    api_key = get_api_key()
     Path(args.workdir).mkdir(parents=True, exist_ok=True)
 
     with open(args.out, "a", encoding="utf-8") as out_f:
@@ -166,7 +160,7 @@ def main():
             inst = task["instance_id"]
             print(f"[{i}/{len(todo)}] {inst} ({task['repo']}) ...", file=sys.stderr)
             try:
-                diff, rc, stderr_tail = solve_one(task, args.workdir, args.timeout, api_key)
+                diff, rc, stderr_tail = solve_one(task, args.workdir, args.timeout)
             except subprocess.TimeoutExpired:
                 print(f"  TIMEOUT after {args.timeout}s", file=sys.stderr)
                 diff, rc, stderr_tail = "", -1, "TIMEOUT"

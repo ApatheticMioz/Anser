@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.3.0)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.0)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
@@ -304,6 +304,41 @@ function extractToolEvents(lines) {
   return { toolCalls, errors, fileOps, finalText };
 }
 
+// Garbled-output watchdog (NOTES.md "Serving-stack corruption incident"): the
+// one-off "!"-burst class. Lost in the v4.x tool consolidation, re-added
+// 2026-08-29 as a result flag only - qwen_coworker cannot safely auto-retry
+// (goose may have already written files), so corrupt output surfaces loudly
+// instead. Benign markdown rulers (---, ```, ___, ~~~) are excluded from the
+// burst check; the block check ignores whitespace-only repeats.
+const CORRUPTION_BENIGN_CHARS = new Set([" ", "\n", "\t", "\r", "-", "=", "`", "~", "_"]);
+function detectCorruption(text) {
+  if (!text || text.length < 32) return null;
+  const findings = [];
+  // (a) Burst: 5+ consecutive repeats of one non-benign character.
+  let run = 1;
+  for (let i = 1; i < text.length; i++) {
+    if (text[i] === text[i - 1]) {
+      run++;
+      if (run >= 5 && !CORRUPTION_BENIGN_CHARS.has(text[i])) {
+        findings.push(`character burst: ${JSON.stringify(text[i].repeat(5))}`);
+        break;
+      }
+    } else {
+      run = 1;
+    }
+  }
+  // (b) Repeat: a 40-char block appearing 3+ times (sampled windows, bounded).
+  const sample = text.slice(0, 20_000);
+  for (let i = 0; i + 40 <= sample.length; i += 20) {
+    const block = sample.slice(i, i + 40);
+    if (sample.split(block).length - 1 >= 3) {
+      findings.push(`40-char block repeated 3+ times: ${JSON.stringify(block.slice(0, 30))}...`);
+      break;
+    }
+  }
+  return findings.length ? findings.join("; ") : null;
+}
+
 function summarizeGooseRun(lines, { timedOut, timeoutReason = "", timeoutMs = DEFAULT_TIMEOUT_MS, stderr = "" } = {}) {
   const { toolCalls, errors, fileOps, finalText } = extractToolEvents(lines);
   const parts = [];
@@ -324,6 +359,16 @@ function summarizeGooseRun(lines, { timedOut, timeoutReason = "", timeoutMs = DE
 
   if (finalText) {
     parts.push(timedOut ? `Last partial message from Qwen:\n${finalText}` : `Final message from Qwen:\n${finalText}`);
+  }
+
+  const corruption = detectCorruption(finalText);
+  if (corruption) {
+    parts.push(
+      `> [!WARNING]\n` +
+        `> Output corruption watchdog triggered: ${corruption}. This matches the known garbled-output\n` +
+        `> signature (see NOTES.md "Serving-stack corruption incident") - treat the text above with suspicion\n` +
+        `> and re-dispatch if it reads as garbage. File operations may still be valid.`
+    );
   }
 
   if (errors.length > 0) {
@@ -1138,6 +1183,12 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           env: {
             ...process.env,
             GOOSE_WORKING_DIR: targetCwd,
+            // Same env contract as the WSL branch - goose.exe runs config-less
+            // (no C:\Users\...\.config\goose\config.yaml on this machine).
+            GOOSE_PROVIDER: "openai",
+            GOOSE_MODEL: "qwen3.8-27b",
+            OPENAI_BASE_URL: "http://localhost:18020/v1",
+            OPENAI_API_KEY: "dummy",
           },
           stdio: ["ignore", "pipe", "pipe"],
           detached: !IS_WINDOWS,

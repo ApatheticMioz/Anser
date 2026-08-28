@@ -195,6 +195,10 @@ Controls the local 245K vLLM server instance lifecycle, with engine-core wedge d
 | `DFLASH_TOKENS=15` Reproduction Mode | up to **381** | 3.4–15.0 |
 | Six-Task Real-Prompt Suite Average | **53** | 3.0 |
 
+> [!NOTE]
+> Measured 2026-08-23 with `VLLM_DFLASH2_CHAIN=1`. Since `3522dc7` (2026-08-28) CHAIN is disabled
+> (wedge mitigation): expect roughly these numbers minus ~7% on copy-heavy workloads, parity on prose.
+
 ### Prefill Throughput & TTFT
 
 | Input Length | Prefill Speed | Single-Request TTFT |
