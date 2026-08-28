@@ -928,7 +928,15 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
       } catch {}
     }
 
-    const targetInWsl = isWslLocation(cwd);
+    // Route Windows cwds through WSL Ubuntu goose (bash) by default. Native
+    // goose.exe runs the model's shell commands under cmd.exe, whose quoting
+    // and line-continuation mangling repeatedly broke tasks (v4.1.0 UNC bug,
+    // "'version:' is not recognized" fragments). wsl.exe --cd accepts the
+    // POSIX path directly, and the model then runs standard bash. Escape
+    // hatch: QWEN_FORCE_WSL=0 restores native routing.
+    const cwdInWsl = isWslLocation(cwd);
+    const targetInWsl =
+      cwdInWsl || (IS_WINDOWS && process.env.QWEN_FORCE_WSL !== "0");
     const targetCwd = targetInWsl ? toPosixWslPath(cwd) : toWindowsPath(cwd);
 
     let finalTaskPrompt = `Your working directory is exactly: ${targetCwd}\n\n`;
@@ -941,11 +949,13 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
     finalTaskPrompt += `=== Operational & Tooling Directives ===\n`;
     finalTaskPrompt += `- Prefer native Goose tools (\`read\`, \`edit\`, \`write\`, \`patch\`, \`tree\`) over shell subprocesses for inspecting and modifying files for maximum efficiency.\n`;
-    if (IS_WINDOWS && !targetInWsl) {
+    if (IS_WINDOWS && !cwdInWsl) {
       finalTaskPrompt += `- Windows Line Endings: Workspace files may use CRLF (\\r\\n). If \`edit\` or string replacement encounters matching issues, inspect exact line endings with \`read\` or write the normalized file.\n`;
-      finalTaskPrompt += `- Shell execution: If executing PowerShell commands via shell, use \`powershell -NoProfile -Command "..."\` or native utilities directly.\n`;
+    }
+    if (targetInWsl) {
+      finalTaskPrompt += `- Linux Environment: Executing in Linux/WSL (bash). Use standard Linux commands and POSIX paths. Windows-drive workspaces live under /mnt/<drive>/.\n`;
     } else {
-      finalTaskPrompt += `- Linux Environment: Executing natively in Linux/WSL. Use standard Linux commands and POSIX paths.\n`;
+      finalTaskPrompt += `- Shell execution: If executing PowerShell commands via shell, use \`powershell -NoProfile -Command "..."\` or native utilities directly.\n`;
     }
 
     return new Promise(async (resolve) => {
@@ -976,14 +986,20 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
       let child;
       if (targetInWsl) {
         if (IS_WINDOWS) {
+          // Windows env vars do NOT cross the wsl.exe boundary by default (WSLENV
+          // empty on this machine): the GOOSE_* vars below were silently dropped,
+          // leaving goose to whatever ~/.config/goose/config.yaml says. Listing
+          // them in WSLENV with the /u flag (Windows->WSL only) forwards them.
+          const wslEnv = {
+            ...process.env,
+            GOOSE_PROVIDER: "openai",
+            GOOSE_MODEL: "qwen3.8-27b",
+            OPENAI_BASE_URL: "http://localhost:18020/v1",
+            OPENAI_API_KEY: "dummy",
+            WSLENV: "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u",
+          };
           child = spawn("wsl.exe", ["-d", "Ubuntu", "--cd", targetCwd, "--", "/home/apath/.local/bin/goose", ...args], {
-            env: {
-              ...process.env,
-              GOOSE_PROVIDER: "openai",
-              GOOSE_MODEL: "qwen3.8-27b",
-              OPENAI_BASE_URL: "http://localhost:18020/v1",
-              OPENAI_API_KEY: "dummy",
-            },
+            env: wslEnv,
             stdio: ["ignore", "pipe", "pipe"],
             detached: false,
           });
