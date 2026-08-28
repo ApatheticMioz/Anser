@@ -231,11 +231,11 @@ async function ensureServerRunning() {
       if (!AUTO_HEAL) {
         return {
           switched: false,
-          status: `already_running_wedged (${wedge.stats.ageSec}s engine-stats silence; auto-heal disabled via QWEN_AUTO_HEAL=0)`,
+          status: `already_running_wedged (canary: ${wedge.canary.error}; auto-heal disabled via QWEN_AUTO_HEAL=0)`,
         };
       }
-      const heal = await healWedgedEngine(wedge.stats.ageSec);
-      return { switched: true, status: `restarted_wedged_engine (${wedge.stats.ageSec}s stats silence)`, heal };
+      const heal = await healWedgedEngine(wedge.stats?.ageSec ?? null);
+      return { switched: true, status: `restarted_wedged_engine (canary: ${wedge.canary.error})`, heal };
     }
     return { switched: false, status: "already_running" };
   }
@@ -610,8 +610,11 @@ async function runQueued(fn, taskEntry) {
 // stays up: the port answers, /v1/models returns 200, but stats go silent and every
 // chat completion is accepted-then-never-scheduled. Goose then produces zero stream
 // chunks until the watchdog kills it, while the GPU sits at 100% doing nothing.
-// Stats silence past the threshold below = wedged, independent of load (a busy
-// engine still prints stats; only a stuck core loop goes quiet).
+// That class correlates with stats silence. But a second class (2026-08-29)
+// sits between the API server and the engine core: queues stay EMPTY and
+// stats keep flowing while every completion hangs - invisible to any stats
+// check. Hence the canary probe below is the authoritative wedge signal;
+// stats silence is a secondary correlator only.
 // -----------------------------------------------------------------------------
 const ENGINE_LOG_PATH = "/tmp/mcp_launch_huge.log";
 const WEDGE_STATS_SILENCE_S = process.env.QWEN_WEDGE_SILENCE_S
@@ -655,12 +658,112 @@ function parseEngineStats(line) {
   };
 }
 
+// ---- Engine gauges via Prometheus /metrics ----
+// The engine serves its own metrics over HTTP, independent of who launched it
+// or where stdout goes. The old log-scrape was a fragile convention: a manual
+// or out-of-band relaunch leaves /tmp/mcp_launch_huge.log empty and detection
+// goes blind (2026-08-29 incident). /metrics is the primary source now; the
+// log scrape is demoted to a best-effort supplement.
+let metricsCache = { at: 0, data: null };
+async function readEngineMetrics(maxAgeMs = 5000) {
+  if (metricsCache.data && Date.now() - metricsCache.at < maxAgeMs) return metricsCache.data;
+  try {
+    const res = await fetch(`${BASE_URL.replace(/\/v1$/, "")}/metrics`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const map = {};
+    for (const line of (await res.text()).split("\n")) {
+      if (!line.startsWith("vllm:")) continue;
+      const name = line.match(/^(vllm:[^{ ]+)/)?.[1];
+      const val = Number(line.slice(line.lastIndexOf(" ") + 1));
+      if (!name || !Number.isFinite(val)) continue;
+      // Multi-label families (per-engine, per-position) collapse to max - fine
+      // for the gauges we surface (running/waiting/kv/spec-acceptance).
+      map[name] = Math.max(map[name] ?? -Infinity, val);
+    }
+    metricsCache = { at: Date.now(), data: map };
+    return map;
+  } catch {
+    metricsCache = { at: Date.now(), data: null };
+    return null;
+  }
+}
+
+// ---- Canary health probe (authoritative) ----
+// Stats-silence detection cannot see every wedge class. Observed 2026-08-29:
+// the port answered, /v1/models and /metrics returned 200, engine queues were
+// EMPTY (running=0, waiting=0) - the wedge sat between the API server and the
+// engine core, so requests were accepted and never scheduled and stats never
+// went stale. The only honest health check is a real completion: 8 tokens,
+// ~1s when healthy, cached for 60s so the pre-dispatch gate stays cheap.
+let canaryCache = { at: 0, result: null };
+async function canaryProbe(force = false) {
+  if (!force && canaryCache.result && Date.now() - canaryCache.at < 60_000) {
+    return canaryCache.result;
+  }
+  const t0 = Date.now();
+  let result;
+  try {
+    const res = await fetch(`${BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${getApiKeySync()}` },
+      body: JSON.stringify({
+        model: "qwen3.8-27b",
+        max_tokens: 8,
+        messages: [{ role: "user", content: "Reply with: ok" }],
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const j = await res.json();
+    // Success = the full API->core->scheduler->decode->response path produced
+    // tokens. Content may legitimately be empty: with reasoning_effort=medium
+    // the token budget can be consumed entirely inside <think> (measured on a
+    // fresh boot: 8/8 tokens to reasoning, empty content, 354ms - healthy).
+    if ((j?.usage?.completion_tokens ?? 0) < 1) {
+      throw new Error("completion returned no tokens");
+    }
+    result = { ok: true, latencyMs: Date.now() - t0 };
+  } catch (err) {
+    result = { ok: false, latencyMs: Date.now() - t0, error: String(err?.message ?? err) };
+  }
+  canaryCache = { at: Date.now(), result };
+  return result;
+}
+
 async function engineWedgeState() {
+  const metrics = await readEngineMetrics();
+  const canary = await canaryProbe();
+
+  // Stats silence is retained as a secondary signal only (a busy-but-healthy
+  // engine prints stats; a hung core goes quiet). The canary decides wedged.
   const line = await readLastEngineStatsLine();
-  if (!line) return { wedged: false, stats: null }; // booting, or log rotated/absent
-  const stats = parseEngineStats(line);
-  if (!stats) return { wedged: false, stats: null };
-  return { wedged: stats.ageSec > WEDGE_STATS_SILENCE_S, stats };
+  const stats = line ? parseEngineStats(line) : null;
+
+  const gauges = metrics
+    ? {
+        running_requests: metrics["vllm:num_requests_running"] ?? null,
+        waiting_requests: metrics["vllm:num_requests_waiting"] ?? null,
+        kv_cache_pct: metrics["vllm:kv_cache_usage_perc"] ?? null,
+        prefix_cache_hit_ratio:
+          (metrics["vllm:prefix_cache_queries_total"] ?? 0) > 0
+            ? (metrics["vllm:prefix_cache_hits_total"] ?? 0) / metrics["vllm:prefix_cache_queries_total"]
+            : null,
+        spec_decode_acceptance:
+          (metrics["vllm:spec_decode_num_draft_tokens_total"] ?? 0) > 0
+            ? (metrics["vllm:spec_decode_num_accepted_tokens_total"] ?? 0) /
+              metrics["vllm:spec_decode_num_draft_tokens_total"]
+            : null,
+      }
+    : null;
+
+  return {
+    wedged: !canary.ok,
+    canary,
+    gauges,
+    stats: stats ?? null,
+  };
 }
 
 // Kill + reboot a wedged engine. Every Claude surface runs its own copy of this
@@ -683,7 +786,16 @@ async function healWedgedEngine(statsAgeSec) {
   } catch {}
   await stopServer();
   const res = await ensureServerRunning();
+  // Gauges/canary may still be cached from the pre-restart engine - drop them.
+  resetEngineHealthCache();
   return { healed: true, boot: res.status };
+}
+
+// Stale health data from a dead engine is worse than none (a cached "ok"
+// canary would mask a fresh wedge for up to 60s). Called after stop/heal.
+function resetEngineHealthCache() {
+  canaryCache = { at: 0, result: null };
+  metricsCache = { at: 0, data: null };
 }
 
 function notifyWaiters(task) {
@@ -1204,7 +1316,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
 const server = new McpServer({
   name: "qwen38-local",
-  version: "4.4.0",
+  version: "4.5.0",
 });
 
 // Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
@@ -1421,7 +1533,7 @@ server.registerTool(
   {
     title: "Manage Local Qwen3.8-27B vLLM Instance Lifecycle",
     description:
-      "Check status, start, or stop the universal 245K context vLLM server in WSL Ubuntu. Status includes live engine gauges (running/waiting requests, KV cache %, engine-stats age) and detects engine-core wedges - the port answering is NOT proof of health, stats silence >120s while the port answers is. A detected wedge auto-reboots the server unless QWEN_AUTO_HEAL=0. qwen_coworker dispatches run the same check before every task.",
+      "Check status, start, or stop the universal 245K context vLLM server in WSL Ubuntu. Status includes live engine gauges from /metrics (running/waiting requests, KV cache %, prefix-cache hit ratio, spec-decode acceptance) and an end-to-end canary completion - the port answering is NOT proof of health, and stats silence cannot see every wedge class (2026-08-29: API-to-core stall with empty queues and 200 answers). A failed canary means wedged; auto-reboots unless QWEN_AUTO_HEAL=0. qwen_coworker dispatches run the same gate before every task.",
     inputSchema: {
       action: z.enum(["status", "start", "stop"]).describe("Lifecycle action to perform"),
     },
@@ -1459,9 +1571,12 @@ server.registerTool(
                 stack: "vLLM + DFlash2 + KVarN (Universal 245K)",
                 engine: running
                   ? {
-                      running_requests: wedge.stats?.runningReqs ?? null,
-                      waiting_requests: wedge.stats?.waitingReqs ?? null,
-                      kv_cache_pct: wedge.stats?.kvCachePct ?? null,
+                      running_requests: wedge.gauges?.running_requests ?? null,
+                      waiting_requests: wedge.gauges?.waiting_requests ?? null,
+                      kv_cache_pct: wedge.gauges?.kv_cache_pct ?? null,
+                      prefix_cache_hit_ratio: wedge.gauges?.prefix_cache_hit_ratio ?? null,
+                      spec_decode_acceptance: wedge.gauges?.spec_decode_acceptance ?? null,
+                      canary: wedge.canary,
                       engine_stats_age_seconds: wedge.stats?.ageSec ?? null,
                       wedge_detected: wedge.wedged,
                       wedge_threshold_seconds: WEDGE_STATS_SILENCE_S,
@@ -1491,6 +1606,7 @@ server.registerTool(
     }
     if (action === "stop") {
       await stopServer();
+      resetEngineHealthCache();
       return {
         content: [{ type: "text", text: JSON.stringify({ status: "stopped", message: "vLLM server stopped." }, null, 2) }],
       };
