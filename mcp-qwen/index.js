@@ -44,9 +44,12 @@ const DEFAULT_TIMEOUT_MS = 3_600_000;
 // minutes; sub-floor budgets are raised to this value before dispatch.
 // Env-overridable (parseInt guard, like RACE_MS above) for tests.
 const DEFAULT_MIN_TIMEOUT_MS = 600_000;
-const MIN_TIMEOUT_MS = process.env.QWEN_MIN_TIMEOUT_MS
-  ? parseInt(process.env.QWEN_MIN_TIMEOUT_MS, 10)
-  : DEFAULT_MIN_TIMEOUT_MS;
+const MIN_TIMEOUT_MS = (() => {
+  const parsed = parseInt(process.env.QWEN_MIN_TIMEOUT_MS, 10);
+  // Guard against NaN/negative/zero: a bad override must degrade to the
+  // default, never poison the watchdog arithmetic (totalTimeoutMs = NaN).
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MIN_TIMEOUT_MS;
+})();
 // Inactivity Heartbeat: Kill only if process produces 0 stream chunks for 10 minutes
 const INACTIVITY_TIMEOUT_MS = 600_000;
 // First-Token Timeout: fail fast when goose emits NO output at all shortly after spawn.
@@ -1185,7 +1188,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
 const server = new McpServer({
   name: "qwen38-local",
-  version: "4.1.0",
+  version: "4.4.0",
 });
 
 // Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
