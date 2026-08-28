@@ -866,4 +866,40 @@ gauges to tell saturation (Running/Waiting high) from a wedge (stats silent).
 MCP server processes pick this up only after the owning session restarts its MCP
 connection — running sessions keep the old code until then.
 
+## Global cross-process goose semaphore (2026-08-28, v4.3.0)
+
+Direct follow-up to the queue-semantics note above: the per-process
+`MAX_CONCURRENT_GOOSE=1` FIFO was useless across sessions — every Claude surface
+spawns its own copy of this server, so N sessions = N processes = N concurrent
+gooses against one GPU regardless of the limit (exactly the load shape that
+afternoon). Replaced the in-process semaphore with a disk-lease semaphore every
+instance shares:
+
+- **Lease files**: `~/.qwen/goose_slots/slot_<i>.json`, claimed atomically with an
+  O_EXCL (`wx`) open — one winner per slot, no coordinator process needed.
+- **Heartbeat**: holders rewrite `hb` every 15s. Reclaim rules: pid dead +
+  lease >90s stale, or pid alive but silent >5min (a wedged holder — its own task
+  watchdog fires at 600s/120s long before the 5min mark, so a silent-live holder
+  is abandoned by definition). Reclaim renames the file first (atomic) so racing
+  reclaimers can't both win; holders detect theft (pid mismatch on heartbeat) and
+  refuse to unlink a foreign lease on release.
+- **Semantics preserved**: default 1 = the strict one-goose-at-a-time `fac3113`
+  intended, now actually enforced machine-wide. Task entries stay `queued`
+  (startedAt null, watchdog-exempt, no budget ticking) until they hold a slot —
+  identical to the old per-process queue semantics, now global. Cancelled-while-
+  queued tasks now abort slot acquisition instead of running anyway (a gap in the
+  old `attempt()` path). `QWEN_MAX_CONCURRENT` raises the cap globally; keep it
+  ≤ engine MAX_SEQS=8 or dispatches queue invisibly inside vLLM instead of here,
+  where the first-token timeout would kill them.
+- **Observability**: `qwen_task` queued messages now name the current slot holder
+  (taskId) across all sessions — cross-session contention is finally visible to
+  each orchestrator.
+- **Rollout caveat**: leases only coordinate new-code instances; old-code
+  processes (sessions started before the MCP restart) bypass them entirely.
+  `test_global_semaphore.js` exercises in-process exclusion, hand-off, and
+  cross-process exclusion against the shipped code (no vLLM/goose needed).
+- **Why not strict global FIFO**: exact FIFO ordering across processes would need
+  a sequencing protocol on top of the leases; slot-poll ordering is approximately
+  fair and — with the default of 1 — ordering is all but irrelevant. Not built.
+
 

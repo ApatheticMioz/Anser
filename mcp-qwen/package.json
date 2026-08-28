@@ -1,7 +1,7 @@
 {
   "name": "mcp-qwen",
-  "version": "4.2.0",
-  "description": "Unified local Qwen3.8-27B MCP server: qwen_coworker / qwen_task / qwen_server (vLLM + DFlash2 + KVarN, Universal 245K context, zero-turn long-poll wait @18021, engine wedge detection + auto-heal, first-token timeout)",
+  "version": "4.3.0",
+  "description": "Unified local Qwen3.8-27B MCP server: qwen_coworker / qwen_task / qwen_server (vLLM + DFlash2 + KVarN, Universal 245K context, zero-turn long-poll wait @18021, engine wedge detection + auto-heal, first-token timeout, global cross-process goose semaphore)",
   "main": "index.js",
   "scripts": {
     "test": "node mcp_client_test.js server_status"

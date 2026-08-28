@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.2.0)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.3.0)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
@@ -250,46 +250,12 @@ async function stopServer() {
   return { stopped: true };
 }
 
-const MAX_CONCURRENT_GOOSE = 1;
-let activeGooseCount = 0;
-const gooseWaitQueue = [];
-
-function runQueued(fn, taskEntry) {
-  return new Promise((resolve, reject) => {
-    const attempt = () => {
-      activeGooseCount++;
-      if (taskEntry && !taskEntry.done) {
-        taskEntry.status = "executing";
-        taskEntry.startedAt = Date.now();
-        saveTaskToDisk(taskEntry);
-      }
-      fn().then(
-        (r) => {
-          activeGooseCount--;
-          releaseNext();
-          resolve(r);
-        },
-        (e) => {
-          activeGooseCount--;
-          releaseNext();
-          reject(e);
-        }
-      );
-    };
-    if (activeGooseCount < MAX_CONCURRENT_GOOSE) {
-      attempt();
-    } else {
-      gooseWaitQueue.push(attempt);
-    }
-  });
-}
-
-function releaseNext() {
-  if (activeGooseCount < MAX_CONCURRENT_GOOSE) {
-    const next = gooseWaitQueue.shift();
-    if (next) next();
-  }
-}
+// Goose concurrency is a GLOBAL cross-process semaphore implemented below (lease
+// files under ~/.qwen/goose_slots/) - it must live near TASK_DIR, which it uses.
+// An in-process limit was useless across sessions: every Claude surface spawns its
+// own copy of this server, so N sessions = N processes = N concurrent gooses
+// against one GPU regardless of the limit. runQueued acquires a global slot before
+// execution; task entries stay "queued" and watchdog-exempt until they hold one.
 
 let bootMutex = Promise.resolve();
 function withBootMutex(fn) {
@@ -488,6 +454,140 @@ function cleanOldTasks() {
 }
 
 setInterval(cleanOldTasks, 300_000);
+
+// -----------------------------------------------------------------------------
+// Global Goose Concurrency (cross-process, v4.3.0)
+//
+// Disk-lease semaphore shared by every instance of this server on the machine
+// (Claude Code sessions, Desktop, Antigravity - each spawns its own process).
+// Slot i = ~/.qwen/goose_slots/slot_<i>.json, claimed atomically via O_EXCL
+// ("wx") open. Holders refresh an `hb` heartbeat every 15s. A lease is
+// reclaimable when its pid is dead (after 90s staleness) or its hb is >5min
+// stale with a live pid (a wedged holder - its own task watchdog will have
+// fired long before that). Default 1 = strict one-goose-at-a-time globally,
+// the intent of the old in-process FIFO, now actually enforced machine-wide.
+// QWEN_MAX_CONCURRENT raises the global cap; keep it <= engine MAX_SEQS (8)
+// or dispatches queue invisibly inside vLLM instead of here.
+// -----------------------------------------------------------------------------
+const MAX_CONCURRENT_GOOSE = process.env.QWEN_MAX_CONCURRENT
+  ? Math.max(1, parseInt(process.env.QWEN_MAX_CONCURRENT, 10))
+  : 1;
+const SLOT_HEARTBEAT_MS = 15_000;
+const SLOT_STALE_MS = 90_000; // pid dead -> lease reclaimable after this
+const SLOT_WEDGED_MS = 5 * 60_000; // pid alive but silent -> assume abandoned
+const SLOT_POLL_MS = 1_000;
+
+function slotFilePath(i) {
+  return path.join(TASK_DIR, "goose_slots", `slot_${i}.json`);
+}
+
+function pidAlive(pid) {
+  if (!pid) return false;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0); // signal 0 = liveness probe, no signal sent
+    return true;
+  } catch (err) {
+    return err.code === "EPERM"; // EPERM = exists, just not ours
+  }
+}
+
+function readLease(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function leaseReclaimable(lease) {
+  if (!lease) return true; // unreadable = crashed mid-write
+  const age = Date.now() - (lease.hb ?? lease.at ?? 0);
+  if (!pidAlive(lease.pid)) return age > SLOT_STALE_MS;
+  return age > SLOT_WEDGED_MS;
+}
+
+// Resolves with {file, refresh} once a slot is held, or null if the task was
+// cancelled while waiting (taskEntry.done) - callers must not run fn then.
+async function acquireGooseSlot(taskEntry) {
+  fs.mkdirSync(path.join(TASK_DIR, "goose_slots"), { recursive: true });
+  for (;;) {
+    if (taskEntry?.done) return null;
+    for (let i = 0; i < MAX_CONCURRENT_GOOSE; i++) {
+      const file = slotFilePath(i);
+      const claim = { pid: process.pid, taskId: taskEntry?.id ?? null, at: Date.now(), hb: Date.now() };
+      try {
+        const fd = fs.openSync(file, "wx"); // atomic claim - only one process wins
+        fs.writeSync(fd, JSON.stringify(claim));
+        fs.closeSync(fd);
+        const refresh = setInterval(() => {
+          try {
+            const cur = readLease(file);
+            // If someone stole our lease (>5min stall), stop refreshing; release
+            // will refuse to unlink a lease we no longer own.
+            if (cur && cur.pid !== process.pid) {
+              clearInterval(refresh);
+              return;
+            }
+            fs.writeFileSync(file, JSON.stringify({ ...(cur ?? claim), pid: process.pid, hb: Date.now() }));
+          } catch {}
+        }, SLOT_HEARTBEAT_MS);
+        refresh.unref();
+        return { file, refresh };
+      } catch (err) {
+        if (err.code !== "EEXIST") continue; // transient fs error: try next slot
+        const lease = readLease(file);
+        if (!leaseReclaimable(lease)) continue;
+        // Reclaim: rename is atomic, so only one racing process wins; losers see
+        // ENOENT and simply retry on the next poll cycle.
+        const dead = `${file}.dead_${Date.now()}_${process.pid}`;
+        try {
+          fs.renameSync(file, dead);
+          fs.rmSync(dead, { force: true });
+        } catch {}
+      }
+    }
+    await new Promise((r) => setTimeout(r, SLOT_POLL_MS));
+  }
+}
+
+function releaseGooseSlot(slot) {
+  if (!slot) return;
+  clearInterval(slot.refresh);
+  try {
+    const cur = readLease(slot.file);
+    if (!cur || cur.pid === process.pid) fs.rmSync(slot.file, { force: true });
+  } catch {}
+}
+
+// Active (non-reclaimable) leases across all instances - for status reporting.
+function listGooseSlots() {
+  const out = [];
+  for (let i = 0; i < MAX_CONCURRENT_GOOSE; i++) {
+    const file = slotFilePath(i);
+    const lease = readLease(file);
+    if (lease && !leaseReclaimable(lease)) out.push(lease);
+  }
+  return out;
+}
+
+async function runQueued(fn, taskEntry) {
+  const slot = await acquireGooseSlot(taskEntry);
+  if (!slot) {
+    // Cancelled while waiting for a slot - never executed, nothing to clean up.
+    return taskEntry?.result ?? { isError: true, text: "Task cancelled before acquiring a goose slot." };
+  }
+  if (taskEntry && !taskEntry.done) {
+    taskEntry.status = "executing";
+    taskEntry.startedAt = Date.now();
+    saveTaskToDisk(taskEntry);
+  }
+  try {
+    return await fn();
+  } finally {
+    releaseGooseSlot(slot);
+  }
+}
 
 // -----------------------------------------------------------------------------
 // Engine Health: wedge detection (2026-08-28 incident follow-up)
@@ -764,16 +864,18 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
   const taskId = `task_${sessionId}_${Date.now()}`;
   const totalTimeoutMs = (timeoutMs ?? DEFAULT_TIMEOUT_MS) + (extensions && extensions.length ? EXTENSION_BONUS_TIMEOUT_MS : 0);
 
-  const isQueued = activeGooseCount >= MAX_CONCURRENT_GOOSE;
+  // Slot acquisition is cross-process and async: every task starts "queued"
+  // (watchdog-exempt, no budget ticking) and flips to "executing" only when it
+  // holds a global goose slot.
   const taskEntry = {
     id: taskId,
     sessionId,
     cwd,
     prompt,
     createdAt: Date.now(),
-    startedAt: isQueued ? null : Date.now(),
+    startedAt: null,
     finishedAt: null,
-    status: isQueued ? "queued" : "executing",
+    status: "queued",
     done: false,
     isError: false,
     child: null,
@@ -1220,11 +1322,13 @@ server.registerTool(
       const elapsed_s = Math.round((Date.now() - task.createdAt) / 1000);
       const hint = `\n\nWait command (blocks at $0 until done):\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``;
       if (task.status === "queued") {
+        const holders = listGooseSlots().map((l) => l.taskId ?? `pid ${l.pid}`);
+        const heldBy = holders.length ? ` Currently held by: ${holders.join(", ")}.` : "";
         return {
           content: [
             {
               type: "text",
-              text: `Task \`${task_id}\` is QUEUED in FIFO task pipeline (${elapsed_s}s elapsed waiting for prior task).${hint}`,
+              text: `Task \`${task_id}\` is QUEUED for a global goose slot (${elapsed_s}s waiting; MAX_CONCURRENT_GOOSE=${MAX_CONCURRENT_GOOSE} machine-wide).${heldBy}${hint}`,
             },
           ],
           isError: false,
@@ -1359,6 +1463,10 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
+
+// Exported for test_global_semaphore.js - importing this module runs the MCP
+// server on stdio, which the test processes simply leave idle.
+export { acquireGooseSlot, releaseGooseSlot, listGooseSlots, TASK_DIR };
 
 main().catch((err) => {
   console.error("MCP Server Fatal Error:", err);

@@ -43,10 +43,12 @@ D:\LLM_Ecosystem\
 ├── mcp-qwen\                   MCP Server (Node.js v4.2.0) exposing local Qwen to orchestrators
 │   ├── index.js                3 consolidated SOTA tools (qwen_coworker, qwen_task,
 │   │                           qwen_server), zero-turn wait HTTP server @ localhost:18021,
-│   │                           FIFO task queue (MAX_CONCURRENT_GOOSE=1), and WSL path routing
+│   │                           global goose semaphore (cross-process leases,
+│   │                           MAX_CONCURRENT_GOOSE=1), and WSL path routing
 │   ├── avo_engine.js           AVO lineage engine (git-grounded candidate records
 │   │                           in <cwd>/.avo/lineage.json)
 │   ├── test_fifo_queue.js      Automated test suite for serialized task execution
+│   ├── test_global_semaphore.js Cross-process lease-semaphore test (no vLLM needed)
 │   ├── mcp_client_test.js      MCP client connectivity & protocol test harness
 │   ├── update_schemas.py       Regenerates per-tool JSON schemas into Antigravity IDE
 │   ├── NOTES.md                Complete engineering decisions, benchmark logs & changelog
@@ -80,7 +82,7 @@ User <───> Meta-Supervisor / Lead Architect
             │  mcp-qwen/index.js (v4.2.0 Unified MCP Server)           │
             │  ├── 45s Sync Race (fast tasks return Turn 1 directly)   │
             │  ├── Background Task Manager (~/.qwen/tasks/ JSON)       │
-            │  ├── FIFO Execution Queue (MAX_CONCURRENT_GOOSE=1)       │
+            │  ├── Global Goose Semaphore (MAX_CONCURRENT_GOOSE=1)     │
             │  ├── Native WSL / Windows Path Routing & UNC Sanitizer   │
             │  └── Zero-Turn HTTP Wait Endpoint (localhost:18021)      │
             └─────────────────────────────────────────────────────────┘
@@ -117,7 +119,7 @@ User <───> Meta-Supervisor / Lead Architect
 2. **Zero-Turn Long-Poll Execution Contract**:
    - **Fast Tasks (< 45s)**: `qwen_coworker` completes inside the 45s synchronous race window and returns the complete deliverable directly in Turn 1.
    - **Long Tasks (>= 45s)**: `qwen_coworker` yields a durable `taskId` and a `wait_command` (`curl -s http://127.0.0.1:18021/task/<id>/wait`). The orchestrator runs this wait command in the background, blocking at OS level with **$0 token cost** until automatically notified on completion. Manual LLM timer loops are prohibited.
-3. **FIFO Concurrency Control (`MAX_CONCURRENT_GOOSE=1`)**: All coworker tasks are serialized through a strict FIFO execution queue. Tasks entering while another is executing are marked `queued` on disk (`~/.qwen/tasks/`) and dispatched automatically upon completion of active tasks, preventing GPU contention and Goose session locks.
+3. **Global Concurrency Control (`MAX_CONCURRENT_GOOSE=1`)**: All coworker tasks *machine-wide* are serialized through a cross-process disk-lease semaphore (`~/.qwen/goose_slots/`) shared by every MCP server instance — N concurrent Claude sessions still yield exactly one goose at a time (an in-process limit alone was useless, since every surface spawns its own server process). Tasks waiting for a slot are `queued` on disk (`~/.qwen/tasks/`) with no watchdog or budget ticking, and dispatch automatically when the holder releases; dead holders' leases are reclaimed (pid liveness + heartbeat staleness). Raise the global cap with `QWEN_MAX_CONCURRENT` (keep ≤ engine `MAX_SEQS=8`, or dispatches queue invisibly inside vLLM instead of here).
 4. **Cross-Platform WSL/Windows Agnosticism**: Seamless path translation maps POSIX paths (`/home/apath/...`) to Windows UNC (`\\wsl.localhost\Ubuntu\...`) and Windows paths (`D:\...`) to POSIX (`/mnt/d/...`). UNC working directories are cleanly resolved inside WSL to prevent Windows `cmd.exe` UNC directory crashes.
 5. **Milestone-Scoped Session Lifecycle**:
    - **Within a Milestone (1–15 Turns)**: Dispatched to the same named `session_id` (`<workspace>_<milestone>`). Reuses the loaded vLLM prefix cache (~8,000–9,000 tok/s prefill, <0.5s wakeup) for continuous episodic memory.
