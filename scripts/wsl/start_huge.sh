@@ -11,7 +11,7 @@ export PREFIX_CACHE=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False
 export VLLM_WSL2_ENABLE_PIN_MEMORY=1
 export VLLM_DFLASH2_LOOKUP_ADAPTIVE=0  # A/B tested 2026-08-23: pins verify block length, fixes documented prefix-cache bug at zero cost, measured +26pct faster (160.7 vs 127.6 tok/s), no downside in 6 trials/config - see docs/gotchas or single-user/start_qwen.sh comments
-export VLLM_DFLASH2_CHAIN=1            # Drafter-free n-gram chains for prompt reproduction, diffs, and structured tool blocks (upstream labd: +7% to +40% speedup)
+export VLLM_DFLASH2_CHAIN=0            # DISABLED 2026-08-28: prime suspect for recurring engine-core wedges (stats silence + GPU 100%, see mcp-qwen/NOTES.md:824) during ~100k-token speculative decode. Upstream ships CHAIN off by default; benefit was +7% on copy-heavy workloads only, zero on prose - not worth the deadlock risk. Re-enable only with new upstream evidence of a fix.
 # Raised 2 -> 4 -> 8 on 2026-08-24, per README's own documented finding: MAX_SEQS is a
 # deliberate low default for long-document sessions, not an engine limit - slots cost
 # ~8 MiB each and the KV pool stays at 268,169 tokens regardless (upstream measured this

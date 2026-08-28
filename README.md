@@ -18,7 +18,7 @@ D:\LLM_Ecosystem\
 │   ├── status.bat              Unified service checker (checks port 18020 & 18021)
 │   ├── main\                   Delegation stack launchers (vLLM + MCP + Goose)
 │   │   ├── start.bat           Default entry point -> start_huge.bat
-│   │   ├── start_huge.bat      CTX=huge (245,760 ctx, DFlash2 chained, KVarN k4v2)
+│   │   ├── start_huge.bat      CTX=huge (245,760 ctx, DFlash2, KVarN k4v2)
 │   │   ├── start_fast.bat      CTX=fast (57,344 ctx, ~107-130 tok/s, fp8 cache)
 │   │   └── stop.bat            Stops the active vLLM instance
 │   ├── uncensored\             Manual / academic-use model (NOT MCP-wired)
@@ -28,7 +28,7 @@ D:\LLM_Ecosystem\
 │   │   └── stop.bat            Stops llama-server
 │   └── wsl\                    WSL bash equivalents invoked by the .bat scripts
 │       ├── setup_links.sh      Symlinks launchers into ~/qwen-serving/launchers
-│       ├── start_huge.sh       vLLM huge context launcher (VLLM_DFLASH2_CHAIN=1)
+│       ├── start_huge.sh       vLLM huge context launcher (VLLM_DFLASH2_CHAIN=0, disabled 2026-08-28: wedge suspect)
 │       ├── start_fast.sh       vLLM fast context launcher
 │       ├── status.sh           WSL-side health & port check
 │       ├── stop.sh             WSL-side process terminator
@@ -94,7 +94,7 @@ User <───> Meta-Supervisor / Lead Architect
                                ▼
             vLLM Engine (WSL Ubuntu @ port 18020)
             - Qwen3.8-27B (W4A16 AutoRound, dense hybrid architecture)
-            - DFlash2 1.92B Block Drafter (VLLM_DFLASH2_CHAIN=1, 7 draft tok)
+            - DFlash2 1.92B Block Drafter (VLLM_DFLASH2_CHAIN=0, 7 draft tok)
             - Lookup-Augmented Speculation (VLLM_DFLASH2_LOOKUP*)
             - KVarN k4v2 KV Cache (245,760 context ceiling)
             - Prefix Caching enabled (KV reuse across session turns)
@@ -172,7 +172,7 @@ Controls the local 245K vLLM server instance lifecycle, with engine-core wedge d
   3. `quant_mtp.py`: MTP speculative decode draft module $\to$ int8.
   4. `build_draft_vocab.py`: Slices a 40,960-row subset of `lm_head` calibrated on model outputs for speculative verification.
 - **Speculative Decoding Options**:
-  - **DFlash2 Block Drafter (`SPEC=dflash2`, Default)**: 1.92B parameter, 5-layer non-autoregressive block drafter predicting 7 tokens per pass from target layers 5/19/33/47/61 with a 16-candidate path selector, quantized to ~1.0 GB (`quant_dflash2.py`). Configured with `VLLM_DFLASH2_CHAIN=1` for speculative chaining.
+  - **DFlash2 Block Drafter (`SPEC=dflash2`, Default)**: 1.92B parameter, 5-layer non-autoregressive block drafter predicting 7 tokens per pass from target layers 5/19/33/47/61 with a 16-candidate path selector, quantized to ~1.0 GB (`quant_dflash2.py`). `VLLM_DFLASH2_CHAIN` disabled (2026-08-28): upstream-off by default, +7% on copy-heavy workloads only, and the prime suspect for the recurring engine-core wedges (see `mcp-qwen/NOTES.md`).
   - **Lookup-Augmented Drafting (`VLLM_DFLASH2_LOOKUP*`)**: Proposes context continuations directly when reproducing or quoting documents (speeds up to 381 tok/s).
   - **MTP Drafter (`SPEC=mtp`, Fallback)**: Int4-GPTQ single-layer chain drafter (4 draft tokens, split-KV verify attention).
 - **KVarN KV Cache (`CTX=huge`)**:
