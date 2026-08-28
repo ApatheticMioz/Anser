@@ -388,7 +388,20 @@ function summarizeGooseRun(lines, { timedOut, timeoutReason = "", timeoutMs = DE
     parts.push(`Goose stderr tail:\n${stderr.trim().slice(-1000)}`);
   }
 
-  const isError = errors.length > 0 || (timedOut && fileOps.length === 0);
+  // Degenerate run: goose exited normally but produced NO tool calls and NO
+  // final text. Observed 2026-08-29: the model composed a malformed shell
+  // command, gave up silently, goose exited 0 - and the old summary reported
+  // "Qwen finished. 0 tool call(s)" with nothing attached, which reads as
+  // success to the supervisor. It is a failure.
+  const degenerate = !timedOut && toolCalls.length === 0 && !finalText;
+  if (degenerate) {
+    parts.push(
+      `Degenerate run: goose exited without producing any tool calls or output text. ` +
+        `The model likely failed on a malformed command (check the stderr tail below) or the engine returned nothing. Re-dispatch recommended.`
+    );
+  }
+
+  const isError = degenerate || errors.length > 0 || (timedOut && fileOps.length === 0);
   return { isError, text: parts.join("\n\n"), toolCalls, errors, fileOps, finalText };
 }
 
