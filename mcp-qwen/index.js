@@ -32,13 +32,21 @@ const MAX_LEN_HUGE = 245760;
 const BOOT_TIMEOUT_MS = 180_000;
 const BOOT_POLL_MS = 3000;
 
-// Safe sync race threshold: 45s for Claude Desktop/Code (~60s client timeout), 150s for Antigravity IDE (180s timeout)
+// Safe sync race threshold: 45s default for Claude Desktop/Code (~60s client timeout).
+// Override per client via QWEN_RACE_MS (e.g. 150000 for Antigravity IDE's 180s timeout).
 const DEFAULT_RACE_MS = 45_000;
 const RACE_MS = process.env.QWEN_RACE_MS
   ? parseInt(process.env.QWEN_RACE_MS, 10)
   : DEFAULT_RACE_MS;
 // Full 1-Hour Default Time Budget for background execution
 const DEFAULT_TIMEOUT_MS = 3_600_000;
+// Budget floor: a 27B model on consumer silicon routinely needs tens of
+// minutes; sub-floor budgets are raised to this value before dispatch.
+// Env-overridable (parseInt guard, like RACE_MS above) for tests.
+const DEFAULT_MIN_TIMEOUT_MS = 600_000;
+const MIN_TIMEOUT_MS = process.env.QWEN_MIN_TIMEOUT_MS
+  ? parseInt(process.env.QWEN_MIN_TIMEOUT_MS, 10)
+  : DEFAULT_MIN_TIMEOUT_MS;
 // Inactivity Heartbeat: Kill only if process produces 0 stream chunks for 10 minutes
 const INACTIVITY_TIMEOUT_MS = 600_000;
 // First-Token Timeout: fail fast when goose emits NO output at all shortly after spawn.
@@ -862,7 +870,10 @@ statusHttpServer.listen(STATUS_PORT, "127.0.0.1", () => {});
 
 function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs, hypothesis, testCommand, metricName, higherIsBetter }) {
   const taskId = `task_${sessionId}_${Date.now()}`;
-  const totalTimeoutMs = (timeoutMs ?? DEFAULT_TIMEOUT_MS) + (extensions && extensions.length ? EXTENSION_BONUS_TIMEOUT_MS : 0);
+  // Floor the caller value / default to MIN_TIMEOUT_MS BEFORE the extension
+  // bonus, so a mis-sized small budget can't kill a run the 27B model needs.
+  const baseTimeoutMs = Math.max(timeoutMs ?? DEFAULT_TIMEOUT_MS, MIN_TIMEOUT_MS);
+  const totalTimeoutMs = baseTimeoutMs + (extensions && extensions.length ? EXTENSION_BONUS_TIMEOUT_MS : 0);
 
   // Slot acquisition is cross-process and async: every task starts "queued"
   // (watchdog-exempt, no budget ticking) and flips to "executing" only when it
@@ -1140,7 +1151,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           killProcessTree(child);
           finish(
             true,
-            `Total Budget Timeout: Reached maximum execution budget of ${Math.round(totalTimeoutMs / 1000)}s (1 hour).`
+            `Total Budget Timeout: Reached maximum execution budget of ${Math.round(totalTimeoutMs / 1000)}s (${Math.round(totalTimeoutMs / 60000)} min).`
           );
         }
       }, 5000);
@@ -1165,7 +1176,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     });
   }, taskEntry);
 
-  return { taskId, taskEntry, executionPromise };
+  return { taskId, taskEntry, executionPromise, totalTimeoutMs };
 }
 
 // -----------------------------------------------------------------------------
@@ -1203,14 +1214,14 @@ server.registerTool(
       test_command: z.string().optional().describe("Optional verification test/benchmark command (e.g. 'pytest tests/test_core.py')"),
       metric_name: z.string().optional().describe("Target metric name in benchmark output (e.g. 'throughput', 'accuracy')"),
       higher_is_better: z.boolean().optional().describe("Whether higher metric values represent improvement (default true)"),
-      timeout_ms: z.number().int().positive().optional().describe("Task timeout in ms (default 3,600,000ms / 1 hour with stream heartbeat)"),
+      timeout_ms: z.number().int().positive().optional().describe("Task timeout in ms (default 3,600,000ms (1 hour), minimum 600,000ms (10 min) - budgets are floored because a 27B model on consumer silicon routinely needs tens of minutes)"),
     },
   },
   async ({ prompt, session_id, cwd, extensions, hypothesis, test_command, metric_name, higher_is_better, timeout_ms }) => {
     const workingDir = normalizeWorkspacePath(cwd ?? process.cwd());
     const resolvedSession = resolveSessionId(workingDir, session_id);
 
-    const { taskId, taskEntry, executionPromise } = startGooseTask({
+    const { taskId, taskEntry, executionPromise, totalTimeoutMs } = startGooseTask({
       cwd: workingDir,
       prompt,
       sessionId: resolvedSession,
@@ -1222,8 +1233,12 @@ server.registerTool(
       higherIsBetter: higher_is_better,
     });
 
-    const raceTimer = new Promise((resolve) => setTimeout(() => resolve({ timedOutOnClientRace: true }), RACE_MS));
+    let raceHandle;
+    const raceTimer = new Promise((resolve) => {
+      raceHandle = setTimeout(() => resolve({ timedOutOnClientRace: true }), RACE_MS);
+    });
     const winner = await Promise.race([executionPromise, raceTimer]);
+    clearTimeout(raceHandle); // no-op if the race timer already fired
 
     if (!winner.timedOutOnClientRace) {
       return {
@@ -1240,7 +1255,7 @@ server.registerTool(
       `- **Task ID**: \`${taskId}\``,
       `- **Session**: \`${resolvedSession}\``,
       `- **Working Directory**: \`${workingDir}\``,
-      `- **Time Elapsed**: ${elapsedSec}s (Task continuing in background with 1-hour budget)`,
+      `- **Time Elapsed**: ${elapsedSec}s (Task continuing in background with ${Math.round(totalTimeoutMs / 60000)} min budget)`,
       ``,
       `> [!TIP]`,
       `> **Zero-Turn Reactive Wait**: Execute the following command via \`run_command\` (or background shell). It will sleep at $0 token cost and automatically wake you when Qwen completes:`,
@@ -1314,8 +1329,13 @@ server.registerTool(
 
     if (action === "status") {
       if (task.done) {
+        // Structured one-line header first so status inquiries always surface
+        // task state even when the stored result text starts with an error
+        // message (e.g. "Total Budget Timeout: ...").
+        const elapsedS = Math.round(((task.finishedAt || Date.now()) - (task.startedAt || task.createdAt)) / 1000);
+        const header = `[qwen task] id=${task.id} status=${task.status} elapsed_s=${elapsedS} isError=${task.isError}`;
         return {
-          content: [{ type: "text", text: task.result?.text || "Task completed." }],
+          content: [{ type: "text", text: `${header}\n${task.result?.text || "Task completed."}` }],
           isError: task.isError,
         };
       }
