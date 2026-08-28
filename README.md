@@ -2,7 +2,7 @@
 
 Local-first LLM delegation stack: Claude Sonnet 5 (in Claude Code) / Gemini 3.7 Flash (in Antigravity IDE) orchestrates as the **Lead Architect / Meta-Supervisor**, while a locally-served **Qwen3.8-27B** (vLLM + DFlash2 + KVarN @ 245K context) executes bounded implementation tasks for free ($0 token cost) via the **Goose Agent Harness** as the **Autonomous Variation & Execution Operator (Coworker)**.
 
-Agent-facing rules and invariant protocols live in [CLAUDE.md](CLAUDE.md) (and its mirrors at `~/.claude/CLAUDE.md` and `~/.gemini/GEMINI.md` across Windows and WSL). This document serves as the comprehensive human-readable architectural specification, benchmark reference, and operational guide.
+Agent-facing rules and invariant protocols live in the global user memory at `~/.claude/CLAUDE.md` (mirrored to `~/.gemini/GEMINI.md` across Windows and WSL; loaded into every session, so no project-level copy is kept in this repo). This document serves as the comprehensive human-readable architectural specification, benchmark reference, and operational guide.
 
 ---
 
@@ -10,9 +10,6 @@ Agent-facing rules and invariant protocols live in [CLAUDE.md](CLAUDE.md) (and i
 
 ```
 D:\LLM_Ecosystem\
-├── CLAUDE.md                   Agent rules: hierarchical NVIDIA AVO & multi-agent
-│                               protocol (Aug 2026 SOTA - roles, execution contracts,
-│                               tool suite, single source of truth)
 ├── README.md                   This architecture & operational specification
 ├── scripts\                    Windows-side launchers & automation drivers
 │   ├── avo_runner.py           NVIDIA AVO loop driver: reads .avo/lineage.json,
@@ -245,7 +242,7 @@ python .\scripts\avo_runner.py --cwd "D:\path\to\target_repo" --metric "benchmar
 
 ## 9. Key References
 
-- [CLAUDE.md](CLAUDE.md) — Hierarchical NVIDIA AVO & Multi-Agent Protocol.
+- `~/.claude/CLAUDE.md` — Hierarchical NVIDIA AVO & Multi-Agent Protocol (global user memory, not tracked in this repo).
 - [mcp-qwen/NOTES.md](mcp-qwen/NOTES.md) — Investigation history, architecture design records, and engineering changelog.
 - [benchmarks/swe-rebench/](benchmarks/swe-rebench/) — Benchmark harness and evaluation results.
 - [DFlash2: Non-Autoregressive Block Speculative Decoding](https://inco.ai/blog/dflash2/)
