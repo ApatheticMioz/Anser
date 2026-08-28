@@ -40,7 +40,7 @@ D:\LLM_Ecosystem\
 │       └── wait_qb.sh          Batch queue waiter
 ├── llama-cpp\                  Native Windows CUDA build of llama.cpp (serves
 │                               scripts\uncensored\ GGUF models on Windows)
-├── mcp-qwen\                   MCP Server (Node.js v4.1.0) exposing local Qwen to orchestrators
+├── mcp-qwen\                   MCP Server (Node.js v4.2.0) exposing local Qwen to orchestrators
 │   ├── index.js                3 consolidated SOTA tools (qwen_coworker, qwen_task,
 │   │                           qwen_server), zero-turn wait HTTP server @ localhost:18021,
 │   │                           FIFO task queue (MAX_CONCURRENT_GOOSE=1), and WSL path routing
@@ -77,7 +77,7 @@ User <───> Meta-Supervisor / Lead Architect
                                │  - qwen_server (status, start, stop)
                                ▼
             ┌─────────────────────────────────────────────────────────┐
-            │  mcp-qwen/index.js (v4.1.0 Unified MCP Server)           │
+            │  mcp-qwen/index.js (v4.2.0 Unified MCP Server)           │
             │  ├── 45s Sync Race (fast tasks return Turn 1 directly)   │
             │  ├── Background Task Manager (~/.qwen/tasks/ JSON)       │
             │  ├── FIFO Execution Queue (MAX_CONCURRENT_GOOSE=1)       │
@@ -155,9 +155,11 @@ Manages and queries coworker task execution across memory and disk (`~/.qwen/tas
   - `task_id` *(string, optional)*: Specific task ID for status or cancellation.
 
 ### `qwen_server`
-Controls the local 245K vLLM server instance lifecycle.
+Controls the local 245K vLLM server instance lifecycle, with engine-core wedge detection.
 - **Parameters**:
   - `action` *(enum: `"status"` | `"start"` | `"stop"`, required)*.
+- **Wedge detection**: the port answering is *not* proof of health — a hung engine core keeps `/v1/models` at 200 while every completion is accepted and never scheduled (2026-08-28: 4.5h hang, GPU pegged at 100%, every task killed at the 601s inactivity watchdog with zero stream chunks). Status reads the engine's unconditional 10s stats lines (`/tmp/mcp_launch_huge.log`): >120s of stats silence while the port answers = wedged → automatic kill + relaunch (cross-instance-guarded via `~/.qwen/tasks/.engine_heal.lock`; disable with `QWEN_AUTO_HEAL=0`, tune threshold with `QWEN_WEDGE_SILENCE_S`). Status also reports live gauges — running/waiting requests, KV cache %, engine-stats age. `qwen_coworker` runs the same gate before every dispatch, so a dispatch into a wedged engine self-heals instead of hanging.
+- **First-Token Timeout** (on `qwen_coworker`): if goose emits zero output within 120s of spawn (`QWEN_FIRST_TOKEN_TIMEOUT_MS`), the task fails fast with an explicit "engine wedged or saturated, no work performed" message — distinct from the 600s mid-stream inactivity heartbeat, which only applies after streaming has begun.
 
 ---
 

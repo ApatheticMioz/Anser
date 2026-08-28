@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.1.0)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.2.0)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
@@ -41,6 +41,14 @@ const RACE_MS = process.env.QWEN_RACE_MS
 const DEFAULT_TIMEOUT_MS = 3_600_000;
 // Inactivity Heartbeat: Kill only if process produces 0 stream chunks for 10 minutes
 const INACTIVITY_TIMEOUT_MS = 600_000;
+// First-Token Timeout: fail fast when goose emits NO output at all shortly after spawn.
+// A healthy engine streams the first chunk within seconds even under load; a wedged or
+// fully saturated engine core delivers nothing (2026-08-28: requests sat 601s with zero
+// chunks while the GPU spun at 100% on a hung engine core). Only runs after the goose
+// child actually spawns - queued tasks have no watchdog at all.
+const FIRST_TOKEN_TIMEOUT_MS = process.env.QWEN_FIRST_TOKEN_TIMEOUT_MS
+  ? parseInt(process.env.QWEN_FIRST_TOKEN_TIMEOUT_MS, 10)
+  : 120_000;
 const EXTENSION_BONUS_TIMEOUT_MS = 600_000;
 const TASK_RETENTION_MS = 10_800_000; // 3 hours
 
@@ -203,7 +211,23 @@ async function currentMode() {
 
 async function ensureServerRunning() {
   const current = await currentMode();
-  if (current) return { switched: false, status: "already_running" };
+  if (current) {
+    // Port answering is NOT health: a wedged engine core keeps /v1/models at 200
+    // while swallowing every completion (2026-08-28 incident). Gate on engine
+    // stats freshness before declaring "running".
+    const wedge = await engineWedgeState();
+    if (wedge.wedged) {
+      if (!AUTO_HEAL) {
+        return {
+          switched: false,
+          status: `already_running_wedged (${wedge.stats.ageSec}s engine-stats silence; auto-heal disabled via QWEN_AUTO_HEAL=0)`,
+        };
+      }
+      const heal = await healWedgedEngine(wedge.stats.ageSec);
+      return { switched: true, status: `restarted_wedged_engine (${wedge.stats.ageSec}s stats silence)`, heal };
+    }
+    return { switched: false, status: "already_running" };
+  }
   await runWslCommand(
     `cd ~/qwen-serving && nohup bash launchers/start_huge.sh > /tmp/mcp_launch_huge.log 2>&1 < /dev/null & disown; sleep 1; true`
   );
@@ -464,6 +488,92 @@ function cleanOldTasks() {
 }
 
 setInterval(cleanOldTasks, 300_000);
+
+// -----------------------------------------------------------------------------
+// Engine Health: wedge detection (2026-08-28 incident follow-up)
+//
+// vLLM prints an "Engine 000: ... Running: N reqs, Waiting: M reqs, GPU KV cache
+// usage: X%" stats line every 10 seconds unconditionally - idle or busy, boot
+// complete onward. When the engine CORE hangs (observed once: 4.5h, during a
+// ~100k-token-context DFlash2 decode that stalled 13 -> 0 tok/s), the API process
+// stays up: the port answers, /v1/models returns 200, but stats go silent and every
+// chat completion is accepted-then-never-scheduled. Goose then produces zero stream
+// chunks until the watchdog kills it, while the GPU sits at 100% doing nothing.
+// Stats silence past the threshold below = wedged, independent of load (a busy
+// engine still prints stats; only a stuck core loop goes quiet).
+// -----------------------------------------------------------------------------
+const ENGINE_LOG_PATH = "/tmp/mcp_launch_huge.log";
+const WEDGE_STATS_SILENCE_S = process.env.QWEN_WEDGE_SILENCE_S
+  ? parseInt(process.env.QWEN_WEDGE_SILENCE_S, 10)
+  : 120;
+const AUTO_HEAL = process.env.QWEN_AUTO_HEAL !== "0";
+const HEAL_LOCK_FILE = path.join(TASK_DIR, ".engine_heal.lock");
+const HEAL_LOCK_TTL_MS = 5 * 60_000; // one full boot budget
+
+async function readLastEngineStatsLine() {
+  try {
+    const { stdout } = await runWslCommand(
+      `grep -a 'Engine 000:.*Running:' ${ENGINE_LOG_PATH} 2>/dev/null | tail -1`
+    );
+    const line = stdout.trim();
+    return line || null;
+  } catch {
+    return null;
+  }
+}
+
+// Log timestamps ("INFO 08-28 19:21:46") are WSL-local; the WSL clock matches the
+// Windows clock on this box (verified against the 2026-08-28 incident timeline).
+function parseEngineStats(line) {
+  const ts = line.match(/(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+  if (!ts) return null;
+  const now = new Date();
+  const stamp = new Date(
+    now.getFullYear(),
+    Number(ts[1]) - 1,
+    Number(ts[2]),
+    Number(ts[3]),
+    Number(ts[4]),
+    Number(ts[5])
+  );
+  return {
+    ageSec: Math.max(0, Math.round((now.getTime() - stamp.getTime()) / 1000)),
+    runningReqs: Number(line.match(/Running: (\d+) reqs/)?.[1] ?? -1),
+    waitingReqs: Number(line.match(/Waiting: (\d+) reqs/)?.[1] ?? -1),
+    kvCachePct: Number(line.match(/GPU KV cache usage: ([\d.]+)%/)?.[1] ?? -1),
+  };
+}
+
+async function engineWedgeState() {
+  const line = await readLastEngineStatsLine();
+  if (!line) return { wedged: false, stats: null }; // booting, or log rotated/absent
+  const stats = parseEngineStats(line);
+  if (!stats) return { wedged: false, stats: null };
+  return { wedged: stats.ageSec > WEDGE_STATS_SILENCE_S, stats };
+}
+
+// Kill + reboot a wedged engine. Every Claude surface runs its own copy of this
+// server process, so a stamp file (not an in-process lock) prevents two instances
+// from double-rebooting vLLM within one boot budget.
+async function healWedgedEngine(statsAgeSec) {
+  let lock = null;
+  try {
+    lock = JSON.parse(fs.readFileSync(HEAL_LOCK_FILE, "utf8"));
+  } catch {}
+  if (lock && Date.now() - lock.at < HEAL_LOCK_TTL_MS) {
+    return {
+      healed: false,
+      note: `heal already started ${Math.round((Date.now() - lock.at) / 1000)}s ago by pid ${lock.pid}; boot in progress`,
+    };
+  }
+  try {
+    fs.mkdirSync(TASK_DIR, { recursive: true });
+    fs.writeFileSync(HEAL_LOCK_FILE, JSON.stringify({ at: Date.now(), pid: process.pid, statsAgeSec }));
+  } catch {}
+  await stopServer();
+  const res = await ensureServerRunning();
+  return { healed: true, boot: res.status };
+}
 
 function notifyWaiters(task) {
   saveTaskToDisk(task);
@@ -792,10 +902,12 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
       taskEntry.child = child;
 
+      let receivedAnyOutput = false;
       let lineBuf = "";
       let lastSaveAt = Date.now();
       child.stdout.on("data", (chunk) => {
         lastActivityAt = Date.now();
+        receivedAnyOutput = true;
         lineBuf += chunk.toString("utf8");
         const chunkLines = lineBuf.split("\n");
         lineBuf = chunkLines.pop() ?? "";
@@ -827,6 +939,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
       child.stderr.on("data", (chunk) => {
         lastActivityAt = Date.now();
+        receivedAnyOutput = true;
         stderr += chunk.toString("utf8");
         if (stderr.length > 50_000) {
           stderr = stderr.slice(-50_000);
@@ -906,7 +1019,14 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         const inactiveMs = now - lastActivityAt;
         const totalElapsedMs = now - taskEntry.startedAt;
 
-        if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
+        if (!receivedAnyOutput && inactiveMs >= FIRST_TOKEN_TIMEOUT_MS) {
+          clearInterval(watchdog);
+          killProcessTree(child);
+          finish(
+            true,
+            `First-Token Timeout: Goose produced zero stream output for ${Math.round(inactiveMs / 1000)}s after spawn - the vLLM engine core is wedged or fully saturated. No work was performed. Check qwen_server status (engine stats silence >${WEDGE_STATS_SILENCE_S}s = wedged; auto-heal reboots it); safe to re-dispatch once healthy.`
+          );
+        } else if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
           clearInterval(watchdog);
           killProcessTree(child);
           finish(
@@ -1157,7 +1277,8 @@ server.registerTool(
   "qwen_server",
   {
     title: "Manage Local Qwen3.8-27B vLLM Instance Lifecycle",
-    description: "Check status, start, or stop the universal 245K context vLLM server in WSL Ubuntu.",
+    description:
+      "Check status, start, or stop the universal 245K context vLLM server in WSL Ubuntu. Status includes live engine gauges (running/waiting requests, KV cache %, engine-stats age) and detects engine-core wedges - the port answering is NOT proof of health, stats silence >120s while the port answers is. A detected wedge auto-reboots the server unless QWEN_AUTO_HEAL=0. qwen_coworker dispatches run the same check before every task.",
     inputSchema: {
       action: z.enum(["status", "start", "stop"]).describe("Lifecycle action to perform"),
     },
@@ -1166,17 +1287,44 @@ server.registerTool(
     if (action === "status") {
       const info = await serverInfo();
       const running = !!info;
+      const wedge = running ? await engineWedgeState() : { wedged: false, stats: null };
+      let autoHeal = null;
+      if (running && wedge.wedged && AUTO_HEAL) {
+        try {
+          autoHeal = await healWedgedEngine(wedge.stats.ageSec);
+        } catch (err) {
+          autoHeal = { healed: false, error: err.message };
+        }
+      }
+      const statusLabel = !running
+        ? "stopped"
+        : wedge.wedged
+          ? autoHeal?.healed
+            ? "wedged_restarted"
+            : "wedged"
+          : "running";
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
               {
-                status: running ? "running" : "stopped",
+                status: statusLabel,
                 endpoint: BASE_URL,
                 max_model_len: running ? info.maxModelLen : null,
                 context_window_nominal: MAX_LEN_HUGE,
                 stack: "vLLM + DFlash2 + KVarN (Universal 245K)",
+                engine: running
+                  ? {
+                      running_requests: wedge.stats?.runningReqs ?? null,
+                      waiting_requests: wedge.stats?.waitingReqs ?? null,
+                      kv_cache_pct: wedge.stats?.kvCachePct ?? null,
+                      engine_stats_age_seconds: wedge.stats?.ageSec ?? null,
+                      wedge_detected: wedge.wedged,
+                      wedge_threshold_seconds: WEDGE_STATS_SILENCE_S,
+                      auto_heal: autoHeal,
+                    }
+                  : null,
                 status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
                 status_endpoint_owned_by_this_instance: statusServerOwned,
               },
@@ -1193,7 +1341,7 @@ server.registerTool(
         content: [
           {
             type: "text",
-            text: JSON.stringify({ status: "running", result: res.status, endpoint: BASE_URL, context: MAX_LEN_HUGE }, null, 2),
+            text: JSON.stringify({ status: "running", result: res.status, heal: res.heal ?? null, endpoint: BASE_URL, context: MAX_LEN_HUGE }, null, 2),
           },
         ],
       };

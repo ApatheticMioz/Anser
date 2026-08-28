@@ -795,4 +795,75 @@ workspaces; powershell -NoProfile invocation guidance) was audited and kept
 - it replaces the single-line shell-mismatch counter-instruction from the
 2026-08-23 session-1 entry with a structured set of directives.
 
+## Engine-core wedge incident; wedge detection + first-token timeout (2026-08-28, v4.2.0)
+
+The ">10min MCP failure with GPU at 100%" incident, root-caused entirely from
+on-disk traces: vLLM engine log (`/tmp/mcp_launch_huge.log` in WSL), goose
+per-request logs (`%APPDATA%\Block\goose\data\logs\llm_request.*.jsonl` — **1 line
+= request sent, zero chunks ever received; multi-line = streamed/healthy**), task
+state (`~/.qwen/tasks/`), and the per-surface MCP client logs under
+`claude-cli-nodejs\Cache\<project>\mcp-logs-qwen38-local\`.
+
+**Timeline (local time):** vLLM booted 13:29. A heavy large-context goose session
+ran 14:03–14:32 (240–370KB request logs ≈ 60–90k-token prompts, streaming
+normally). One such request settled into `Running: 1 reqs` at 13.7 tok/s (vs the
+77–133 spec) holding 39.9% of the KV pool (~107k tokens), decayed to 0.0 tok/s by
+14:29:06, and stayed "Running" and silent for 20+ min. From 14:42 new requests
+received zero response chunks. ~14:51 the engine stats loop itself went silent —
+vLLM prints an `Engine 000: ... Running:` stats line every 10s *unconditionally*
+(idle or busy), so a 4.5h gap in those lines is the engine core hung, while the
+API process stayed up (port answered, requests accepted then never scheduled) and
+the GPU sat at 100%/24.1GB generating nothing. Both audit dispatches (18:56:39,
+19:07:33) hit this: goose sent a well-formed streaming request, received zero SSE
+chunks, emitted zero stdout/stderr, and the 600s inactivity watchdog killed each
+at exactly 601s with `toolCallsCount: 0` — the caller's DB-timeout retry theory
+was wrong; no tool ever ran. ~19:21 the core spontaneously unwedged (a 69s "OK"
+health check squeezed through at 5.5 tok/s), after which the orchestrating session
+deliberately stopped vLLM via `qwen_server stop`.
+
+**Root cause, status:** engine-core deadlock during DFlash2 speculative decode of
+a ~100k-token context. Prime suspect `VLLM_DFLASH2_CHAIN=1` (enabled in eeb138c
+at 2026-08-28 00:42; this was the first heavy long-context day under the flag) —
+one day of correlation, not proof. User decision: **keep CHAIN enabled, add
+detection instead**. The 4-bit-K/2-bit-V + speculative-decoding risk class
+(arXiv 2606.09864, noted in the serving-stack entry above) remains the adjacent
+suspect. Ruled out: the MCP server, goose, Claude Code timeouts, the prompts.
+
+**Fixes (v4.2.0):**
+
+1. **Engine wedge detection + auto-heal.** Port-answering was the only health
+   signal and it passes while the core is dead. `engineWedgeState()` reads the
+   last stats line from the engine log via WSL and declares a wedge at >120s of
+   silence (`QWEN_WEDGE_SILENCE_S`); a busy engine still prints stats, so the
+   signal is load-independent. `qwen_server status` now reports live gauges
+   (running/waiting reqs, KV %, stats age) and auto-reboots on wedge
+   (`QWEN_AUTO_HEAL=0` disables); `ensureServerRunning` runs the same gate before
+   every dispatch, so `qwen_coworker` self-heals instead of hanging 600s. Heal is
+   cross-instance-guarded with a stamp file (`~/.qwen/tasks/.engine_heal.lock`,
+   5min TTL) because every Claude surface runs its own copy of this server —
+   in-process locks do not serialize them.
+2. **First-Token Timeout (120s, `QWEN_FIRST_TOKEN_TIMEOUT_MS`).** Distinct from
+   the 600s mid-stream heartbeat: zero goose output within 120s of spawn → kill
+   and fail with an explicit "engine wedged or saturated, no work performed"
+   message. A wedged engine previously cost 10 min of GPU burn per attempt.
+3. **No DFlash2/CHAIN change and no context cap** (user decisions): 245K context
+   is the point of the stack; 100k-context ingestion stays allowed. Open perf
+   question for a later upstream check: ~100k-ctx decode ran at 13 tok/s even
+   before stalling.
+
+**Queue semantics confirmed while in here** (answers a standing multi-session
+question): `MAX_CONCURRENT_GOOSE=1` is per-MCP-server-process, and each Claude
+session/surface spawns its own process — so N sessions run up to N concurrent
+goose processes against the engine's MAX_SEQS=8; only same-session calls
+FIFO-serialize. Queued tasks are **never** heartbeat-killed: `startedAt` is null
+while queued (set only at dequeue) and the watchdog lives inside the spawned task,
+so neither the 600s heartbeat nor the 1h budget ticks while queued. The one real
+cross-session hazard is engine saturation (N × ~100k contexts > the 268k KV pool →
+later requests wait at the engine for their first chunk) — previously that
+silently became a 601s kill; it is now the 120s first-token kill, with the status
+gauges to tell saturation (Running/Waiting high) from a wedge (stats silent).
+
+MCP server processes pick this up only after the owning session restarts its MCP
+connection — running sessions keep the old code until then.
+
 
