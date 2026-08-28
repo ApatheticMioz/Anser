@@ -1,301 +1,248 @@
 # LLM_Ecosystem
 
-Local-first LLM delegation stack: Claude Sonnet 5 (in Claude Code / Antigravity)
-orchestrates, a locally-served Qwen3.8-27B does the bounded implementation work
-for free via a real agentic harness (Goose). Agent-facing rules live in
-[CLAUDE.md](CLAUDE.md) (and its mirrors at `~/.claude/CLAUDE.md` and
-`~/.gemini/GEMINI.md` on both Windows and WSL) — this file is the human-readable
-map and model/architecture reference; it is not loaded into any agent's context
-automatically.
+Local-first LLM delegation stack: Claude Sonnet 5 (in Claude Code) / Gemini 3.7 Flash (in Antigravity IDE) orchestrates as the **Lead Architect / Meta-Supervisor**, while a locally-served **Qwen3.8-27B** (vLLM + DFlash2 + KVarN @ 245K context) executes bounded implementation tasks for free ($0 token cost) via the **Goose Agent Harness** as the **Autonomous Variation & Execution Operator (Coworker)**.
 
-## Layout
+Agent-facing rules and invariant protocols live in [CLAUDE.md](CLAUDE.md) (and its mirrors at `~/.claude/CLAUDE.md` and `~/.gemini/GEMINI.md` across Windows and WSL). This document serves as the comprehensive human-readable architectural specification, benchmark reference, and operational guide.
+
+---
+
+## 1. Repository Layout
 
 ```
 D:\LLM_Ecosystem\
-├── CLAUDE.md              agent rules: hierarchical NVIDIA AVO & multi-agent
-│                             protocol (Aug 2026 SOTA - roles, execution contracts,
-│                             tool suite, single source of truth)
-├── README.md               this file
-├── scripts\                 Windows-side launchers, one subfolder per model
-│   │                         (reorganized 2026-08-24: grouped by model so
-│   │                         alphabetical sort clusters related files instead
-│   │                         of interleaving start/stop/status across models)
-│   ├── avo_runner.py          NVIDIA AVO loop driver: one round per invocation -
-│   │                           reads .avo/lineage.json, asks the local model for
-│   │                           the next hypothesis, emits a qwen_coworker dispatch
-│   │                           packet under .avo/avq/
-│   ├── main\                  the delegation model (MCP/Goose-wired)
-│   │   ├── start.bat            default entry point -> start_huge.bat
-│   │   ├── start_huge.bat        CTX=huge, 245,760 ctx, ~77-133 tok/s
-│   │   ├── start_fast.bat        CTX=fast, 57,344 ctx, ~107-130 tok/s (rare)
-│   │   └── stop.bat
-│   ├── status.bat             unified - checks BOTH models below (they share
-│   │                           port 18020; only one is ever up at a time)
-│   ├── wsl\                   the same launchers as WSL bash scripts - the .bat
-│   │                           files just call them via wsl -d Ubuntu;
-│   │                           setup_links.sh symlinks them into
-│   │                           ~/qwen-serving/launchers (wait_ready/run_qb/
-│   │                           wait_qb are home-level helpers)
-│   └── uncensored\            manual/academic-use only, NOT MCP-wired
-│       ├── download_model.sh    one-time GGUF fetch into WSL (already run)
-│       ├── start.bat            reasoning on
-│       ├── start_noreason.bat    reasoning off (-rea off)
-│       └── stop.bat
-├── llama-cpp\                native Windows CUDA build of llama.cpp (serves
-│                             scripts\uncensored\ - vLLM can't load that
-│                             model's GGUF architecture, see CLAUDE.md)
-├── mcp-qwen\                the MCP server (Node.js) exposing the main model to any MCP client
-│   ├── index.js               3 consolidated SOTA tools: qwen_coworker (agent
-│   │                           + AVO fields), qwen_task (status/cancel/list),
-│   │                           qwen_server (lifecycle); zero-turn long-poll
-│   │                           wait HTTP endpoint @ localhost:18021
-│   ├── avo_engine.js          AVO lineage engine (git-grounded candidate records
+├── CLAUDE.md                   Agent rules: hierarchical NVIDIA AVO & multi-agent
+│                               protocol (Aug 2026 SOTA - roles, execution contracts,
+│                               tool suite, single source of truth)
+├── README.md                   This architecture & operational specification
+├── scripts\                    Windows-side launchers & automation drivers
+│   ├── avo_runner.py           NVIDIA AVO loop driver: reads .avo/lineage.json,
+│   │                           queries local Qwen for candidate hypotheses, and emits
+│   │                           qwen_coworker dispatch packets under .avo/avq/
+│   ├── status.bat              Unified service checker (checks port 18020 & 18021)
+│   ├── main\                   Delegation stack launchers (vLLM + MCP + Goose)
+│   │   ├── start.bat           Default entry point -> start_huge.bat
+│   │   ├── start_huge.bat      CTX=huge (245,760 ctx, DFlash2 chained, KVarN k4v2)
+│   │   ├── start_fast.bat      CTX=fast (57,344 ctx, ~107-130 tok/s, fp8 cache)
+│   │   └── stop.bat            Stops the active vLLM instance
+│   ├── uncensored\             Manual / academic-use model (NOT MCP-wired)
+│   │   ├── download_model.sh   One-time GGUF fetch into WSL
+│   │   ├── start.bat           Starts llama-server on port 18020 (reasoning ON)
+│   │   ├── start_noreason.bat  Starts llama-server (reasoning OFF: -rea off)
+│   │   └── stop.bat            Stops llama-server
+│   └── wsl\                    WSL bash equivalents invoked by the .bat scripts
+│       ├── setup_links.sh      Symlinks launchers into ~/qwen-serving/launchers
+│       ├── start_huge.sh       vLLM huge context launcher (VLLM_DFLASH2_CHAIN=1)
+│       ├── start_fast.sh       vLLM fast context launcher
+│       ├── status.sh           WSL-side health & port check
+│       ├── stop.sh             WSL-side process terminator
+│       ├── wait_ready.sh       Startup readiness polling loop
+│       ├── run_qb.sh           Batch prompt helper
+│       └── wait_qb.sh          Batch queue waiter
+├── llama-cpp\                  Native Windows CUDA build of llama.cpp (serves
+│                               scripts\uncensored\ GGUF models on Windows)
+├── mcp-qwen\                   MCP Server (Node.js v4.1.0) exposing local Qwen to orchestrators
+│   ├── index.js                3 consolidated SOTA tools (qwen_coworker, qwen_task,
+│   │                           qwen_server), zero-turn wait HTTP server @ localhost:18021,
+│   │                           FIFO task queue (MAX_CONCURRENT_GOOSE=1), and WSL path routing
+│   ├── avo_engine.js           AVO lineage engine (git-grounded candidate records
 │   │                           in <cwd>/.avo/lineage.json)
-│   ├── NOTES.md               full investigation history / rationale for every decision
-│   ├── mcp_client_test.js
-│   ├── update_schemas.py      regenerates the per-tool JSON schemas into the
-│   │                           Antigravity IDE MCP directory
-│   └── package.json
+│   ├── test_fifo_queue.js      Automated test suite for serialized task execution
+│   ├── mcp_client_test.js      MCP client connectivity & protocol test harness
+│   ├── update_schemas.py       Regenerates per-tool JSON schemas into Antigravity IDE
+│   ├── NOTES.md                Complete engineering decisions, benchmark logs & changelog
+│   └── package.json            Dependencies (@modelcontextprotocol/sdk, zod)
 ├── benchmarks\
-│   └── swe-rebench\           Goose+Qwen validated against a contamination-resistant
-│                               benchmark (SWE-rebench, not SWE-bench Verified/Pro -
-│                               both retired by OpenAI for training-data leakage). See
-│                               benchmarks/swe-rebench/README.md for the full pipeline.
-├── .venv\                   standalone Open WebUI install (unrelated to the MCP
-│                             stack - a browser chat UI for the same vLLM endpoint,
-│                             not touched by anything in mcp-qwen or CLAUDE.md)
-├── .webui_secret_key        Open WebUI's session secret
-├── .mcp.json                empty ({"mcpServers": {}}) - MCP registration is done
-│                             globally (Claude Desktop config / ~/.gemini config),
-│                             not per-project; kept for compatibility, does nothing
-└── .claude\                  Claude Code harness state (scheduled-task lock), not
-                              hand-edited
+│   └── swe-rebench\            Contamination-resistant validation benchmark pipeline
+│                               (March 2026 split, Docker-graded, 32.0% resolved rate)
+├── .venv\                      Standalone Open WebUI Python environment (optional Web UI)
+├── .webui_secret_key           Open WebUI session secret key
+├── .mcp.json                   Local MCP placeholder configuration
+└── .claude\                    Claude Code harness state
 ```
 
-The actual vLLM server, model weights, and all serving scripts for the main
-model live outside this tree, in WSL Ubuntu at `~/qwen-serving` (a fork of
-[syv-ai/qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090),
-kept in sync via `git pull`). `mcp-qwen/index.js` and `scripts/main/*.bat` are
-the Windows-side control surface for it.
+> [!NOTE]
+> The vLLM server, model weights, and backend serving codebase live in WSL Ubuntu at `~/qwen-serving` (a fork of [syv-ai/qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)). `mcp-qwen/index.js` and `scripts/main/*.bat` provide the unified Windows-side management and agentic bridge.
 
-The uncensored model's weights live in WSL at `~/qwen-uncensored/model/` (GGUF
-files, no vLLM recipe involved), but are served by `llama-cpp\llama-server.exe`
-running natively on Windows, not from inside WSL - see CLAUDE.md's "Second
-model" section for why. It is a separate, manual-use-only model, not part of
-the Sonnet→Goose→Qwen delegation path described below.
+---
 
-## Architecture
+## 2. System Architecture
 
 ```
-User <-> Claude Sonnet 5 (Claude Code / Antigravity, orchestrator)
-             |
-             | MCP (stdio): qwen_coworker / qwen_task / qwen_server
-             |   (mcp-qwen/index.js) - tasks under 45s return the deliverable in
-             |   Turn 1; longer tasks yield a taskId + wait_command (long-poll on
-             |   the MCP server's own HTTP endpoint, localhost:18021) which
-             |   blocks at $0 token cost and wakes the caller on completion
-             v
-        Goose (block/goose, Rust binary) - spawned as a subprocess per call
-        (persistent named sessions with disk-grounded --resume), real agentic
-        loop: file/edit/shell tools + any attached MCP server
-        (free-search-mcp, context7, gh CLI, ...)
-             |
-             | OpenAI-compatible /v1/chat/completions
-             v
-        vLLM server (WSL Ubuntu, port 18020) - Qwen3.8-27B, Universal 245K
-        context (DFlash2 speculative decoding, KVarN 4/2-bit KV cache,
-        prefix caching - persistent sessions reuse the cached KV)
-             |
-             v
-        RTX 3090, 24 GB, 250 W power limit
+User <───> Meta-Supervisor / Lead Architect
+            (Claude Sonnet 5 in Claude Code / Gemini 3.7 Flash in Antigravity)
+                               │
+                               │  MCP (stdio) - 3 Consolidated Tools:
+                               │  - qwen_coworker (prompt, session_id, cwd, extensions, avo)
+                               │  - qwen_task (status, cancel, list)
+                               │  - qwen_server (status, start, stop)
+                               ▼
+            ┌─────────────────────────────────────────────────────────┐
+            │  mcp-qwen/index.js (v4.1.0 Unified MCP Server)           │
+            │  ├── 45s Sync Race (fast tasks return Turn 1 directly)   │
+            │  ├── Background Task Manager (~/.qwen/tasks/ JSON)       │
+            │  ├── FIFO Execution Queue (MAX_CONCURRENT_GOOSE=1)       │
+            │  ├── Native WSL / Windows Path Routing & UNC Sanitizer   │
+            │  └── Zero-Turn HTTP Wait Endpoint (localhost:18021)      │
+            └─────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+            Goose Agent Harness (block/goose Rust binary)
+            - Spawned per task with persistent named sessions (--resume)
+            - Autonomous tool loop: file edit, AST rewrite, bash/cmd execution
+            - Attached extensions: free-search-mcp, context7, gh CLI
+                               │
+                               │  OpenAI-compatible API (/v1/chat/completions)
+                               ▼
+            vLLM Engine (WSL Ubuntu @ port 18020)
+            - Qwen3.8-27B (W4A16 AutoRound, dense hybrid architecture)
+            - DFlash2 1.92B Block Drafter (VLLM_DFLASH2_CHAIN=1, 7 draft tok)
+            - Lookup-Augmented Speculation (VLLM_DFLASH2_LOOKUP*)
+            - KVarN k4v2 KV Cache (245,760 context ceiling)
+            - Prefix Caching enabled (KV reuse across session turns)
+                               │
+                               ▼
+            NVIDIA GeForce RTX 3090 (24 GB VRAM @ 250W Power Cap)
 ```
 
-Sonnet decomposes work into bounded tasks and dispatches them to Qwen via
-`qwen_coworker`; the MCP server enforces the execution contract (45s sync
-race, 1-hour budget with a 10-minute stream-inactivity watchdog,
-disk-grounded session resume for prefix-cache reuse), and the lead verifies
-results against disk itself. Qwen is instructed not to self-run
-build/typecheck/test; in AVO-style optimization loops the verification test
-instead runs in the MCP server's own process after the Goose run, with the
-outcome recorded in the git-grounded lineage by `avo_engine.js`. This keeps
-Sonnet's own token usage (the metered $20/mo resource) to planning,
-judgment, and verification, while Goose+Qwen (free, local, uncapped) does
-the mechanical work.
+---
 
-## The model, quantization, and every script that built it
+## 3. Core Protocols & Invariants
 
-**Base model**: Qwen3.8-27B (Qwen3.5 architecture — hybrid Gated-DeltaNet /
-attention, 65 layers, MoE-free dense), served from a pre-quantized W4A16
-checkpoint (AutoRound, `Qwen3.8-27B-W4A16-AutoRound`), with `--language-model-only`
-dropping the vision tower (not needed here, frees 2.7 GB).
+### Prescriptive Role Division
+- **Lead Architect (Meta-Supervisor)**: System architecture, task decomposition, formal interface design, test specification formulation, rendered UI inspection / multimodal visual QA (native browser subagent), and synthesizing final user deliverables.
+- **Local Coworker (Qwen via Goose & MCP @ $0)**: Autonomous hands-on execution: codebase editing, AST manipulation, terminal commands, 50k–200k token repository ingestion, deep web research (`uvx free-search-mcp`), library API lookups (`npx -y context7@latest`), and git operations (`gh` / `git`).
 
-**Why the published quant alone isn't servable on 24 GB**, and the one-time fix
-(`prepare/`, run once, each step skipped if already applied — `bash verify.sh
---no-server` checks and names what's missing):
-1. `quant_lm_head.py` — the 248k-row `lm_head` (2.5 GB bf16) → int8 group-128 in
-   place. ~1.3 GB freed.
-2. `quant_embed.py` — the untied `embed_tokens` matrix, likewise. Another ~1.3 GB.
-3. `quant_mtp.py` — the shipped MTP speculative-decode draft module (~850 MB
-   bf16) → int8.
-4. `build_draft_vocab.py` — slices a 40,960-row subset of `lm_head` that the MTP
-   drafter is allowed to propose from (`prepare/draft_vocab_ids.json`; a token
-   outside this list is a guaranteed rejection that also truncates the
-   speculation chain).
-5. `fetch_fast_variant.py` / `fetch_dflash2.py` — optional downloads: the
-   single-user "fast" variant (int4-GPTQ lm_head + drafter + a
-   self-distilled draft vocabulary) and the DFlash2 block drafter. Both are
-   rebuildable from scratch (that's what `drafter/` is), not just downloads.
+### Execution Contracts & Invariants
+1. **Rule 0 — No Raw I/O Loops (Turn 1 Invariant)**: The Lead Architect is strictly forbidden from manually calling exploratory file tools (`list_dir`, `view_file`, `grep_search`, `run_command`) to inspect unfamiliar repositories or documents on Turn 1. It must dispatch exploration and fact ingestion directly to `qwen_coworker` at $0.
+2. **Zero-Turn Long-Poll Execution Contract**:
+   - **Fast Tasks (< 45s)**: `qwen_coworker` completes inside the 45s synchronous race window and returns the complete deliverable directly in Turn 1.
+   - **Long Tasks (>= 45s)**: `qwen_coworker` yields a durable `taskId` and a `wait_command` (`curl -s http://127.0.0.1:18021/task/<id>/wait`). The orchestrator runs this wait command in the background, blocking at OS level with **$0 token cost** until automatically notified on completion. Manual LLM timer loops are prohibited.
+3. **FIFO Concurrency Control (`MAX_CONCURRENT_GOOSE=1`)**: All coworker tasks are serialized through a strict FIFO execution queue. Tasks entering while another is executing are marked `queued` on disk (`~/.qwen/tasks/`) and dispatched automatically upon completion of active tasks, preventing GPU contention and Goose session locks.
+4. **Cross-Platform WSL/Windows Agnosticism**: Seamless path translation maps POSIX paths (`/home/apath/...`) to Windows UNC (`\\wsl.localhost\Ubuntu\...`) and Windows paths (`D:\...`) to POSIX (`/mnt/d/...`). UNC working directories are cleanly resolved inside WSL to prevent Windows `cmd.exe` UNC directory crashes.
+5. **Milestone-Scoped Session Lifecycle**:
+   - **Within a Milestone (1–15 Turns)**: Dispatched to the same named `session_id` (`<workspace>_<milestone>`). Reuses the loaded vLLM prefix cache (~8,000–9,000 tok/s prefill, <0.5s wakeup) for continuous episodic memory.
+   - **Between Milestones (Context Reset)**: Step up to a new milestone session ID (e.g. `auth_feature` $\to$ `billing_stripe`), shedding stale terminal stdout and resetting active context to the 15k–30k token sweet spot for peak decode throughput (~120–133 tok/s).
+6. **Directed Milestone Co-Design Pattern**:
+   - **Turn 1 (Fact Ingestion & AST Extraction)**: Qwen maps codebase and AST at $0.
+   - **Supervisor Alignment**: Lead Architect reviews extraction and confirms patch specification.
+   - **Turn 2 (Directed Mutation / Patch)**: Dispatched to the *same* `session_id` (100% prefix cache hit, finishes in 15–30s).
+   - **Turn 3 (Verification & Atomic Git Commit)**: Dispatched to verify builds and create atomic git commits (`feat:`, `fix:`, etc.).
+7. **No Direct Goose Invocations (Rule 10)**: All coworker executions must proceed exclusively through the `qwen_coworker` MCP tool, ensuring process isolation, JSONL stream filtering, watchdog timeouts, and task persistence.
 
-**What `drafter/` actually built** (the "fast" variant, ~6h GPU time total),
-in order of measured impact:
-1. **Draft vocabulary counted over the model's own outputs**, not web text.
-   `collect_prompts.py` (6.8k prompts across UltraChat/Magicoder/Danish
-   instruction sets/reasoning/GSM8K) → `gen_data.py` (5.4M generated output
-   tokens) → `capture.py` (hidden states, 74 GB memmap) → frequency-counted
-   vocab. Coverage of what the model actually emits: 92.1% (old web-text list,
-   83% on code) → 97.5% (96% on code). This alone: 98.0 → 108.6 tok/s greedy.
-2. **GPTQ-calibrated int4** (not round-to-nearest) for `lm_head` and the MTP
-   module, Hessians from 300k captured hidden states (`gptq_lm_head.py`,
-   `requant_mtp_gptq.py`). Halves lm_head KL (0.0068 → 0.0029, +0.6% PPL vs
-   bf16, GSM8K 96.5% unchanged) and keeps MTP acceptance intact. +1.8 ms/step
-   (108.6 → 118.8 tok/s greedy).
-3. **Fine-tuning the MTP head itself: tried, kept as a documented negative
-   result.** Distillation training (`train_mtp.py`) halves KL on the naive
-   metric but true-token top-1 agreement on response tokens is unchanged
-   (0.685 → 0.685) — Qwen's shipped head is already at the ceiling a
-   single-layer chain drafter can reach for greedy top-1 on this data. Not
-   used in the served model.
+---
 
-**Speculative decoding — two drafters, selectable per boot:**
-- **MTP** (shipped, `SPEC=mtp`): the int4-GPTQ-requantized single-layer chain
-  drafter above, 4 draft tokens, draft-vocab-scoped, split-KV verify attention
-  patch + small-topk/fast-softmax sampler patch (`docs/optimizations.md`).
-- **DFlash2** (`SPEC=dflash2`, [Inco, Aug 2026](https://inco.ai/blog/dflash2/),
-  backported via vLLM PR #52816): a separate 1.92B-parameter, 5-layer
-  non-autoregressive block drafter that predicts a whole 7-token block per
-  pass from the target's own layer 5/19/33/47/61 hidden states, plus a
-  16-candidate path selector, quantized to ~1.0 GB (`quant_dflash2.py`).
-  4.80 tokens/step reported vs MTP's 4.28 at the same block size. This is
-  the model actually running (`CTX=huge` defaults to it) — faster than MTP
-  up to ~8k tokens of context, MTP slightly ahead past that.
-- **Lookup-augmented drafting** (`VLLM_DFLASH2_LOOKUP*`, on by default): when
-  the model is reproducing something already in its own context (quoting,
-  editing), it proposes the continuation of the most recent earlier
-  occurrence directly — free draft tokens, verify block grows past the
-  drafter's own 7 while a "copy" is detected. 260 → 381 tok/s reproducing a
-  document verbatim.
+## 4. Consolidated MCP Tool Suite (`qwen38-local`)
 
-**KV cache — KVarN, why `CTX=huge` exists at all:** Qwen3.8-27B's full
-262,144-token context needs a KV cache smaller than fp8 allows on 24 GB (fp8:
-16 attn layers × 4 KV heads × 256 dims × 2B ≈ 2 KB/token/layer, caps out
-around 150-195k tokens). [KVarN](https://github.com/huawei-csl/KVarN) (Huawei
-CSL, Apache-2.0) — Hadamard rotation + iterative variance normalization,
-4-bit keys / 2-bit values per 128-token tile, ~840 B/token/layer — is ported
-onto this repo's vLLM 0.27.1 in `kvarn/` (dense/non-MLA path only; upstream
-ships against vLLM 0.23). Result: 268,169-token pool at 245,760 max-model-len
-on the same pinned 5.26 GiB budget that fp8 gets ~150k out of. Cost: a real
-decode tax that scales with context length — ~6% at short single-user
-prompts, 1.22x in batch mode at 100k, **2.13x in single-user mode at 112k**
-(measured: 32.0 vs 68.1 tok/s, MTP-3, real single-stream test) — about half
-of which is raw step time from the wider dequant path, the rest is ~7% fewer
-accepted draft tokens (quantization noise shifts the target's logits enough
-that the draft head agrees less often). Prefill is unaffected either way.
-`CUDAGRAPH_MODE`: `SPEC=dflash2 CTX=huge` runs `FULL_AND_PIECEWISE`
-(upstream swept all 128 residues, zero broken — genuinely safe here, and
-faster: 96.5% vs 95.0% GSM8K, better under GPU passthrough); `SPEC=mtp
-CTX=huge` is forced to `PIECEWISE` for correctness (a confirmed empty-answer
-bug under FULL at one specific residue in 128 that dflash2 doesn't share).
+The MCP server (`mcp-qwen/index.js`) exposes three consolidated tools:
 
-## Measured throughput (this box, RTX 3090 @ 250W, `CTX=huge`, `SPEC=dflash2`, `KVarN k4v2`, `PREFIX_CACHE=1`)
+### `qwen_coworker`
+Primary agentic interface for multi-turn collaboration, code editing, deep research, and AVO mutations.
+- **Parameters**:
+  - `prompt` *(string, required)*: Task instructions for Qwen.
+  - `session_id` *(string, optional)*: Milestone session identifier (e.g. `"myrepo_milestone1"`).
+  - `cwd` *(string, optional)*: Target working directory (Windows or POSIX).
+  - `extensions` *(string[], optional)*: Dynamic MCP extensions (e.g. `["uvx free-search-mcp"]`, `["npx -y context7@latest"]`).
+  - `hypothesis` *(string, optional)*: AVO hypothesis description.
+  - `test_command` *(string, optional)*: Post-run verification test command.
+  - `metric_name` *(string, optional)*: Quantitative optimization metric name.
+  - `higher_is_better` *(boolean, optional)*: Metric optimization direction.
+  - `timeout_ms` *(number, optional)*: Maximum background execution budget (default 1 hour).
 
-**Decode, single-user, C1 (one request):**
+### `qwen_task`
+Manages and queries coworker task execution across memory and disk (`~/.qwen/tasks/`).
+- **Parameters**:
+  - `action` *(enum: `"status"` | `"cancel"` | `"list"`, required)*.
+  - `task_id` *(string, optional)*: Specific task ID for status or cancellation.
 
-| variant | tok/s | tokens/step |
+### `qwen_server`
+Controls the local 245K vLLM server instance lifecycle.
+- **Parameters**:
+  - `action` *(enum: `"status"` | `"start"` | `"stop"`, required)*.
+
+---
+
+## 5. Model Serving, Speculative Decoding & Quantization Architecture
+
+- **Base Model**: Qwen3.8-27B (Qwen3.5 hybrid dense architecture — Gated-DeltaNet + linear/standard attention, 65 layers, MoE-free).
+- **Weight Quantization**: W4A16 AutoRound (`Qwen3.8-27B-W4A16-AutoRound`) with `--language-model-only` (vision encoder removed, saving 2.7 GB VRAM).
+- **Memory Optimizations**:
+  1. `quant_lm_head.py`: 248k-row `lm_head` (2.5 GB bf16) $\to$ int8 group-128 in place (saves ~1.3 GB).
+  2. `quant_embed.py`: Untied `embed_tokens` matrix $\to$ int8 group-128 (saves ~1.3 GB).
+  3. `quant_mtp.py`: MTP speculative decode draft module $\to$ int8.
+  4. `build_draft_vocab.py`: Slices a 40,960-row subset of `lm_head` calibrated on model outputs for speculative verification.
+- **Speculative Decoding Options**:
+  - **DFlash2 Block Drafter (`SPEC=dflash2`, Default)**: 1.92B parameter, 5-layer non-autoregressive block drafter predicting 7 tokens per pass from target layers 5/19/33/47/61 with a 16-candidate path selector, quantized to ~1.0 GB (`quant_dflash2.py`). Configured with `VLLM_DFLASH2_CHAIN=1` for speculative chaining.
+  - **Lookup-Augmented Drafting (`VLLM_DFLASH2_LOOKUP*`)**: Proposes context continuations directly when reproducing or quoting documents (speeds up to 381 tok/s).
+  - **MTP Drafter (`SPEC=mtp`, Fallback)**: Int4-GPTQ single-layer chain drafter (4 draft tokens, split-KV verify attention).
+- **KVarN KV Cache (`CTX=huge`)**:
+  - [KVarN](https://github.com/huawei-csl/KVarN) (Huawei CSL, Apache-2.0) Hadamard rotation + iterative variance normalization (4-bit keys / 2-bit values per 128-token tile, ~840 B/token/layer).
+  - Yields a **268,169-token pool** at `max-model-len=245760` within a pinned 5.26 GiB VRAM budget on the 24 GB RTX 3090.
+- **CUDA Graph Modes**: `SPEC=dflash2 CTX=huge` runs `FULL_AND_PIECEWISE` across all 128 residues. `SPEC=mtp CTX=huge` falls back to `PIECEWISE`.
+
+---
+
+## 6. Measured Throughput (RTX 3090 @ 250W, `CTX=huge`, `SPEC=dflash2`, `KVarN k4v2`)
+
+### Single-User Decode Throughput
+
+| Variant / Workload | tok/s | Tokens / Step |
 |---|---|---|
-| default (`DFLASH_TOKENS=7`, lookup on) | 130 | 3.3 |
-| reproducing context (copy/quote) | up to 259 | 3.3-7.8 |
-| `DFLASH_TOKENS=15` reproduction mode | 133 short-prompt, up to **381** reproducing | 3.4-15.0 |
+| Default Short Prompt (`DFLASH_TOKENS=7`, Lookup ON) | **130** | 3.3 |
+| Code Generation & AST Mutation | **89** | 2.8 |
+| File Edit & Patch Application | **65** | 2.4 |
+| Document Reproduction (Verbatim Copy/Quote) | **259** | 3.3–7.8 |
+| `DFLASH_TOKENS=15` Reproduction Mode | up to **381** | 3.4–15.0 |
+| Six-Task Real-Prompt Suite Average | **53** | 3.0 |
 
-**Six-task real-prompt suite, WSL2, `SPEC=dflash2 CTX=huge PREFIX_CACHE=1`:**
+### Prefill Throughput & TTFT
 
-| task | tok/s | tokens/step |
+| Input Length | Prefill Speed | Single-Request TTFT |
 |---|---|---|
-| copy/reproduction | 130 | 7.8 |
-| code | 89 | — |
-| edit | 65 | — |
-| quote | 44 | — |
-| summary | 38 | — |
-| qa | 36 | — |
-| **all six together** | **53** | **3.0** |
+| 1k tokens | ~1,740–1,810 tok/s | 0.56–0.85 s |
+| 16k tokens | ~1,570–1,600 tok/s | 10.3–14.7 s |
+| 100k tokens | ~1,000–1,050 tok/s | 103–129 s |
+| **Prefix Cache Hit (Named Session Reuse)** | **~8,000–9,000 tok/s** | **< 0.5 s** |
 
-**Prefill (prompt processing, separate budget from decode — KVarN vs fp8
-"same within ±5%", so this applies to `CTX=huge` too):**
+---
 
-| input length | tok/s | single-request TTFT |
-|---|---|---|
-| 1k | ~1,741-1,812 | 0.56-0.85 s |
-| 16k | ~1,569-1,595 | 10.3-14.7 s |
-| 100k | ~997-1,050 | 103-129 s |
+## 7. SWE-rebench Benchmark Pipeline
 
-Concurrency does nothing for prefill — chunked prefill shares one
-2,048-token-per-step budget across the whole server, so it's a fixed resource,
-not something that parallelizes.
+To measure true generalization without contamination, the Goose + Qwen stack was evaluated against [SWE-rebench](https://swe-rebench.com/) (Nebius, `nebius/SWE-rebench-leaderboard`), using monthly issue splits post-dating training cutoffs (March 2026 split `2026_03`).
 
-**Real single-stream long-context number** (MTP-3, 112,648-token prompt,
-`PREFIX_CACHE=1`, KVarN): 32.0 tok/s decode (31.3 ms/token), TTFT cold 146.7s,
-KV pool 292,035 tokens at that context length.
+- **Resolved Rate (Best-of-1)**: **32.0% (16/50)** on uncurated fresh GitHub issues.
+- **Attempted Resolution Rate**: **57.1% (16/28)** for issues completed within the 900s timeout budget.
+- Full reproduction scripts, harness fixes (resolving Docker container paths in upstream `eval.py`), and per-issue breakdown are documented in [benchmarks/swe-rebench/README.md](benchmarks/swe-rebench/README.md) and [benchmarks/swe-rebench/results/results.md](benchmarks/swe-rebench/results/results.md).
 
-**KV pool ceiling**: 268,169 tokens at `MAX_SEQS=8` (and at 2 and 4 — live
-reverified at every step 2026-08-24, unchanged; raising `MAX_SEQS` only grows
-one-time CUDA-graph-capture boot cost, not the pool or per-request throughput).
+---
 
-## Benchmarking the MCP delegation architecture — recommended method
+## 8. Operational Quickstart
 
-**Superseded 2026-08-24 — do not use SWE-bench Verified or SWE-bench Pro.**
-Both were the initial recommendation here; both turned out to be
-contaminated. OpenAI retired SWE-bench Verified in Feb 2026 after an audit
-found 59.4% of its "hard" tasks flawed and frontier models reproducing gold
-patches **verbatim from the task ID alone** (10.6% documented leakage) — a
-training-data fingerprint, not a capability signal. SWE-bench Pro was
-scrapped by the same team ~5 months later for the identical failure mode
-(~59% flawed tasks, memorized answers on "nearly impossible" tasks). Neither
-can answer "does my setup actually work" — they measure memorization.
+### Starting & Stopping Services
 
-**The actual answer: [SWE-rebench](https://swe-rebench.com/)** (Nebius) —
-its `nebius/SWE-rebench-leaderboard` HF dataset rebuilds its eval set every
-month from real GitHub issues, published as monthly splits. A model can't
-have memorized a month's issues if they postdate its training cutoff, which
-March 2026 (`2026_03`, the latest split published as of this writing) safely
-does for both Qwen3.5 (released Feb 2026) and Sonnet 5 (Jan 2026 cutoff).
-Docker-graded, real agentic issue resolution — a much better match for
-Goose's actual file/edit/shell loop than SWE-bench's static-patch format.
-Public leaderboard reference points (best-of-5 Resolved Rate, Aug 2026):
-Claude Opus 4.6 65.3%, and — same architecture family as what's served
-here — **Qwen3.5-35B-A3B 53.7%**.
+```powershell
+# Start the standard huge-context model (245,760 context ceiling)
+.\scripts\main\start_huge.bat
 
-**Done: [benchmarks/swe-rebench/](benchmarks/swe-rebench/) — 32.0% Resolved
-Rate (16/50), best-of-1**, 44% of the sample never got a solve attempt
-within the 900s per-task budget (57.1% among the 28 that did get attempted
-- the more informative number, since the timeout is a tunable knob, not a
-capability ceiling). See [results/results.md](benchmarks/swe-rebench/results/results.md)
-for the full breakdown, including an honest log of five real bugs (two in
-the solve script, three in the grading path — one of them upstream, in
-SWE-rebench's own `eval.py`) found and fixed before this number could be
-trusted; the first two grading attempts produced a false 0% before the
-root cause (a wrong hardcoded container path in the upstream eval tool)
-was found via direct container inspection rather than accepted at face
-value.
+# Check running service status (vLLM on 18020, MCP wait on 18021)
+.\scripts\status.bat
 
-**Separately** — if the delegation-architecture question (is Sonnet
-decomposing + Qwen executing actually worth it, vs either extreme) becomes
-the priority later, SWE-rebench's single-agent-solves-the-whole-issue format
-doesn't map cleanly onto that either; it would still need a small custom
-task set run three ways (Sonnet solo / Sonnet-decomposes-Qwen-executes /
-Qwen alone undecomposed) as originally scoped, just against real
-undecomposed SWE-rebench issues as the task source instead of a hand-picked
-set.
+# Stop the main model
+.\scripts\main\stop.bat
+```
 
-Sources:
-- [OpenAI: why SWE-bench Verified no longer measures frontier capability](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/)
-- [SWE-rebench leaderboard](https://swe-rebench.com/)
-- [nebius/SWE-rebench-leaderboard dataset](https://huggingface.co/datasets/nebius/SWE-rebench-leaderboard)
+### Running Autonomous Optimization Loops (AVO)
+
+```powershell
+# Drive an iterative AVO optimization round on any target repository
+python .\scripts\avo_runner.py --cwd "D:\path\to\target_repo" --metric "benchmark_score" --higher-is-better
+```
+
+---
+
+## 9. Key References
+
+- [CLAUDE.md](CLAUDE.md) — Hierarchical NVIDIA AVO & Multi-Agent Protocol.
+- [mcp-qwen/NOTES.md](mcp-qwen/NOTES.md) — Investigation history, architecture design records, and engineering changelog.
+- [benchmarks/swe-rebench/](benchmarks/swe-rebench/) — Benchmark harness and evaluation results.
+- [DFlash2: Non-Autoregressive Block Speculative Decoding](https://inco.ai/blog/dflash2/)
+- [KVarN: Variance-Normalized 4/2-bit KV Cache](https://github.com/huawei-csl/KVarN)
