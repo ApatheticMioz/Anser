@@ -1558,7 +1558,10 @@ server.registerTool(
       "    'revise per this feedback'. Send corrections and pushback as follow-up turns - do NOT rewrite one\n" +
       "    monolithic spec per request. Each follow-up rides the warm prefix cache (~8-9k tok/s prefill).\n" +
       "  - Sessions are long-lived (245K ctx): never roll a session for context size; roll only on milestone\n" +
-      "    change or when session history has poisoned tool habits.\n" +
+      "    change or when session history has poisoned tool habits. BUT checkpoint very long sessions (1h+ of\n" +
+      "    heavy turns, or KV cache usage sustained >~50% in qwen_server status): have the coworker write a\n" +
+      "    handoff summary file, then continue in a fresh session_id - giant re-prefills at partial cache hit\n" +
+      "    are the slowest and most stall-prone mode.\n" +
       "  - Budgets are generous by design (default 1h, 10-min floor; pass more for research+write+post).\n" +
       "    Split multi-stage jobs so a timeout can never land on the irreversible step (post/commit/deploy):\n" +
       "    persist artifacts to disk first, then a short follow-up dispatch executes the critical action.\n" +
