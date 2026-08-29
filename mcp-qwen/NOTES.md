@@ -927,14 +927,19 @@ the range-clamped `safe_bid` at four sites (257, 435, 584, 1124 pre-patch) - the
 unmasked far-OOB read in the hot path; on WSL2 the resulting IMA can wedge the context
 instead of raising (same silent-fault class as upstream issue #34).
 
-**Config deviation (D1, prime corruption suspect):** upstream's `kvarn-v2-runner.patch`
+**Config deviation (D1) - FALSIFIED AS CAUSE by the A/B:** upstream's `kvarn-v2-runner.patch`
 header, README, and gotcha 37 all say that with prefix caching on, the DFlash2 verify
-step must NOT be a captured FULL CUDA graph (`cudagraph_mode=PIECEWISE` required;
-gotcha 37: prefix-cache hit + particular prompt-length residue mod 128 => collapse).
-Our `single-user/start_qwen.sh` gates PIECEWISE on `SPEC != dflash2`, so we ran FULL
-captured verify + PREFIX_CACHE=1 + KVarN - the combination three upstream documents
-label unsafe, and the script's own newer comment (128-residue sweep) contradicts them.
-A/B (benchmarks/wedge-repro/) decides FULL vs PIECEWISE vs KVARN_FUSED_VERIFY_MAXQ=4096.
+step must NOT be a captured FULL CUDA graph (`cudagraph_mode=PIECEWISE` required). We
+ran FULL - but the A/B (benchmarks/wedge-repro/RESULTS.md) shows PIECEWISE wedges
+identically, as does fused-verify routing (`KVARN_FUSED_VERIFY_MAXQ=4096`), as does
+the defensively-patched build. The graph-capture question stays a documentation
+contradiction for the upstream issue, not our root cause. The A/B verdict: **the stall
+is a first-large-chunked-prefill-after-boot event, config-independent** - always right
+after the first-execution JIT pair (`_prepare_dflash_inputs_kernel`,
+`_kvarn_build_packed_kv_kernel`), no Xid/MMU faults, CPU-side metadata sane, and
+engines serve cleanly once the first stall passes (24 consecutive clean iterations
+observed post-stall; early post-stall requests run 10-100x slower). Working theory for
+upstream: a first-execution / Triton-JIT-on-first-real-shape interaction on WSL2.
 
 **Phantom correction (D2):** `VLLM_DFLASH2_CHAIN` is read by NOTHING in our venv -
 the n-gram-chains feature (upstream issue #38) lives in an external repo that was
@@ -954,8 +959,14 @@ detects the stall end-to-end in <=30s and reboots the engine; the in-flight task
 with a clear watchdog message and can be re-dispatched. A machine-wide persisted wedge
 counter is surfaced via `qwen_server status` for A/B-vs-production comparison.
 
-**Remediation stack:** (1) defensive kernel patch in `~/qwen-serving/kvarn/files/`
-(safe_bid tile_base at all four sites; length-validation fallback + `+group` scratch
-margin + `max_blocks` table-width clamp in `_cached_multiquery_path`), deployed via
-`bash kvarn/install.sh`; (2) config fix pending the A/B outcome; (3) upstream issue
-first, PR after maintainer reply (user decision).
+**Remediation stack:** (1) **boot warmup in mcp-qwen (the production fix)** -
+after any engine (re)start, `ensureEngineWarmed()` fires one synthetic ~24k-token
+prompt (420s window, up to 3 attempts, riding out the stall via the existing
+canary + auto-heal), tracked by the cumulative prefix-cache-queries counter which
+resets on engine restart; dispatches refuse an engine whose warmup failed
+outright. `QWEN_BOOT_WARMUP=0` disables. (2) defensive kernel patch in
+`~/qwen-serving/kvarn/files/` (safe_bid tile_base at four triton sites; length
+validation + `+group` scratch margin; block-table-width clamp), deployed via
+`bash kvarn/install.sh` - keeps metadata-garbage failures loud instead of wedged.
+(3) upstream issue first, PR after maintainer reply (user decision);
+`benchmarks/wedge-repro/ISSUE_DRAFT.md` is the draft.
