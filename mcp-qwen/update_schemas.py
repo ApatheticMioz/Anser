@@ -13,7 +13,31 @@ for f in glob.glob(os.path.join(mcp_dir, '*.json')):
 tools = {
     'qwen_coworker': {
         'name': 'qwen_coworker',
-        'description': 'Primary agentic interface for local Qwen3.8-27B running inside the Goose agent harness for $0. Has native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and AVO candidate mutations. Execution Contract: fast tasks (< 45s) return the full deliverable directly in Turn 1; long tasks (>= 45s) safely yield taskId and a wait_command (long-poll on the 18021 status endpoint) before client deadlines - run it via native shell to block and wake automatically at $0 token cost. Supported extensions: uvx free-search-mcp (deep web search, live docs, PDF/DOCX ingestion), npx.cmd -y context7@latest / npx -y context7@latest (version-accurate framework & library docs), gh/git CLI (authenticated GitHub workflows). AVO fields (hypothesis/test_command/metric_name/higher_is_better) run the verification test after the Goose run and record the candidate in .avo/lineage.json.',
+        'description': (
+            'Primary agentic interface for local Qwen3.8-27B running inside the Goose agent harness for $0. '
+            'Has native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. '
+            'Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and AVO candidate mutations. '
+            'USAGE - multi-turn chat is the primary mode:\n'
+            '  - Open a named `session_id` and drive work iteratively in SHORT turns: "read X and report", "now draft it", '
+            '"revise per this feedback". Send corrections and pushback as follow-up turns - do NOT rewrite one '
+            'monolithic spec per request. Each follow-up rides the warm prefix cache (~8-9k tok/s prefill).\n'
+            '  - Sessions are long-lived (245K ctx): never roll a session for context size; roll only on milestone '
+            'change or when session history has poisoned tool habits. BUT checkpoint very long sessions (1h+ of '
+            'heavy turns, or KV cache usage sustained >~50% in qwen_server status): have the coworker write a '
+            'handoff summary file, then continue in a fresh session_id - giant re-prefills at partial cache hit '
+            'are the slowest and most stall-prone mode.\n'
+            '  - Budgets are generous by design (default 1h, 10-min floor; pass more for research+write+post). '
+            'Split multi-stage jobs so a timeout can never land on the irreversible step (post/commit/deploy): '
+            'persist artifacts to disk first, then a short follow-up dispatch executes the critical action.\n'
+            'Execution Contract:\n'
+            '  - Fast tasks (< 45s): Returns full deliverable directly in Turn 1.\n'
+            '  - Long tasks (>= 45s): Safely yields `taskId` and a `wait_command` before client deadlines. '
+            'Run `wait_command` via native shell to block and wake up automatically with the result at $0 token cost.\n'
+            'Supported Extensions:\n'
+            '  - `uvx free-search-mcp` (Deep Web Search, Live Docs, PDF/DOCX Ingestion)\n'
+            '  - `npx.cmd -y context7@latest` / `npx -y context7@latest` (Version-Accurate Framework & Library Docs)\n'
+            '  - `gh` CLI / `git` (Authenticated GitHub operations and atomic git branch/commit workflows)'
+        ),
         'parameters': {
             '$schema': 'http://json-schema.org/draft-07/schema#',
             'type': 'object',
