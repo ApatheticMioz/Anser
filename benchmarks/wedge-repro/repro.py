@@ -252,7 +252,13 @@ def main():
               f"(residue {t1_tokens % 128}) ...", flush=True)
         rec = run_iteration(it, t1_tokens, args.max_tokens)
         rec["canary_ok"] = canary()
-        rec["wedge"] = not (rec["t1_ok"] and rec["canary_ok"])
+        # Wedge = ENGINE-level stall (canary cannot get tokens), not a slow T1:
+        # the first big-prompt request after a cold boot legitimately JITs
+        # several Triton kernels (measured: minutes), which a 240s T1 timeout
+        # would otherwise misclassify.
+        rec["wedge"] = not rec["canary_ok"]
+        if not rec["t1_ok"] and rec["canary_ok"]:
+            rec["t1_timeout_engine_healthy"] = True
         if rec["wedge"]:
             wedges += 1
             print(f"  !! WEDGE #{wedges} at iter {it} (t1_ok={rec['t1_ok']} "

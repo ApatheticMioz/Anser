@@ -790,6 +790,124 @@ async function canaryProbe(force = false) {
   return result;
 }
 
+// ---- Boot warmup ----
+// The first large chunked-prefill after an engine boot stalls the GPU stream
+// once (benchmarks/wedge-repro/RESULTS.md: reproduced identically on FULL,
+// PIECEWISE, and fused-routed configs; always right after the first-execution
+// JIT pair; usually self-recovers, but the 2026-08-28 production incident
+// stayed wedged 4.5h). Riding that stall out at boot - with a bounded
+// reboot-retry - converts the production failure mode (auto-heal reboot ->
+// next big dispatch wedges -> task killed) into a bounded boot delay.
+// Skippable via QWEN_BOOT_WARMUP=0; size via QWEN_WARMUP_TOKENS (default
+// 24,000 tokens - the smallest workload that reliably triggers the stall).
+// "Warmed" is tracked via the cumulative prefix-cache-queries counter: it
+// resets to 0 on every engine restart, so marker >= current proves the
+// marker came from this same engine incarnation.
+const WARMUP_MARKER_FILE = path.join(TASK_DIR, ".warmup_marker.json");
+const WARMUP_TOKENS = (() => {
+  const n = parseInt(process.env.QWEN_WARMUP_TOKENS, 10);
+  return Number.isFinite(n) && n > 1000 ? n : 24_000;
+})();
+const WARMUP_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.QWEN_WARMUP_TIMEOUT_MS, 10);
+  return Number.isFinite(n) && n > 30_000 ? n : 420_000;
+})();
+
+function readWarmupMarker() {
+  try {
+    return JSON.parse(fs.readFileSync(WARMUP_MARKER_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function isEngineWarmed() {
+  if (process.env.QWEN_BOOT_WARMUP === "0") {
+    return { warmed: true, disabled: true };
+  }
+  const m = await readEngineMetrics();
+  const q = m?.["vllm:prefix_cache_queries_total"];
+  if (q == null) return { warmed: false, reason: "metrics-unavailable" };
+  const marker = readWarmupMarker();
+  if (marker && typeof marker.prefix_queries_total === "number" && q >= marker.prefix_queries_total) {
+    return { warmed: true };
+  }
+  return { warmed: false, reason: marker ? "engine-restarted-since-warmup" : "never-warmed" };
+}
+
+function makeWarmupCorpus(tokens) {
+  const words = [
+    "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+    "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa",
+    "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey",
+    "xray", "yankee", "zulu",
+  ];
+  const n = Math.floor(tokens * 1.35);
+  const parts = [];
+  for (let i = 0; i < n; i++) {
+    const h = (Math.imul(i, 2654435761) + 1013904223) >>> 0;
+    parts.push(words[h % words.length]);
+    if (i % 12 === 11) parts.push(".");
+  }
+  return parts.join(" ");
+}
+
+async function warmupEngineAttempt() {
+  const corpus = makeWarmupCorpus(WARMUP_TOKENS);
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`${BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${getApiKeySync()}` },
+      body: JSON.stringify({
+        model: "qwen3.8-27b",
+        max_tokens: 16,
+        messages: [{
+          role: "user",
+          content: `Document:\n${corpus}\n\nReply with a one-sentence summary.`,
+        }],
+      }),
+      signal: AbortSignal.timeout(WARMUP_TIMEOUT_MS),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const j = await res.json();
+    if ((j?.usage?.completion_tokens ?? 0) < 1) return { ok: false, error: "no tokens" };
+    return { ok: true, seconds: Math.round((Date.now() - t0) / 1000) };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err), seconds: Math.round((Date.now() - t0) / 1000) };
+  }
+}
+
+async function ensureEngineWarmed() {
+  const state = await isEngineWarmed();
+  if (state.warmed) return state;
+  let lastError = state.reason ?? "unknown";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const r = await warmupEngineAttempt();
+    if (r.ok) {
+      const m = await readEngineMetrics(0);
+      try {
+        fs.writeFileSync(WARMUP_MARKER_FILE, JSON.stringify({
+          at: Date.now(),
+          prefix_queries_total: m?.["vllm:prefix_cache_queries_total"] ?? null,
+          tokens: WARMUP_TOKENS,
+        }));
+      } catch {}
+      return { warmed: true, attempts: attempt, warmSeconds: r.seconds };
+    }
+    lastError = r.error ?? "warmup-failed";
+    // A stalled warmup usually means the boot-stall claimed this engine
+    // incarnation: verify with the canary and reboot if wedged, then retry.
+    const c = await canaryProbe(true);
+    if (!c.ok) {
+      if (!AUTO_HEAL) return { warmed: false, error: `${lastError}; canary: ${c.error}` };
+      await healWedgedEngine(null);
+      resetEngineHealthCache();
+    }
+  }
+  return { warmed: false, error: `${lastError} (3 attempts)` };
+}
+
 async function engineWedgeState() {
   const metrics = await readEngineMetrics();
   const canary = await canaryProbe();
@@ -1100,6 +1218,20 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
       await withBootMutex(async () => {
         await ensureServerRunning();
       });
+      // Ride out the first-large-prefill boot stall BEFORE the task runs -
+      // otherwise the task itself becomes the stall victim (watchdog kill).
+      const warm = await ensureEngineWarmed();
+      if (!warm.warmed) {
+        taskEntry.result = {
+          isError: true,
+          text: `Boot warmup failed after engine (re)start (${warm.error ?? warm.reason}) - engine may be unhealthy. Not dispatching into it.`,
+        };
+        taskEntry.done = true;
+        taskEntry.isError = true;
+        taskEntry.status = "failed";
+        notifyWaiters(taskEntry);
+        return taskEntry.result;
+      }
     } catch (err) {
       taskEntry.done = true;
       taskEntry.isError = true;
@@ -1672,6 +1804,7 @@ server.registerTool(
                 status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
                 status_endpoint_owned_by_this_instance: statusServerOwned,
                 wedge_counter: readWedgeCounter(),
+                boot_warmup: readWarmupMarker() ?? { warmed: false },
               },
               null,
               2
