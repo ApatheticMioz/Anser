@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.1)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.3)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
