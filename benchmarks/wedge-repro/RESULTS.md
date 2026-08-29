@@ -60,6 +60,40 @@ restarted under the same arm env.
 
 - iter 1: **WEDGE** — identical fresh-boot first-big-prompt signature on a THIRD
   configuration ⇒ the materialize route is not required for the wedge either.
+- iter 2: **WEDGE again** (fresh post-restart boot). iter 3: soft (canary ok).
+  iter 4: **WEDGE** (another fresh boot). Stopped at iter 5.
+- **Wedge incidence: 3/3 fresh boots** on this arm (defensive patch present) vs
+  1/2 boots on the unpatched FULL arm. CONFOUND: this arm has BOTH the defensive
+  patch and the reroute. Since every patched-boot wedge sits exactly at the
+  first-launch of the JIT'd (and patch-modified) `build_packed` kernel, the
+  possibility that **the defensive patch itself aggravates the stall** (new
+  kernel hash → different codegen) must be excluded before any upstream claim.
+- Disentangling run: pristine upstream kernels restored (`git checkout --` the
+  two files + reinstall), fresh boot + one 24k probe. **Result: HTTP 200, clean
+  completion on the first post-boot big request** — the workload that wedged
+  4/4 patched boots.
+
+## Final verdict (supersedes arm-level readings above)
+
+1. **The defensive kernel patch aggravated the stall into a deterministic
+   per-boot hang** (4/4 patched boots vs rare on pristine). Likely mechanism:
+   the modified `tile_base = safe_bid...` produces a different compiled variant;
+   its first real-shape launch hangs the GPU stream on this WSL2/Triton stack.
+   **The patch was reverted**; `~/qwen-serving/kvarn/files/` is pristine
+   upstream again. Do not re-apply without bare-metal testing.
+2. The **original, rare wedge** (production incidents; 1 hard wedge in the
+   unpatched FULL arm's 26 iterations) is real and reproducible-on-demand at
+   low probability: first-launch of a newly-JIT'd kernel variant stalling the
+   GPU stream, always preceded by the `jit_monitor` JIT-during-inference
+   warnings. This matches upstream's own "consider extending warmup to cover
+   this shape/config" hint.
+3. **Mitigation shipped (mcp-qwen boot warmup)**: one large synthetic prompt
+   after every engine boot, with stall-rideout/reboot-retry — it both
+   pre-compiles the common big-prompt kernel variants and safely absorbs the
+   rare stall. `QWEN_BOOT_WARMUP=0` disables.
+4. Upstream issue remains warranted, evidence intact (py-spy signature, JIT
+   correlation, config-independence of the rare wedge, no-Xid), now
+   unconfounded by our patch. Issue draft: ISSUE_DRAFT.md.
 
 ## Consolidated verdict (all three config arms wedge identically)
 

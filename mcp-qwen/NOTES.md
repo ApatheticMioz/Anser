@@ -959,14 +959,23 @@ detects the stall end-to-end in <=30s and reboots the engine; the in-flight task
 with a clear watchdog message and can be re-dispatched. A machine-wide persisted wedge
 counter is surfaced via `qwen_server status` for A/B-vs-production comparison.
 
-**Remediation stack:** (1) **boot warmup in mcp-qwen (the production fix)** -
+**Remediation stack (final, after the patch was reverted):** (1) **boot warmup in
+mcp-qwen (the production fix)** -
 after any engine (re)start, `ensureEngineWarmed()` fires one synthetic ~24k-token
 prompt (420s window, up to 3 attempts, riding out the stall via the existing
 canary + auto-heal), tracked by the cumulative prefix-cache-queries counter which
 resets on engine restart; dispatches refuse an engine whose warmup failed
-outright. `QWEN_BOOT_WARMUP=0` disables. (2) defensive kernel patch in
-`~/qwen-serving/kvarn/files/` (safe_bid tile_base at four triton sites; length
-validation + `+group` scratch margin; block-table-width clamp), deployed via
-`bash kvarn/install.sh` - keeps metadata-garbage failures loud instead of wedged.
-(3) upstream issue first, PR after maintainer reply (user decision);
-`benchmarks/wedge-repro/ISSUE_DRAFT.md` is the draft.
+outright. `QWEN_BOOT_WARMUP=0` disables. (2) ~~defensive kernel patch~~
+**REVERTED - it aggravated the stall**: with `tile_base` sourcing the
+range-clamped `safe_bid` (4 triton sites) plus the Python-side guards, EVERY
+fresh boot's first big request hung the GPU deterministically (4/4 boots across
+two arms), while the pristine kernel only rarely wedges and completed the same
+workload cleanly on the first try. Most plausible mechanism: the edited kernel
+compiles to a different variant whose first real-shape launch hangs the stream
+on this WSL2/Triton stack. Lesson: on this stack, ANY change to Triton kernel
+source creates a new compiled variant that must be soak-tested before serving.
+`~/qwen-serving` is back to pristine upstream (2ae239f). (3) upstream issue
+first, PR after maintainer reply (user decision);
+`benchmarks/wedge-repro/ISSUE_DRAFT.md` is the draft - its "remaining suspicion"
+section carries extra weight now, since the pristine-kernel rare wedge and our
+aggravated variant share the same first-JIT-launch signature.
