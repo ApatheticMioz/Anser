@@ -904,36 +904,58 @@ instance shares:
 
 
 
-## 2026-08-29: Recurring engine wedge root-caused to the KVarN packed-KV build path
+## 2026-08-29: Recurring engine wedge - diagnosis and remediation (SUPERSEDES the CHAIN theory)
 
-Four wedges in ~36h (two with `VLLM_DFLASH2_CHAIN=0`, falsifying CHAIN as the sole
-suspect), each minutes after boot and always mid-delegation (large-prompt tasks).
-A live py-spy capture of the wedged EngineCore (see
+Five wedges in ~36h, each minutes after boot and always mid-delegation (large-prompt
+tasks). A live py-spy capture of the wedged EngineCore (see
 `diagnostics/2026-08-29_kvarn_pyspy_dump.txt`) shows the core loop's MainThread
 spinning at ~100% CPU inside a single `execute_model` step:
 
     _cached_multiquery_path  kvarn_attn.py:2496   (total_k = int(cu_k[-1].item()))
     forward                  kvarn_attn.py:2171
 
-`.item()` is a GPU sync: the host waits forever on `_kvarn_build_packed_kv_kernel`
-(`triton_kvarn_decode.py`), which never retires - GPU pegged at 100%. Because the
-engine core is single-stepped, every other request starves (the observed
-"accepted-never-scheduled / stats-silent" signature; a lighter flavor shows empty
-queues + ~12% GPU).
+**Mechanism (corrected by full kernel read-through):** line 2496 is the *first D2H
+sync of the eager continuation step* - it gates on everything previously enqueued.
+`_kvarn_build_packed_kv_kernel` itself has **no loops** and cannot spin; the wedged
+kernel is a loop-carrying one (`_kvarn_fused_decode_kernel` / `_kvarn_fused_decode_stage1`
+/ `_kvarn_fused_verify_stage1` / FA varlen) bounded only by `seq_lens`/`vq_seqlen`/
+`cu_k`, OR the CUDA context is dead from an unpropagated IMA (a known WSL2 failure
+mode). Grid explosion and autotune-deadlock are ruled out (Python-int bounds;
+autotuned kernels warmed pre-capture). One concrete latent defect found:
+`triton_kvarn_decode.py` computes `tile_base` from the **raw** `block_id` instead of
+the range-clamped `safe_bid` at four sites (257, 435, 584, 1124 pre-patch) - the only
+unmasked far-OOB read in the hot path; on WSL2 the resulting IMA can wedge the context
+instead of raising (same silent-fault class as upstream issue #34).
 
-Trigger localization: `_cached_multiquery_path` is only reached for multi-query
-batches with `max_query_len > KVARN_FUSED_VERIFY_MAXQ (8)` - i.e. **chunked-prefill
-continuations of large prompts** (max-num-batched-tokens 2048). Small smoke-test
-requests use pre-warmed fused/decode shapes and never wedge; delegated repo-reading
-(10k+ token prefills) hits it within minutes. The jit_monitor warnings
-(`_prepare_dflash_inputs_kernel`, `_kvarn_build_packed_kv_kernel` JIT during
-inference) logged right before one wedge are a plausible co-factor (shape-triggered
-compile in-stream), not the hang itself.
+**Config deviation (D1, prime corruption suspect):** upstream's `kvarn-v2-runner.patch`
+header, README, and gotcha 37 all say that with prefix caching on, the DFlash2 verify
+step must NOT be a captured FULL CUDA graph (`cudagraph_mode=PIECEWISE` required;
+gotcha 37: prefix-cache hit + particular prompt-length residue mod 128 => collapse).
+Our `single-user/start_qwen.sh` gates PIECEWISE on `SPEC != dflash2`, so we ran FULL
+captured verify + PREFIX_CACHE=1 + KVarN - the combination three upstream documents
+label unsafe, and the script's own newer comment (128-residue sweep) contradicts them.
+A/B (benchmarks/wedge-repro/) decides FULL vs PIECEWISE vs KVARN_FUSED_VERIFY_MAXQ=4096.
 
-Interim mitigation (in place): the v4.5.0 canary-completion gate + auto-heal
-detects the stall end-to-end in <=30s and reboots the engine; the in-flight task
-dies with a clear watchdog message and can be re-dispatched. Real fix is upstream
-(KVarN Triton kernel / fork): candidate mechanism is a corrupt or unbounded
-`max_blocks`/grid for some long-context continuation shape. Upstream issue draft
-pending; evidence bundle: this entry + the dump + config (kvarn_k4v2_g128,
-dflash2 num_spec_tokens=7, async-scheduling, MAX_SEQS=8, chunked prefill 2048).
+**Phantom correction (D2):** `VLLM_DFLASH2_CHAIN` is read by NOTHING in our venv -
+the n-gram-chains feature (upstream issue #38) lives in an external repo that was
+never installed, so the earlier CHAIN=1 -> CHAIN=0 arc toggled nothing; every wedge
+happened under an identical config. The feature is also documented greedy-only while
+our delegated workloads run at temperature 1.0 (goose sends temperature: null). The
+env line is removed from `start_huge.sh`.
+
+**Trigger localization:** `_cached_multiquery_path`'s materialize route is only reached
+for multi-query batches with `max_query_len > KVARN_FUSED_VERIFY_MAXQ (8)` - i.e.
+**chunked-prefill continuations of large prompts** (max-num-batched-tokens 2048).
+Small smoke-test requests never wedge; delegated repo-reading (10k+ token prefills)
+hits it within minutes.
+
+**Interim mitigation (in place):** the v4.5.0 canary-completion gate + auto-heal
+detects the stall end-to-end in <=30s and reboots the engine; the in-flight task dies
+with a clear watchdog message and can be re-dispatched. A machine-wide persisted wedge
+counter is surfaced via `qwen_server status` for A/B-vs-production comparison.
+
+**Remediation stack:** (1) defensive kernel patch in `~/qwen-serving/kvarn/files/`
+(safe_bid tile_base at all four sites; length-validation fallback + `+group` scratch
+margin + `max_blocks` table-width clamp in `_cached_multiquery_path`), deployed via
+`bash kvarn/install.sh`; (2) config fix pending the A/B outcome; (3) upstream issue
+first, PR after maintainer reply (user decision).
