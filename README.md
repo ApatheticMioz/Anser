@@ -248,7 +248,7 @@ python .\scripts\avo_runner.py --cwd "D:\path\to\target_repo" --metric "benchmar
 
 | Component | Local Commit / Build | Upstream Repository | Upstream HEAD / Status |
 |---|---|---|---|
-| **vLLM Serving (`~/qwen-serving`)** | `2ae239f` | [`syv-ai/qwen38-27b-rtx3090`](https://github.com/syv-ai/qwen38-27b-rtx3090) | `69ba4d0` (112 commits ahead; PR #38 n-gram chains `c954724`, Docker distribution) |
+| **vLLM Serving (`~/qwen-serving`)** | `69ba4d0` (Git tree) / `2ae239f` (Active venv) | [`syv-ai/qwen38-27b-rtx3090`](https://github.com/syv-ai/qwen38-27b-rtx3090) | Synced to `origin/main` (`69ba4d0`) |
 | **llama.cpp Windows (`llama-cpp/`)** | `bb4caa754` (Build 10566, Clang 20.1.8) | [`ggerganov/llama.cpp`](https://github.com/ggerganov/llama.cpp) | Official Releases (`b10566+`) |
 
 ---
