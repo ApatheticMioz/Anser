@@ -1329,7 +1329,14 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
             OPENAI_API_KEY: "dummy",
             WSLENV: "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u",
           };
-          child = spawn("wsl.exe", ["-d", "Ubuntu", "--cd", targetCwd, "--", "/home/apath/.local/bin/goose", ...args], {
+          // --exec, NOT `--`: `wsl.exe -- <cmd>` runs the command line THROUGH
+          // the default shell, so any backticks in the task prompt underwent
+          // bash command substitution (the backtick-quoted goose tool names in
+          // our directives were executed and replaced with empty strings - the
+          // model never saw them, and its stderr was polluted with
+          // "edit: command not found" from the spawn shell, not from the model).
+          // --exec passes argv directly to the binary.
+          child = spawn("wsl.exe", ["-d", "Ubuntu", "--cd", targetCwd, "--exec", "/home/apath/.local/bin/goose", ...args], {
             env: wslEnv,
             stdio: ["ignore", "pipe", "pipe"],
             detached: false,
@@ -1541,7 +1548,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
 const server = new McpServer({
   name: "qwen38-local",
-  version: "4.5.2",
+  version: "4.5.3",
 });
 
 // Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
