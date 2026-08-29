@@ -824,6 +824,27 @@ async function engineWedgeState() {
   };
 }
 
+// Wedge counter: persisted machine-wide (every surface spawns its own server
+// process), surfaced via qwen_server status so A/B runs and production both
+// produce comparable wedge-rate telemetry.
+const WEDGE_COUNTER_FILE = path.join(TASK_DIR, ".wedge_counter.json");
+function readWedgeCounter() {
+  try {
+    return JSON.parse(fs.readFileSync(WEDGE_COUNTER_FILE, "utf8"));
+  } catch {
+    return { count: 0, lastAt: null, lastReason: null };
+  }
+}
+function bumpWedgeCounter(reason) {
+  try {
+    const cur = readWedgeCounter();
+    cur.count = (cur.count ?? 0) + 1;
+    cur.lastAt = Date.now();
+    cur.lastReason = String(reason ?? "").slice(0, 200);
+    fs.writeFileSync(WEDGE_COUNTER_FILE, JSON.stringify(cur));
+  } catch {}
+}
+
 // Kill + reboot a wedged engine. Every Claude surface runs its own copy of this
 // server process, so a stamp file (not an in-process lock) prevents two instances
 // from double-rebooting vLLM within one boot budget.
@@ -841,6 +862,7 @@ async function healWedgedEngine(statsAgeSec) {
   try {
     fs.mkdirSync(TASK_DIR, { recursive: true });
     fs.writeFileSync(HEAL_LOCK_FILE, JSON.stringify({ at: Date.now(), pid: process.pid, statsAgeSec }));
+    bumpWedgeCounter(`stats_age=${statsAgeSec}s`);
   } catch {}
   await stopServer();
   const res = await ensureServerRunning();
@@ -1649,6 +1671,7 @@ server.registerTool(
                   : null,
                 status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
                 status_endpoint_owned_by_this_instance: statusServerOwned,
+                wedge_counter: readWedgeCounter(),
               },
               null,
               2
