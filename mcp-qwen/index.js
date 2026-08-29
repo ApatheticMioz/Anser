@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.0)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.1)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
@@ -310,7 +310,7 @@ function extractToolEvents(lines) {
 // (goose may have already written files), so corrupt output surfaces loudly
 // instead. Benign markdown rulers (---, ```, ___, ~~~) are excluded from the
 // burst check; the block check ignores whitespace-only repeats.
-const CORRUPTION_BENIGN_CHARS = new Set([" ", "\n", "\t", "\r", "-", "=", "`", "~", "_"]);
+const CORRUPTION_BENIGN_CHARS = new Set([" ", "\n", "\t", "\r", "-", "=", "`", "~", "_", "#"]);
 function detectCorruption(text) {
   if (!text || text.length < 32) return null;
   const findings = [];
@@ -825,7 +825,9 @@ async function isEngineWarmed() {
   if (process.env.QWEN_BOOT_WARMUP === "0") {
     return { warmed: true, disabled: true };
   }
-  const m = await readEngineMetrics();
+  // Fresh fetch (no 5s cache): a <5s-old sample from a just-replaced engine
+  // could otherwise satisfy the marker check and skip a needed warmup.
+  const m = await readEngineMetrics(0);
   const q = m?.["vllm:prefix_cache_queries_total"];
   if (q == null) return { warmed: false, reason: "metrics-unavailable" };
   const marker = readWarmupMarker();
@@ -886,13 +888,18 @@ async function ensureEngineWarmed() {
     const r = await warmupEngineAttempt();
     if (r.ok) {
       const m = await readEngineMetrics(0);
-      try {
-        fs.writeFileSync(WARMUP_MARKER_FILE, JSON.stringify({
-          at: Date.now(),
-          prefix_queries_total: m?.["vllm:prefix_cache_queries_total"] ?? null,
-          tokens: WARMUP_TOKENS,
-        }));
-      } catch {}
+      const q = m?.["vllm:prefix_cache_queries_total"];
+      // Never persist a zero/null marker: a later incarnation also reporting 0
+      // would satisfy `current >= marker` and skip its own needed warmup.
+      if (typeof q === "number" && q > 0) {
+        try {
+          fs.writeFileSync(WARMUP_MARKER_FILE, JSON.stringify({
+            at: Date.now(),
+            prefix_queries_total: q,
+            tokens: WARMUP_TOKENS,
+          }));
+        } catch {}
+      }
       return { warmed: true, attempts: attempt, warmSeconds: r.seconds };
     }
     lastError = r.error ?? "warmup-failed";
@@ -1534,7 +1541,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
 const server = new McpServer({
   name: "qwen38-local",
-  version: "4.5.0",
+  version: "4.5.1",
 });
 
 // Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
