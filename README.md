@@ -244,10 +244,20 @@ python .\scripts\avo_runner.py --cwd "D:\path\to\target_repo" --metric "benchmar
 
 ---
 
-## 9. Key References
+## 9. Upstream Version Tracking
+
+| Component | Local Commit / Build | Upstream Repository | Upstream HEAD / Status |
+|---|---|---|---|
+| **vLLM Serving (`~/qwen-serving`)** | `2ae239f` | [`syv-ai/qwen38-27b-rtx3090`](https://github.com/syv-ai/qwen38-27b-rtx3090) | `69ba4d0` (112 commits ahead; PR #38 n-gram chains `c954724`, Docker distribution) |
+| **llama.cpp Windows (`llama-cpp/`)** | `bb4caa754` (Build 10566, Clang 20.1.8) | [`ggerganov/llama.cpp`](https://github.com/ggerganov/llama.cpp) | Official Releases (`b10566+`) |
+
+---
+
+## 10. Key References
 
 - `~/.claude/CLAUDE.md` — Hierarchical NVIDIA AVO & Multi-Agent Protocol (global user memory, not tracked in this repo).
 - [mcp-qwen/NOTES.md](mcp-qwen/NOTES.md) — Investigation history, architecture design records, and engineering changelog.
 - [benchmarks/swe-rebench/](benchmarks/swe-rebench/) — Benchmark harness and evaluation results.
 - [DFlash2: Non-Autoregressive Block Speculative Decoding](https://inco.ai/blog/dflash2/)
 - [KVarN: Variance-Normalized 4/2-bit KV Cache](https://github.com/huawei-csl/KVarN)
+

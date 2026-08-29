@@ -979,3 +979,23 @@ first, PR after maintainer reply (user decision);
 `benchmarks/wedge-repro/ISSUE_DRAFT.md` is the draft - its "remaining suspicion"
 section carries extra weight now, since the pristine-kernel rare wedge and our
 aggravated variant share the same first-JIT-launch signature.
+
+## 2026-08-29: Issue #48 filed, dispatch `--exec` fix, and test isolation (v4.5.3)
+
+1. **Upstream issue #48 filed & attachments published**:
+   - Issue: [syv-ai/qwen38-27b-rtx3090#48](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/48)
+   - Cross-link: [syv-ai/qwen38-27b-rtx3090#25 (Comment #5462775920)](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/25#issuecomment-5462775920)
+   - Attachments Gist: [Gist 532337dcf4b66a66729d8ae68df9d435](https://gist.github.com/ApatheticMioz/532337dcf4b66a66729d8ae68df9d435) attached in [Comment #5462825503](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/48#issuecomment-5462825503), containing `repro.py`, `wedge_pyspy_enginecore.txt`, `wedge_001_104300_englog.txt`, `wedge_001_152027_englog.txt`, and `iterations_unpatched.jsonl`.
+
+2. **Dispatch `--exec` spawn fix**:
+   - In `ps` inspection of Goose processes, arguments appeared as `Prefer native Goose tools (, , , , )`. Spawning `wsl.exe -d Ubuntu -- <cmd>` ran through login shell bash, executing backtick-quoted tool directives as command substitutions.
+   - Fixed by switching `wsl.exe` spawn to `--exec /home/apath/.local/bin/goose` and updating `sessionExistsOnDisk` to use `--exec`.
+
+3. **ESM Import & Test Harness Isolation (`isMain`)**:
+   - `index.js` unconditionally ran `main()`, attached `StdioServerTransport`, and started `statusHttpServer.listen(18021)` upon module import.
+   - When test suites (`test_global_semaphore.js`) imported exported semaphore helpers, child processes collided on port 18021 and hijacked stdio.
+   - Guarded `main()`, `statusHttpServer.listen()`, and `cleanOldTasks` interval with `isMain` (`path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)`). `test_global_semaphore.js` now passes in ~8s without watchdogs.
+
+4. **Upstream Commit Reference State**:
+   - `~/qwen-serving`: Local `2ae239f` (pristine base), upstream `origin/main` is `69ba4d0` (112 commits ahead; PR #38 n-gram chains `c954724`, Docker distribution, etc.).
+   - `d:\LLM_Ecosystem\llama-cpp`: Build 10566, commit `bb4caa754`.
