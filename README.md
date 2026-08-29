@@ -37,7 +37,7 @@ D:\LLM_Ecosystem\
 │       └── wait_qb.sh          Batch queue waiter
 ├── llama-cpp\                  Native Windows CUDA build of llama.cpp (serves
 │                               scripts\uncensored\ GGUF models on Windows)
-├── mcp-qwen\                   MCP Server (Node.js v4.2.0) exposing local Qwen to orchestrators
+├── mcp-qwen\                   MCP Server (Node.js v4.5.3) exposing local Qwen to orchestrators
 │   ├── index.js                3 consolidated SOTA tools (qwen_coworker, qwen_task,
 │   │                           qwen_server), zero-turn wait HTTP server @ localhost:18021,
 │   │                           global goose semaphore (cross-process leases,
@@ -76,7 +76,7 @@ User <───> Meta-Supervisor / Lead Architect
                                │  - qwen_server (status, start, stop)
                                ▼
             ┌─────────────────────────────────────────────────────────┐
-            │  mcp-qwen/index.js (v4.2.0 Unified MCP Server)           │
+            │  mcp-qwen/index.js (v4.5.3 Unified MCP Server)           │
             │  ├── 45s Sync Race (fast tasks return Turn 1 directly)   │
             │  ├── Background Task Manager (~/.qwen/tasks/ JSON)       │
             │  ├── Global Goose Semaphore (MAX_CONCURRENT_GOOSE=1)     │
