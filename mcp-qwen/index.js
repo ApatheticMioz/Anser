@@ -21,7 +21,10 @@ import os from "os";
 import http from "http";
 import path from "path";
 import crypto from "crypto";
+import { fileURLToPath } from "url";
 import { AvoLineageEngine } from "./avo_engine.js";
+
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 const execFileAsync = promisify(execFile);
 
@@ -410,11 +413,11 @@ async function sessionExistsOnDisk(sessionId, targetInWsl = false) {
   try {
     let stdout = "";
     if (targetInWsl && IS_WINDOWS) {
-      const res = await execFileAsync("wsl.exe", ["-d", "Ubuntu", "--", "/home/apath/.local/bin/goose", "session", "list"], { timeout: 5000 });
+      const res = await execFileAsync("wsl.exe", ["-d", "Ubuntu", "--exec", "/home/apath/.local/bin/goose", "session", "list"], { timeout: 10000 });
       stdout = res.stdout;
     } else {
       const gooseExe = getGooseExecutable();
-      const res = await execFileAsync(gooseExe, ["session", "list"], { timeout: 5000 });
+      const res = await execFileAsync(gooseExe, ["session", "list"], { timeout: 10000 });
       stdout = res.stdout;
     }
     const lines = stdout.split("\n");
@@ -522,7 +525,9 @@ function cleanOldTasks() {
   listTasksFromDisk(); // Triggers disk retention cleanup
 }
 
-setInterval(cleanOldTasks, 300_000);
+if (isMain) {
+  setInterval(cleanOldTasks, 300_000).unref();
+}
 
 // -----------------------------------------------------------------------------
 // Global Goose Concurrency (cross-process, v4.3.0)
@@ -1182,7 +1187,9 @@ statusHttpServer.on("error", (err) => {
   }
 });
 
-statusHttpServer.listen(STATUS_PORT, "127.0.0.1", () => {});
+if (isMain) {
+  statusHttpServer.listen(STATUS_PORT, "127.0.0.1", () => {});
+}
 
 // -----------------------------------------------------------------------------
 // Core Task Execution
@@ -1869,7 +1876,9 @@ async function main() {
 // server on stdio, which the test processes simply leave idle.
 export { acquireGooseSlot, releaseGooseSlot, listGooseSlots, TASK_DIR };
 
-main().catch((err) => {
-  console.error("MCP Server Fatal Error:", err);
-  process.exit(1);
-});
+if (isMain) {
+  main().catch((err) => {
+    console.error("MCP Server Fatal Error:", err);
+    process.exit(1);
+  });
+}
