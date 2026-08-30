@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.5)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.6)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
- * - Local Coworker (Variation & Execution Operator): Qwen3.8-27B via Goose Harness
+ * - Autonomous Execution Coworker: Qwen3.8-27B via Goose Agent Harness ($0 text-only execution)
  * - Serving: Universal 245K context (vLLM + DFlash2 + KVarN @ localhost:18020)
  * - Zero-Turn Async Architecture: Blocking Long-Poll HTTP Wait Endpoint (localhost:18021)
  * - 3 Consolidated SOTA Tools: qwen_coworker, qwen_task, qwen_server
- * - Autonomous Self-Healing Engine Lifecycle & Decaying Checkpoint Telemetry
+ * - Autonomous Self-Healing Engine Lifecycle, Decaying Checkpoint Telemetry & Granular Turn Cadence
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -1384,6 +1384,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     finalTaskPrompt += `=== Operational & Tooling Directives ===\n`;
     finalTaskPrompt += `- Prefer native Goose tools (\`read\`, \`edit\`, \`write\`, \`patch\`, \`tree\`) over shell subprocesses for inspecting and modifying files for maximum efficiency.\n`;
     finalTaskPrompt += `- Target Scope: Focus directly on project workspace source files. Do NOT explore or read third-party dependency directories (e.g. \`node_modules\`, \`.venv\`, \`vendor\`, \`target\`) unless an explicit compilation or runtime error specifically requires inspecting a type declaration.\n`;
+    finalTaskPrompt += `- Granular Turn Scope: Focus strictly on the 3-4 target files specified for this turn. Do not perform extraneous edits outside the requested scope.\n`;
     if (IS_WINDOWS && !cwdInWsl) {
       finalTaskPrompt += `- Windows Line Endings: Workspace files may use CRLF (\\r\\n). If \`edit\` or string replacement encounters matching issues, inspect exact line endings with \`read\` or write the normalized file.\n`;
     }
@@ -1655,7 +1656,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
 const server = new McpServer({
   name: "qwen38-local",
-  version: "4.5.5",
+  version: "4.5.6",
 });
 
 // Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
@@ -1668,9 +1669,11 @@ server.registerTool(
       "Has native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. " +
       "Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and AVO candidate mutations. " +
       "USAGE - multi-turn chat is the primary mode:\n" +
+      "  - Granular Turn Scope (3-4 Files Max): Scope mutation dispatches to at most 3-4 cohesive files per turn\n" +
+      "    (e.g. 'Turn 2a: wrap actions.ts and tools/*') to maintain rapid 3-6 minute turn velocity and continuous feedback.\n" +
       "  - Open a named `session_id` and drive work iteratively in SHORT turns: 'read X and report', 'now draft it',\n" +
       "    'revise per this feedback'. Send corrections and pushback as follow-up turns - do NOT rewrite one\n" +
-      "    monolithic spec per request. Each follow-up rides the warm prefix cache (~8-9k tok/s prefill).\n" +
+      "    monolithic spec per request. Each follow-up rides the warm prefix cache (~10-12k tok/s prefill).\n" +
       "  - Sessions are long-lived (245K ctx): never roll a session for context size; roll only on milestone\n" +
       "    change or when session history has poisoned tool habits. BUT checkpoint very long sessions (1h+ of\n" +
       "    heavy turns, or KV cache usage sustained >~50% in qwen_server status): have the coworker write a\n" +
