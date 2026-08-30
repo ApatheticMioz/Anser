@@ -37,36 +37,29 @@ You are paired with a local **Qwen3.8-27B** model (vLLM + DFlash2 + KVarN @ `htt
 
 ---
 
-## 3. Conversational Multi-Turn Discipline (Anti-Monolithic & Granular Cadence)
+## 3. Universal Turn Budgeting: Atomic Mutation Units (AMUs) & 5-Minute Velocity
 
-The coworker is a 245K-context conversational peer, not a one-shot batch script. Treat the coworker like a senior engineer paired in a live chat session:
+Counting "files" is an anti-pattern (a 5,000-line file with 10 handlers causes as much delay as 15 small files). The universal unit of execution is the **Atomic Mutation Unit (AMU)** — a single discrete function, handler, class method, or schema block.
 
-1. **Granular Turn Scope (3–4 Files Max Per Mutation Turn)**:
-   - **Strict Scope Limit**: Never bundle multi-file migrations or features (e.g. 8–15 files) into a single coworker dispatch.
-   - Scope each mutation dispatch to **at most 3–4 logically cohesive files** (targeting a rapid **3–6 minute turn execution window**).
-   - Drive multi-file features incrementally across consecutive conversational turns in the *same* `session_id` (`session_id: "<workspace>_<milestone>"`).
-   - After each 3–4 file turn completes, inspect the diff, verify incremental progress, and dispatch the next 3–4 files.
-   - **Benefit**: Provides constant live feedback every ~4–5 minutes, prevents long black-box waits, and keeps prefix caching at maximum speed (~12,000 tok/s).
-2. **Multi-Turn by Default**:
-   - Open a named session (`session_id: "<workspace>_<milestone>"`) and drive work iteratively in short, focused turns ("audit X and report", "draft approach for Y", "apply changes to A & B", "apply changes to C & D", "run tests").
-   - Send feedback, corrections, and pushback as follow-up turns in the *same* session.
+### The Universal Turn Budget Invariants
+1. **Target Budget ($\le$ 8–10 Tool Actions / 2–3 Discrete AST Targets per Turn)**:
+   - Scope each mutation dispatch so the coworker can fulfill it in **at most 8–10 tool calls** (targeting a strict **3–5 minute execution window**).
+   - **Large File Slicing**: For large files (>300 LOC), specify the exact function name or line range slice (`target: file.ts#functionName`) rather than dumping the whole file into the turn.
+   - Drive multi-target migrations iteratively across consecutive conversational turns.
+2. **Session Lifecycle & Speculative Decoding Decay Threshold ($\le$ 20–25 Cumulative Tool Calls)**:
+   - As a session accumulates >25 tool calls (~35k–45k tokens of tool history), speculative decoding acceptance drops from ~85% to <40%, cutting decode speed in half.
+   - **Roll Cadence**: Keep a `session_id` active for **2 to 3 focused turns** ($\le$ 25 cumulative tool calls), then **roll to a fresh `session_id`** (e.g. `<milestone>_stage2`) to reset context, restore ~85% draft acceptance, and maintain ~75–85 tok/s generation velocity.
 3. **100% Prefix Cache Velocity**:
-   - Subsequent turns in the same `session_id` hit the warm vLLM prefix cache (~10,000–12,000 tok/s prefill, <0.5s wakeup), enabling instant conversational iterations at $0.
-4. **Session Lifecycle & Compaction**:
-   - Sessions are long-lived across a feature milestone.
-   - When transitioning between distinct feature milestones (e.g. `auth_refactor` $\to$ `perf_optimization`), step up to a fresh `session_id` to reset context back to the ~15k–30k token sweet spot.
-   - If a session grows very large (>1h of heavy turns or sustained KV cache usage >50%), have the coworker write a handoff checkpoint summary to disk and resume in a fresh `session_id`.
+   - Consecutive turns within the same 2–3 turn micro-session hit the warm vLLM prefix cache (~10,000–14,000 tok/s prefill, <0.5s wakeup) at $0 cost.
 
 ---
 
 ## 4. Execution-First Mutation Protocol
 
 1. **Direct Action on Target Scope**:
-   - Mutation turns are for code editing, not open-ended re-auditing. When dispatching a mutation turn, direct the coworker straight to the target 3–4 workspace files.
-   - **No Dependency Spelunking**: Do NOT inspect `node_modules` or third-party library package directories unless a concrete compiler/runtime error specifically demands type inspection.
-2. **Atomic Logical Cohesion**:
-   - Scope each mutation dispatch to a single coherent logical concern (e.g. "Turn 2a: Wrap server actions in `src/lib/actions.ts` and Mastra tools in `src/mastra/tools/*`").
-3. **Decaying-Interval Supervisory Check-Ins**:
+   - Mutation turns are for code editing, not open-ended re-auditing. Direct the coworker straight to the target AST slices.
+   - **No Dependency Spelunking**: Do NOT inspect `node_modules`, `.venv`, or vendor package directories unless a concrete compiler error specifically demands type inspection.
+2. **Decaying-Interval Supervisory Check-Ins**:
    - Active, streaming tasks are protected by an automatic **10-minute Inactivity Watchdog** against true hangs; they are never killed by arbitrary wall-clock timers.
    - For background tasks that exceed standard turn duration, the supervisor checks in on progress on a decaying cadence ($T_0=60\text{m}$, $+30\text{m} \to 90\text{m}$, $+25\text{m} \to 115\text{m}$, $+15\text{m} \to 130\text{m}$) via `http://127.0.0.1:18021/task/<id>` to sample telemetry (`toolCallsCount`, `fileOps`, `lastActivitySecAgo`) and steer the plan before waste accumulates.
 
@@ -75,7 +68,7 @@ The coworker is a 245K-context conversational peer, not a one-shot batch script.
 ## 5. Verification & Version Control Protocol
 
 1. **Incremental Milestone Verification**:
-   - Verify changes after each 3–4 file batch with targeted typechecks or test runs.
+   - Verify changes after each 2–3 turn batch with targeted typechecks or test runs.
    - Run the full test suite (`npm run build`, `npm run lint`, automated tests) before concluding the milestone.
 2. **Mandatory Git Protocol**:
    - Inspect `git status` prior to and following modifications.
