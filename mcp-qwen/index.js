@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.4)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.5)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
@@ -8,7 +8,7 @@
  * - Serving: Universal 245K context (vLLM + DFlash2 + KVarN @ localhost:18020)
  * - Zero-Turn Async Architecture: Blocking Long-Poll HTTP Wait Endpoint (localhost:18021)
  * - 3 Consolidated SOTA Tools: qwen_coworker, qwen_task, qwen_server
- * - True Windows <-> WSL Agnosticism with 45s Safe Synchronous Race & 1-Hour Background Budget
+ * - Autonomous Self-Healing Engine Lifecycle & Decaying Checkpoint Telemetry
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -41,8 +41,8 @@ const DEFAULT_RACE_MS = 45_000;
 const RACE_MS = process.env.QWEN_RACE_MS
   ? parseInt(process.env.QWEN_RACE_MS, 10)
   : DEFAULT_RACE_MS;
-// Full 1-Hour Default Time Budget for background execution
-const DEFAULT_TIMEOUT_MS = 3_600_000;
+// Generous Default Time Budget (4 hours) for background execution; inactivity watchdog handles hangs
+const DEFAULT_TIMEOUT_MS = 14_400_000;
 // Budget floor: a 27B model on consumer silicon routinely needs tens of
 // minutes; sub-floor budgets are raised to this value before dispatch.
 // Env-overridable (parseInt guard, like RACE_MS above) for tests.
@@ -993,13 +993,17 @@ async function ensureEngineWarmed() {
       }
     }
 
-    // A stalled warmup usually means the boot-stall claimed this engine
-    // incarnation: verify with the canary and reboot if wedged, then retry.
+    // A stalled warmup indicates the engine's prefill/JIT pipeline is degraded.
+    // If auto-heal is enabled, reboot the engine unconditionally so the next attempt
+    // starts on a pristine instance (even if a 1-token canary passes).
     const c = await canaryProbe(true);
-    if (!c.ok) {
-      if (!AUTO_HEAL) return { warmed: false, error: `${lastError}; canary: ${c.error}` };
-      await healWedgedEngine(null);
-      resetEngineHealthCache();
+    if (!c.ok || (AUTO_HEAL && attempt < 3)) {
+      if (!AUTO_HEAL && !c.ok) return { warmed: false, error: `${lastError}; canary: ${c.error}` };
+      if (AUTO_HEAL) {
+        await healWedgedEngine(null);
+        resetEngineHealthCache();
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
     }
   }
   return { warmed: false, error: `${lastError} (3 attempts)` };
@@ -1197,7 +1201,7 @@ const statusHttpServer = http.createServer((req, res) => {
     return;
   }
 
-  // GET /task/:id (Immediate JSON status check)
+  // GET /task/:id (Immediate JSON status check & telemetry)
   const getMatch = pathname.match(/^\/task\/([^/]+)$/);
   if (req.method === "GET" && getMatch) {
     const taskId = getMatch[1];
@@ -1206,7 +1210,9 @@ const statusHttpServer = http.createServer((req, res) => {
       res.writeHead(404, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ found: false, id: taskId }));
     }
-    const elapsed_s = Math.round(((task.finishedAt || Date.now()) - task.createdAt) / 1000);
+    const now = Date.now();
+    const elapsed_s = Math.round(((task.finishedAt || now) - task.createdAt) / 1000);
+    const lastActivitySecAgo = task.lastActivityAt ? Math.max(0, Math.round((now - task.lastActivityAt) / 1000)) : null;
     res.writeHead(200, { "Content-Type": "application/json" });
     return res.end(
       JSON.stringify(
@@ -1219,6 +1225,9 @@ const statusHttpServer = http.createServer((req, res) => {
           done: task.done,
           isError: task.isError,
           elapsed_s,
+          startedAt: task.startedAt,
+          lastActivitySecAgo,
+          streamBytes: task.streamBytes || 0,
           fileOps: task.fileOps || [],
           toolCallsCount: task.toolCallsCount || 0,
         },
@@ -1298,6 +1307,8 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     createdAt: Date.now(),
     startedAt: null,
     finishedAt: null,
+    lastActivityAt: null,
+    streamBytes: 0,
     status: "queued",
     done: false,
     isError: false,
@@ -1475,6 +1486,8 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
       let lastSaveAt = Date.now();
       child.stdout.on("data", (chunk) => {
         lastActivityAt = Date.now();
+        taskEntry.lastActivityAt = lastActivityAt;
+        taskEntry.streamBytes = (taskEntry.streamBytes || 0) + chunk.length;
         receivedAnyOutput = true;
         lineBuf += chunk.toString("utf8");
         const chunkLines = lineBuf.split("\n");
@@ -1507,6 +1520,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
       child.stderr.on("data", (chunk) => {
         lastActivityAt = Date.now();
+        taskEntry.lastActivityAt = lastActivityAt;
         receivedAnyOutput = true;
         stderr += chunk.toString("utf8");
         if (stderr.length > 50_000) {
@@ -1640,7 +1654,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
 const server = new McpServer({
   name: "qwen38-local",
-  version: "4.5.4",
+  version: "4.5.5",
 });
 
 // Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
