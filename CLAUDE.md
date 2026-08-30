@@ -12,7 +12,7 @@ You are paired with a local **Qwen3.8-27B** model (vLLM + DFlash2 + KVarN @ `htt
   - Visual verification, rendered UI inspection, screenshot audits, and multimodal QA.
   - Formulating hypotheses, test specifications, and synthesizing final deliverables for the user.
 - **Autonomous Coworker (Qwen via Goose & MCP @ $0)**:
-  - Hands-on execution: editing source code, AST manipulation, and shell operations across Windows & WSL.
+  - Hands-on execution: codebase exploration, AST manipulation, code editing, and shell operations across Windows & WSL.
   - Pure text-only execution: 24GB VRAM dedicated to 245K context and speculative decoding.
   - Large-context repository and document ingestion (50k–200k tokens locally for $0).
   - Multi-source live documentation lookup (`extensions: ['npx -y context7@latest']` or `['uvx free-search-mcp']`).
@@ -37,38 +37,41 @@ You are paired with a local **Qwen3.8-27B** model (vLLM + DFlash2 + KVarN @ `htt
 
 ---
 
-## 3. Universal Turn Budgeting: Atomic Mutation Units (AMUs) & 5-Minute Velocity
+## 3. Conversational Pair-Programming Cadence (Anti-Monolithic Discipline)
 
-Counting "files" is an anti-pattern (a 5,000-line file with 10 handlers causes as much delay as 15 small files). The universal unit of execution is the **Atomic Mutation Unit (AMU)** — a single discrete function, handler, class method, or schema block.
+The coworker is an interactive, conversational pair-programmer, NOT a one-shot batch processor. Drive the coworker like a senior tech lead pairing with an autonomous staff engineer:
 
-### The Universal Turn Budget Invariants
-1. **Target Budget ($\le$ 8–10 Tool Actions / 2–3 Discrete AST Targets per Turn)**:
-   - Scope each mutation dispatch so the coworker can fulfill it in **at most 8–10 tool calls** (targeting a strict **3–5 minute execution window**).
-   - **Large File Slicing**: For large files (>300 LOC), specify the exact function name or line range slice (`target: file.ts#functionName`) rather than dumping the whole file into the turn.
-   - Drive multi-target migrations iteratively across consecutive conversational turns.
-2. **Session Lifecycle & Speculative Decoding Decay Threshold ($\le$ 20–25 Cumulative Tool Calls)**:
-   - As a session accumulates >25 tool calls (~35k–45k tokens of tool history), speculative decoding acceptance drops from ~85% to <40%, cutting decode speed in half.
-   - **Roll Cadence**: Keep a `session_id` active for **2 to 3 focused turns** ($\le$ 25 cumulative tool calls), then **roll to a fresh `session_id`** (e.g. `<milestone>_stage2`) to reset context, restore ~85% draft acceptance, and maintain ~75–85 tok/s generation velocity.
-3. **100% Prefix Cache Velocity**:
-   - Consecutive turns within the same 2–3 turn micro-session hit the warm vLLM prefix cache (~10,000–14,000 tok/s prefill, <0.5s wakeup) at $0 cost.
+### 1. Single Logical Concern per Turn (3–5 Minute Velocity)
+- **Strict Turn Scope**: Scope each conversational dispatch to **a single logical subsystem, layer, or concern** (e.g. Turn 1: "Fact Audit", Turn 2: "Schema & DB Foundation", Turn 3: "Server Actions & Tools", Turn 4: "REST Endpoints & Workers", Turn 5: "Typecheck & Lint").
+- **Never Dump Multi-Component Mega-Prompts**: Bundling 10–15 files across multiple subsystems into a single prompt forces the coworker into 40–50 sequential tool calls, creating a 50-minute black box and degrading speculative decoding.
+- **Target Execution Budget**: Scope prompts so the coworker fulfills each turn in **$\le$ 6–8 tool actions** (targeting a strict **3–5 minute turn execution window**).
+- **Large File Slicing**: When modifying large files (>300 LOC), direct the coworker to the specific function or AST slice (e.g. `target: worker.ts#routeMessage`) rather than asking it to inspect the whole file.
+
+### 2. Session Lifecycle & Speculative Decoding Decay Threshold
+- **Micro-Session Cadence**: Keep a `session_id` active for **2 to 3 focused turns** ($\le$ 20–25 cumulative tool calls).
+- **Roll Cadence**: When a session accumulates >25 tool calls (~35k–45k tokens of tool history), speculative decoding acceptance drops from ~85% to <40%, cutting token generation speed in half.
+- **The Rule**: Step up to a fresh `session_id` (e.g. `<milestone>_stage2`) for the next phase to reset context back to the ~10k–15k token sweet spot, restore ~85% draft acceptance, and maintain peak ~75–85 tok/s generation velocity.
+
+### 3. 100% Prefix Cache Velocity
+- Consecutive turns within the same 2–3 turn micro-session hit the warm local vLLM prefix cache (~10,000–14,000 tok/s prefill, <0.5s wakeup) at $0 cost.
 
 ---
 
 ## 4. Execution-First Mutation Protocol
 
 1. **Direct Action on Target Scope**:
-   - Mutation turns are for code editing, not open-ended re-auditing. Direct the coworker straight to the target AST slices.
-   - **No Dependency Spelunking**: Do NOT inspect `node_modules`, `.venv`, or vendor package directories unless a concrete compiler error specifically demands type inspection.
+   - Mutation turns are for code editing, not open-ended re-auditing. Direct the coworker straight to the target component slice.
+   - **No Dependency Spelunking**: Do NOT inspect `node_modules`, `.venv`, `vendor`, or `target` directories unless a concrete compiler/runtime error specifically demands type inspection.
 2. **Decaying-Interval Supervisory Check-Ins**:
    - Active, streaming tasks are protected by an automatic **10-minute Inactivity Watchdog** against true hangs; they are never killed by arbitrary wall-clock timers.
-   - For background tasks that exceed standard turn duration, the supervisor checks in on progress on a decaying cadence ($T_0=60\text{m}$, $+30\text{m} \to 90\text{m}$, $+25\text{m} \to 115\text{m}$, $+15\text{m} \to 130\text{m}$) via `http://127.0.0.1:18021/task/<id>` to sample telemetry (`toolCallsCount`, `fileOps`, `lastActivitySecAgo`) and steer the plan before waste accumulates.
+   - For extended background tasks, the supervisor checks in on progress on a decaying cadence ($T_0=60\text{m}$, $+30\text{m} \to 90\text{m}$, $+25\text{m} \to 115\text{m}$, $+15\text{m} \to 130\text{m}$) via `http://127.0.0.1:18021/task/<id>` to sample telemetry (`toolCallsCount`, `fileOps`, `lastActivitySecAgo`) and steer the plan before waste accumulates.
 
 ---
 
 ## 5. Verification & Version Control Protocol
 
 1. **Incremental Milestone Verification**:
-   - Verify changes after each 2–3 turn batch with targeted typechecks or test runs.
+   - Verify changes after each component batch with targeted typechecks or test runs.
    - Run the full test suite (`npm run build`, `npm run lint`, automated tests) before concluding the milestone.
 2. **Mandatory Git Protocol**:
    - Inspect `git status` prior to and following modifications.

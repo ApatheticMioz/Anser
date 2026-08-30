@@ -1668,17 +1668,12 @@ server.registerTool(
       "Primary agentic interface for local Qwen3.8-27B running inside the Goose agent harness for $0. " +
       "Has native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. " +
       "Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and AVO candidate mutations. " +
-      "USAGE - multi-turn chat is the primary mode:\n" +
-      "  - Granular Turn Scope (3-4 Files Max): Scope mutation dispatches to at most 3-4 cohesive files per turn\n" +
-      "    (e.g. 'Turn 2a: wrap actions.ts and tools/*') to maintain rapid 3-6 minute turn velocity and continuous feedback.\n" +
-      "  - Open a named `session_id` and drive work iteratively in SHORT turns: 'read X and report', 'now draft it',\n" +
-      "    'revise per this feedback'. Send corrections and pushback as follow-up turns - do NOT rewrite one\n" +
-      "    monolithic spec per request. Each follow-up rides the warm prefix cache (~10-12k tok/s prefill).\n" +
-      "  - Sessions are long-lived (245K ctx): never roll a session for context size; roll only on milestone\n" +
-      "    change or when session history has poisoned tool habits. BUT checkpoint very long sessions (1h+ of\n" +
-      "    heavy turns, or KV cache usage sustained >~50% in qwen_server status): have the coworker write a\n" +
-      "    handoff summary file, then continue in a fresh session_id - giant re-prefills at partial cache hit\n" +
-      "    are the slowest and most stall-prone mode.\n" +
+      "USAGE - conversational pair-programming is the primary mode:\n" +
+      "  - Single Logical Concern per Turn: Scope mutation dispatches to ONE cohesive subsystem, layer, or component\n" +
+      "    (e.g. 'Turn 2a: wrap server actions and Mastra tools') to maintain rapid 3-5 minute turn velocity (<= 6-8 tool calls).\n" +
+      "  - Slicing Large Files (>300 LOC): Target specific function/AST slices rather than dumping entire files.\n" +
+      "  - Session Lifecycle & Speculative Decoding (~20-25 tool call limit): Keep a `session_id` active for 2-3 focused turns,\n" +
+      "    then roll to a fresh session_id (e.g. '<milestone>_stage2') to reset context, restore ~85% draft acceptance, and maintain ~75-85 tok/s decode velocity.\n" +
       "  - Budgets are generous by design (default 1h, 10-min floor; pass more for research+write+post).\n" +
       "    Split multi-stage jobs so a timeout can never land on the irreversible step (post/commit/deploy):\n" +
       "    persist artifacts to disk first, then a short follow-up dispatch executes the critical action.\n" +
