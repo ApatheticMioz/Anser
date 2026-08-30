@@ -1383,6 +1383,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
     finalTaskPrompt += `=== Operational & Tooling Directives ===\n`;
     finalTaskPrompt += `- Prefer native Goose tools (\`read\`, \`edit\`, \`write\`, \`patch\`, \`tree\`) over shell subprocesses for inspecting and modifying files for maximum efficiency.\n`;
+    finalTaskPrompt += `- Target Scope: Focus directly on project workspace source files. Do NOT explore or read third-party dependency directories (e.g. \`node_modules\`, \`.venv\`, \`vendor\`, \`target\`) unless an explicit compilation or runtime error specifically requires inspecting a type declaration.\n`;
     if (IS_WINDOWS && !cwdInWsl) {
       finalTaskPrompt += `- Windows Line Endings: Workspace files may use CRLF (\\r\\n). If \`edit\` or string replacement encounters matching issues, inspect exact line endings with \`read\` or write the normalized file.\n`;
     }
