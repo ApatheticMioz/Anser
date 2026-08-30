@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.3)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.4)
  *
  * Architecture:
  * - Lead Architect (Meta-Supervisor): Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity
@@ -776,7 +776,7 @@ async function canaryProbe(force = false) {
         max_tokens: 8,
         messages: [{ role: "user", content: "Reply with: ok" }],
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(45_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const j = await res.json();
@@ -804,18 +804,19 @@ async function canaryProbe(force = false) {
 // reboot-retry - converts the production failure mode (auto-heal reboot ->
 // next big dispatch wedges -> task killed) into a bounded boot delay.
 // Skippable via QWEN_BOOT_WARMUP=0; size via QWEN_WARMUP_TOKENS (default
-// 24,000 tokens - the smallest workload that reliably triggers the stall).
+// 8,192 tokens - enough to chunk across 2048-token batches and trigger the
+// JIT pair without risking excessive GPU stall time).
 // "Warmed" is tracked via the cumulative prefix-cache-queries counter: it
 // resets to 0 on every engine restart, so marker >= current proves the
 // marker came from this same engine incarnation.
 const WARMUP_MARKER_FILE = path.join(TASK_DIR, ".warmup_marker.json");
 const WARMUP_TOKENS = (() => {
   const n = parseInt(process.env.QWEN_WARMUP_TOKENS, 10);
-  return Number.isFinite(n) && n > 1000 ? n : 24_000;
+  return Number.isFinite(n) && n > 1000 ? n : 8_192;
 })();
 const WARMUP_TIMEOUT_MS = (() => {
   const n = parseInt(process.env.QWEN_WARMUP_TIMEOUT_MS, 10);
-  return Number.isFinite(n) && n > 30_000 ? n : 420_000;
+  return Number.isFinite(n) && n > 30_000 ? n : 600_000;
 })();
 
 function readWarmupMarker() {
@@ -859,30 +860,82 @@ function makeWarmupCorpus(tokens) {
   return parts.join(" ");
 }
 
-async function warmupEngineAttempt() {
-  const corpus = makeWarmupCorpus(WARMUP_TOKENS);
-  const t0 = Date.now();
-  try {
-    const res = await fetch(`${BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${getApiKeySync()}` },
-      body: JSON.stringify({
-        model: "qwen3.8-27b",
-        max_tokens: 16,
-        messages: [{
-          role: "user",
-          content: `Document:\n${corpus}\n\nReply with a one-sentence summary.`,
-        }],
-      }),
-      signal: AbortSignal.timeout(WARMUP_TIMEOUT_MS),
+function warmupEngineAttempt() {
+  return new Promise((resolve) => {
+    const corpus = makeWarmupCorpus(WARMUP_TOKENS);
+    const t0 = Date.now();
+    const payload = JSON.stringify({
+      model: "qwen3.8-27b",
+      max_tokens: 16,
+      messages: [{
+        role: "user",
+        content: `Document:\n${corpus}\n\nReply with a one-sentence summary.`,
+      }],
     });
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    const j = await res.json();
-    if ((j?.usage?.completion_tokens ?? 0) < 1) return { ok: false, error: "no tokens" };
-    return { ok: true, seconds: Math.round((Date.now() - t0) / 1000) };
-  } catch (err) {
-    return { ok: false, error: String(err?.message ?? err), seconds: Math.round((Date.now() - t0) / 1000) };
-  }
+
+    const targetUrl = new URL(`${BASE_URL}/chat/completions`);
+    const req = http.request(
+      {
+        hostname: targetUrl.hostname,
+        port: targetUrl.port,
+        path: targetUrl.pathname,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          Authorization: `Bearer ${getApiKeySync()}`,
+        },
+        timeout: WARMUP_TIMEOUT_MS,
+      },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { body += chunk; });
+        res.on("end", () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            return resolve({
+              ok: false,
+              error: `HTTP ${res.statusCode}: ${body.slice(0, 150)}`,
+              seconds: Math.round((Date.now() - t0) / 1000),
+            });
+          }
+          try {
+            const j = JSON.parse(body);
+            if ((j?.usage?.completion_tokens ?? 0) < 1) {
+              return resolve({
+                ok: false,
+                error: "completion returned no tokens",
+                seconds: Math.round((Date.now() - t0) / 1000),
+              });
+            }
+            resolve({ ok: true, seconds: Math.round((Date.now() - t0) / 1000) });
+          } catch (e) {
+            resolve({
+              ok: false,
+              error: `invalid json: ${e.message}`,
+              seconds: Math.round((Date.now() - t0) / 1000),
+            });
+          }
+        });
+      }
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error(`socket timed out after ${Math.round(WARMUP_TIMEOUT_MS / 1000)}s`));
+    });
+
+    req.on("error", (err) => {
+      const errDetail = err?.cause?.message || err?.cause?.code || err?.code || err?.message || String(err);
+      resolve({
+        ok: false,
+        error: String(errDetail),
+        seconds: Math.round((Date.now() - t0) / 1000),
+      });
+    });
+
+    req.write(payload);
+    req.end();
+  });
 }
 
 async function ensureEngineWarmed() {
@@ -908,6 +961,38 @@ async function ensureEngineWarmed() {
       return { warmed: true, attempts: attempt, warmSeconds: r.seconds };
     }
     lastError = r.error ?? "warmup-failed";
+
+    // If client timed out or connection dropped, the engine may still be
+    // finishing the prefill/JIT. Drain/wait up to 60s for running requests to drop.
+    let drained = false;
+    for (let d = 0; d < 12; d++) {
+      const m = await readEngineMetrics(0);
+      if ((m?.["vllm:num_requests_running"] ?? 0) === 0) {
+        drained = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+
+    // If drained cleanly and prefix queries grew, verify health via canary
+    if (drained) {
+      const mAfter = await readEngineMetrics(0);
+      const qAfter = mAfter?.["vllm:prefix_cache_queries_total"];
+      if (typeof qAfter === "number" && qAfter > 0) {
+        const postCanary = await canaryProbe(true);
+        if (postCanary.ok) {
+          try {
+            fs.writeFileSync(WARMUP_MARKER_FILE, JSON.stringify({
+              at: Date.now(),
+              prefix_queries_total: qAfter,
+              tokens: WARMUP_TOKENS,
+            }));
+          } catch {}
+          return { warmed: true, attempts: attempt, warmSeconds: r.seconds, recoveredFromDrain: true };
+        }
+      }
+    }
+
     // A stalled warmup usually means the boot-stall claimed this engine
     // incarnation: verify with the canary and reboot if wedged, then retry.
     const c = await canaryProbe(true);
@@ -1555,7 +1640,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
 const server = new McpServer({
   name: "qwen38-local",
-  version: "4.5.3",
+  version: "4.5.4",
 });
 
 // Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
