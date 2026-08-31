@@ -404,7 +404,17 @@ function summarizeGooseRun(lines, { timedOut, timeoutReason = "", timeoutMs = DE
     );
   }
 
-  const isError = degenerate || errors.length > 0 || (timedOut && fileOps.length === 0);
+  const streamErrorPattern = /Stream decode error|error decoding response body|Network error:\s*Stream decode error/i;
+  const isStreamError = (finalText && streamErrorPattern.test(finalText)) || (stderr && streamErrorPattern.test(stderr));
+  if (isStreamError) {
+    parts.push(
+      `> [!CAUTION]\n` +
+      `> **Stream decode / transport error encountered** during Goose execution.\n` +
+      `> The local universal streaming proxy will handle future token streams, but this session context should be rolled to a fresh session_id (e.g. \`<session>_stage2\`) if retrying.`
+    );
+  }
+
+  const isError = isStreamError || degenerate || errors.length > 0 || (timedOut && fileOps.length === 0);
   return { isError, text: parts.join("\n\n"), toolCalls, errors, fileOps, finalText };
 }
 
@@ -1118,6 +1128,59 @@ const statusHttpServer = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://localhost:${STATUS_PORT}`);
   const pathname = parsedUrl.pathname;
 
+  // Universal Lossy / Stateful UTF-8 Streaming Proxy for /v1/* (Forwarding to vLLM on VLLM_PORT)
+  if (pathname.startsWith("/v1/")) {
+    const upstreamUrl = `http://127.0.0.1:${VLLM_PORT}${req.url}`;
+    const upstreamReq = http.request(
+      upstreamUrl,
+      {
+        method: req.method,
+        headers: {
+          ...req.headers,
+          host: `127.0.0.1:${VLLM_PORT}`,
+        },
+      },
+      (upstreamRes) => {
+        const resHeaders = { ...upstreamRes.headers };
+        res.writeHead(upstreamRes.statusCode, resHeaders);
+
+        // Per-stream stateful TextDecoder to assemble split multibyte sequences and map malformed bytes
+        const decoder = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
+
+        upstreamRes.on("data", (chunk) => {
+          const text = decoder.decode(chunk, { stream: true });
+          if (text) {
+            res.write(text, "utf8");
+          }
+        });
+
+        upstreamRes.on("end", () => {
+          const tail = decoder.decode();
+          if (tail) {
+            res.write(tail, "utf8");
+          }
+          res.end();
+        });
+
+        upstreamRes.on("error", () => {
+          try {
+            res.end();
+          } catch {}
+        });
+      }
+    );
+
+    upstreamReq.on("error", (err) => {
+      if (!res.headersSent) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+      }
+      res.end(JSON.stringify({ error: "vLLM upstream proxy error", details: err.message }));
+    });
+
+    req.pipe(upstreamReq);
+    return;
+  }
+
   // GET /tasks
   if (req.method === "GET" && pathname === "/tasks") {
     const merged = new Map();
@@ -1430,9 +1493,13 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
             ...process.env,
             GOOSE_PROVIDER: "openai",
             GOOSE_MODEL: "qwen3.8-27b",
-            OPENAI_BASE_URL: "http://localhost:18020/v1",
+            OPENAI_BASE_URL: `http://localhost:${STATUS_PORT}/v1`,
             OPENAI_API_KEY: "dummy",
-            WSLENV: "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u",
+            PYTHONIOENCODING: "utf-8",
+            PYTHONUTF8: "1",
+            LANG: "C.UTF-8",
+            LC_ALL: "C.UTF-8",
+            WSLENV: "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u:PYTHONIOENCODING/u:PYTHONUTF8/u:LANG/u:LC_ALL/u",
           };
           // --exec, NOT `--`: `wsl.exe -- <cmd>` runs the command line THROUGH
           // the default shell, so any backticks in the task prompt underwent
@@ -1454,8 +1521,12 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
               ...process.env,
               GOOSE_PROVIDER: "openai",
               GOOSE_MODEL: "qwen3.8-27b",
-              OPENAI_BASE_URL: "http://localhost:18020/v1",
+              OPENAI_BASE_URL: `http://localhost:${STATUS_PORT}/v1`,
               OPENAI_API_KEY: "dummy",
+              PYTHONIOENCODING: "utf-8",
+              PYTHONUTF8: "1",
+              LANG: "C.UTF-8",
+              LC_ALL: "C.UTF-8",
               GOOSE_WORKING_DIR: targetCwd,
             },
             stdio: ["ignore", "pipe", "pipe"],
@@ -1473,8 +1544,12 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
             // (no C:\Users\...\.config\goose\config.yaml on this machine).
             GOOSE_PROVIDER: "openai",
             GOOSE_MODEL: "qwen3.8-27b",
-            OPENAI_BASE_URL: "http://localhost:18020/v1",
+            OPENAI_BASE_URL: `http://localhost:${STATUS_PORT}/v1`,
             OPENAI_API_KEY: "dummy",
+            PYTHONIOENCODING: "utf-8",
+            PYTHONUTF8: "1",
+            LANG: "C.UTF-8",
+            LC_ALL: "C.UTF-8",
           },
           stdio: ["ignore", "pipe", "pipe"],
           detached: !IS_WINDOWS,
