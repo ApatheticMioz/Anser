@@ -24,7 +24,11 @@ import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { AvoLineageEngine } from "./avo_engine.js";
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = Boolean(
+  process.argv[1] &&
+  (path.resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase() ||
+   process.argv[1].toLowerCase().endsWith("index.js"))
+);
 
 const execFileAsync = promisify(execFile);
 
@@ -1344,8 +1348,12 @@ statusHttpServer.on("error", (err) => {
   }
 });
 
-if (isMain) {
+try {
   statusHttpServer.listen(STATUS_PORT, "127.0.0.1", () => {});
+} catch (err) {
+  if (err.code === "EADDRINUSE") {
+    statusServerOwned = false;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -1493,7 +1501,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
             ...process.env,
             GOOSE_PROVIDER: "openai",
             GOOSE_MODEL: "qwen3.8-27b",
-            OPENAI_BASE_URL: `http://localhost:${STATUS_PORT}/v1`,
+            OPENAI_BASE_URL: `http://localhost:${VLLM_PORT}/v1`,
             OPENAI_API_KEY: "dummy",
             PYTHONIOENCODING: "utf-8",
             PYTHONUTF8: "1",
