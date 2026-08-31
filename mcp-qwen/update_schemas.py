@@ -87,3 +87,35 @@ for name, schema in tools.items():
     with open(p, 'w', encoding='utf-8') as f:
         json.dump(schema, f, indent=2)
     print(f'Wrote {p}')
+
+instructions_content = """# qwen38-local MCP Server Best Practices & Protocol
+
+## 1. Quick Reference & Tool Invocation
+To dispatch work to the local autonomous Qwen3.8-27B coworker, call `call_mcp_tool`:
+- **ServerName**: `"qwen38-local"`
+- **ToolName**: `"qwen_coworker"`
+- **Arguments**:
+  - `prompt`: Specific, single-concern task or inquiry (<= 6–8 tool actions, 3–5 min scope).
+  - `cwd`: Target project directory (e.g. `<workspace_root>` or workspace).
+  - `session_id`: Named session (e.g. `"redteam_stage1"`) to maintain KV-cache across 2–3 turns.
+  - `extensions`: Optional stdio extensions, e.g. `["uvx free-search-mcp"]` for live web lookup or `["npx -y context7@latest"]`.
+
+## 2. Invariants & Guardrails for the Meta-Supervisor
+1. **Rule 0 — Universal Turn 1 Coworker Invariant**:
+   - Dispatch directly to `qwen_coworker` on Turn 1 with the user's objective and target `cwd`.
+   - **DO NOT** execute manual health checks, network probes (`curl localhost:18020`, `curl localhost:18021`), or read `index.js` manually prior to dispatching. The server lifecycle and proxy are fully autonomous and self-healing.
+2. **Zero-Turn Execution & Reactive Sleep Contract**:
+   - Fast tasks (< 45s): Returns full deliverable directly in Turn 1.
+   - Long tasks (>= 45s): Safely yields `taskId` and a `wait_command` (`curl -s http://127.0.0.1:18021/task/<id>/wait`). Run this `wait_command` via `run_command` so Antigravity automatically sleeps at $0 token cost and wakes up upon completion.
+3. **Anti-Monolithic Discipline**:
+   - Keep turns focused on ONE subsystem or task.
+   - Keep `session_id` active for 2–3 focused turns, then roll to `<milestone>_stage2` to reset context and maintain peak decoding speed.
+4. **Mid-Flight User Injections**:
+   - If the user sends guidance while a background task is running, acknowledge it, stage the requirement for the next turn, and immediately re-execute the `wait_command` via `run_command` in the same turn.
+"""
+
+inst_path = os.path.join(mcp_dir, 'instructions.md')
+with open(inst_path, 'w', encoding='utf-8') as f:
+    f.write(instructions_content)
+print(f'Wrote {inst_path}')
+
