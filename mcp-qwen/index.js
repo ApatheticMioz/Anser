@@ -173,7 +173,14 @@ function getApiKeySync() {
   return "EMPTY";
 }
 
-function killProcessTree(child) {
+function killProcessTree(child, sessionId) {
+  if (sessionId) {
+    if (IS_WINDOWS) {
+      execFile("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", `goose run --name ${sessionId}`], () => {});
+    } else {
+      execFile("pkill", ["-9", "-f", `goose run --name ${sessionId}`], () => {});
+    }
+  }
   if (!child?.pid) return;
   if (IS_WINDOWS) {
     execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], () => {});
@@ -187,6 +194,7 @@ function killProcessTree(child) {
     }
   }
 }
+
 
 function runWslCommand(cmd) {
   if (IS_WINDOWS) {
@@ -1310,12 +1318,13 @@ const statusHttpServer = http.createServer((req, res) => {
     const taskId = cancelMatch[1];
     const task = tasks.get(taskId);
     if (task) {
-      if (!task.done && task.child) {
-        killProcessTree(task.child);
+      if (!task.done) {
+        killProcessTree(task.child, task.sessionId);
         task.status = "cancelled";
         task.done = true;
         task.isError = true;
         task.result = { isError: true, text: `Task ${taskId} cancelled by request.` };
+        saveTaskToDisk(task);
         notifyWaiters(task);
       }
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -1323,6 +1332,13 @@ const statusHttpServer = http.createServer((req, res) => {
     }
     const diskTask = readTaskFromDisk(taskId);
     if (diskTask) {
+      if (diskTask.sessionId) {
+        if (IS_WINDOWS) {
+          execFile("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
+        } else {
+          execFile("pkill", ["-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
+        }
+      }
       diskTask.status = "cancelled";
       diskTask.done = true;
       diskTask.isError = true;
@@ -1682,27 +1698,47 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           clearInterval(watchdog);
           return;
         }
+
+        if (taskEntry.done) {
+          clearInterval(watchdog);
+          killProcessTree(child, sessionId);
+          finish(true, `Task cancelled.`);
+          return;
+        }
+
+        try {
+          const onDisk = readTaskFromDisk(taskEntry.id);
+          if (onDisk && (onDisk.status === "cancelled" || onDisk.done)) {
+            clearInterval(watchdog);
+            killProcessTree(child, sessionId);
+            taskEntry.done = true;
+            taskEntry.status = "cancelled";
+            finish(true, `Task cancelled externally.`);
+            return;
+          }
+        } catch {}
+
         const now = Date.now();
         const inactiveMs = now - lastActivityAt;
         const totalElapsedMs = now - taskEntry.startedAt;
 
         if (!receivedAnyOutput && inactiveMs >= FIRST_TOKEN_TIMEOUT_MS) {
           clearInterval(watchdog);
-          killProcessTree(child);
+          killProcessTree(child, sessionId);
           finish(
             true,
             `First-Token Timeout: Goose produced zero stream output for ${Math.round(inactiveMs / 1000)}s after spawn - the vLLM engine core is wedged or fully saturated. No work was performed. Check qwen_server status (engine stats silence >${WEDGE_STATS_SILENCE_S}s = wedged; auto-heal reboots it); safe to re-dispatch once healthy.`
           );
         } else if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
           clearInterval(watchdog);
-          killProcessTree(child);
+          killProcessTree(child, sessionId);
           finish(
             true,
             `Inactivity Timeout: Goose subprocess produced zero stream activity for ${Math.round(inactiveMs / 1000)}s.`
           );
         } else if (totalElapsedMs >= totalTimeoutMs) {
           clearInterval(watchdog);
-          killProcessTree(child);
+          killProcessTree(child, sessionId);
           finish(
             true,
             `Total Budget Timeout: Reached maximum execution budget of ${Math.round(totalTimeoutMs / 1000)}s (${Math.round(totalTimeoutMs / 60000)} min).`
@@ -1930,19 +1966,65 @@ server.registerTool(
 
     if (action === "cancel") {
       const memTask = tasks.get(task_id);
-      if (memTask && !memTask.done && memTask.child) {
-        killProcessTree(memTask.child);
+      if (memTask && !memTask.done) {
+        killProcessTree(memTask.child, memTask.sessionId);
         memTask.status = "cancelled";
         memTask.done = true;
         memTask.isError = true;
         memTask.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
+        saveTaskToDisk(memTask);
         notifyWaiters(memTask);
         return {
           content: [{ type: "text", text: `Task \`${task_id}\` cancelled and process tree killed.` }],
         };
       }
+
+      // Delegate cancellation to the status coordinator process if not owned locally
+      try {
+        const httpCancel = await new Promise((resolve) => {
+          const postReq = http.request(
+            {
+              hostname: "127.0.0.1",
+              port: STATUS_PORT,
+              path: `/task/${encodeURIComponent(task_id)}/cancel`,
+              method: "POST",
+              timeout: 4000,
+            },
+            (res) => {
+              let data = "";
+              res.on("data", (chunk) => (data += chunk));
+              res.on("end", () => {
+                try {
+                  resolve(JSON.parse(data));
+                } catch {
+                  resolve(null);
+                }
+              });
+            }
+          );
+          postReq.on("error", () => resolve(null));
+          postReq.on("timeout", () => {
+            postReq.destroy();
+            resolve(null);
+          });
+          postReq.end();
+        });
+        if (httpCancel?.cancelled) {
+          return {
+            content: [{ type: "text", text: `Task \`${task_id}\` cancelled via status coordinator.` }],
+          };
+        }
+      } catch {}
+
       const diskTask = readTaskFromDisk(task_id);
       if (diskTask && !diskTask.done) {
+        if (diskTask.sessionId) {
+          if (IS_WINDOWS) {
+            execFile("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
+          } else {
+            execFile("pkill", ["-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
+          }
+        }
         diskTask.status = "cancelled";
         diskTask.done = true;
         diskTask.isError = true;
