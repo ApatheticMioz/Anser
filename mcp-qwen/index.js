@@ -1715,18 +1715,41 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
 
         if (testCommand && lineageEngine) {
           try {
-            const shellCmd = IS_WINDOWS
-              ? { bin: "powershell.exe", args: ["-NoProfile", "-Command", testCommand] }
-              : { bin: "bash", args: ["-c", testCommand] };
+            let shellCmd;
+            let execOptions = { timeout: 300_000 };
+            if (targetInWsl) {
+              if (IS_WINDOWS) {
+                shellCmd = {
+                  bin: "wsl.exe",
+                  args: [
+                    "-d",
+                    "Ubuntu",
+                    "--cd",
+                    targetCwd,
+                    "--exec",
+                    "/usr/bin/env",
+                    "PATH=/home/apath/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "/bin/bash",
+                    "-c",
+                    testCommand,
+                  ],
+                };
+              } else {
+                shellCmd = { bin: "bash", args: ["-c", testCommand] };
+                execOptions.cwd = targetCwd;
+              }
+            } else {
+              shellCmd = IS_WINDOWS
+                ? { bin: "powershell.exe", args: ["-NoProfile", "-Command", testCommand] }
+                : { bin: "bash", args: ["-c", testCommand] };
+              execOptions.cwd = toWindowsPath(cwd);
+            }
 
             let testOut = "";
             let testErr = "";
             let testExitCode = 0;
             try {
-              const r = await execFileAsync(shellCmd.bin, shellCmd.args, {
-                cwd,
-                timeout: 300_000,
-              });
+              const r = await execFileAsync(shellCmd.bin, shellCmd.args, execOptions);
               testOut = r.stdout ?? "";
               testErr = r.stderr ?? "";
             } catch (err) {
