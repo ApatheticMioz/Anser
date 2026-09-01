@@ -95,10 +95,10 @@ To dispatch work to the local autonomous Qwen3.8-27B coworker, call `call_mcp_to
 - **ServerName**: `"qwen38-local"`
 - **ToolName**: `"qwen_coworker"`
 - **Arguments**:
-  - `prompt`: Specific, single-concern task or inquiry (<= 6–8 tool actions, 3–5 min scope).
+  - `prompt`: Specific, single-concern task or inquiry scoped by the Lead Architect to ONE subsystem (Full Objective Fulfillment, no tool ceilings).
   - `cwd`: Target project directory (e.g. `<workspace_root>` or workspace).
   - `session_id`: Named session (e.g. `"redteam_stage1"`) to maintain KV-cache across 2–3 turns.
-  - `extensions`: Optional stdio extensions, e.g. `["uvx free-search-mcp"]` for live web lookup or `["npx -y context7@latest"]`.
+  - `extensions`: Optional stdio extensions, e.g. `["uvx free-search-mcp"]` for live web lookup or `["npx -y @upstash/context7-mcp"]`.
 
 ## 2. Invariants & Guardrails for the Meta-Supervisor
 1. **Rule 0 — Universal Turn 1 Coworker Invariant**:
@@ -107,8 +107,9 @@ To dispatch work to the local autonomous Qwen3.8-27B coworker, call `call_mcp_to
 2. **Zero-Turn Execution & Reactive Sleep Contract**:
    - Fast tasks (< 45s): Returns full deliverable directly in Turn 1.
    - Long tasks (>= 45s): Safely yields `taskId` and a `wait_command` (`curl -s http://127.0.0.1:18021/task/<id>/wait`). Run this `wait_command` via `run_command` so Antigravity automatically sleeps at $0 token cost and wakes up upon completion.
-3. **Anti-Monolithic Discipline**:
-   - Keep turns focused on ONE subsystem or task.
+3. **Anti-Monolithic Discipline (Prompt Scoped, Never Prompt Qwen to Scope)**:
+   - The Lead Architect scopes the PROMPT itself around ONE subsystem; NEVER prompt Qwen to "keep tool calls low" or "limit to N actions".
+   - Qwen executes with Full Objective Fulfillment without wasting reasoning tokens on artificial tool ceilings.
    - Keep `session_id` active for 2–3 focused turns, then roll to `<milestone>_stage2` to reset context and maintain peak decoding speed.
 4. **Mid-Flight User Injections**:
    - If the user sends guidance while a background task is running, acknowledge it, stage the requirement for the next turn, and immediately re-execute the `wait_command` via `run_command` in the same turn.
