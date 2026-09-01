@@ -1488,6 +1488,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
     finalTaskPrompt += `=== Operational & Tooling Directives ===\n`;
     finalTaskPrompt += `- Available File Tools: Use \`write\` to create or overwrite files, \`edit\` to perform targeted text search-and-replace, \`tree\` to view directories, and \`shell\` (bash) to inspect files using \`cat\`, \`head\`, \`grep\`, or other POSIX utilities.\n`;
+    finalTaskPrompt += `- Text-Only Engine: You are a pure text model with Universal 245K context. Do NOT call \`read_image\` on binary images (.png, .jpg). Multimodal image inspection is handled exclusively by the Lead Architect.\n`;
     finalTaskPrompt += `- CRITICAL: Do NOT call \`extensionmanager__read_resource\` or \`read_resource\` to read files. It is strictly an internal MCP resource provider and will fail on filesystem paths.\n`;
     finalTaskPrompt += `- Direct Execution: Never merely announce in conversational text that you will write or edit files in a future step. You must directly invoke the file modification tools (\`write\` or \`edit\`) in this turn to write the deliverable to disk.\n`;
     finalTaskPrompt += `- Full Objective Fulfillment: Take as many tool actions and iterations as needed to thoroughly accomplish the task without prematurely truncating your output.\n`;
@@ -1810,8 +1811,7 @@ server.registerTool(
       "USAGE - conversational pair-programming is the primary mode:\n" +
       "  - Single Logical Concern per Turn: Scope mutation dispatches to ONE cohesive subsystem, layer, or component\n    (e.g. 'Turn 2a: wrap server actions and Mastra tools') to maintain rapid turn velocity without monolithic task overload.\n" +
       "  - Slicing Large Files (>300 LOC): Target specific function/AST slices rather than dumping entire files.\n" +
-      "  - Session Lifecycle & Speculative Decoding (~20-25 tool call limit): Keep a `session_id` active for 2-3 focused turns,\n" +
-      "    then roll to a fresh session_id (e.g. '<milestone>_stage2') to reset context, restore ~85% draft acceptance, and maintain ~75-85 tok/s decode velocity.\n" +
+      "  - Session Lifecycle: Keep a `session_id` active across cohesive multi-turn milestones, rolling to a fresh session_id (e.g. '<milestone>_stage2') when context becomes saturated to maintain peak decode velocity.\n" +
       "  - Budgets are generous by design (default 1h, 10-min floor; pass more for research+write+post).\n" +
       "    Split multi-stage jobs so a timeout can never land on the irreversible step (post/commit/deploy):\n" +
       "    persist artifacts to disk first, then a short follow-up dispatch executes the critical action.\n" +
