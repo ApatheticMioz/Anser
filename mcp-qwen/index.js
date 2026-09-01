@@ -277,7 +277,7 @@ async function ensureStreamProxyRunning() {
   } catch {}
   if (IS_WINDOWS) {
     try {
-      await runWslCommand(`setsid node /mnt/d/LLM_Ecosystem/mcp-qwen/stream_proxy.js > /tmp/stream_proxy.log 2>&1 &`);
+      await runWslCommand(`setsid node /mnt/d/LLM_Ecosystem/mcp-qwen/stream_proxy.js < /dev/null > /tmp/stream_proxy.log 2>&1 &`);
       await new Promise((r) => setTimeout(r, 600));
     } catch {}
   }
@@ -1808,8 +1808,7 @@ server.registerTool(
       "Has native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. " +
       "Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and AVO candidate mutations. " +
       "USAGE - conversational pair-programming is the primary mode:\n" +
-      "  - Single Logical Concern per Turn: Scope mutation dispatches to ONE cohesive subsystem, layer, or component\n" +
-      "    (e.g. 'Turn 2a: wrap server actions and Mastra tools') to maintain rapid 3-5 minute turn velocity (<= 6-8 tool calls).\n" +
+      "  - Single Logical Concern per Turn: Scope mutation dispatches to ONE cohesive subsystem, layer, or component\n    (e.g. 'Turn 2a: wrap server actions and Mastra tools') to maintain rapid turn velocity without monolithic task overload.\n" +
       "  - Slicing Large Files (>300 LOC): Target specific function/AST slices rather than dumping entire files.\n" +
       "  - Session Lifecycle & Speculative Decoding (~20-25 tool call limit): Keep a `session_id` active for 2-3 focused turns,\n" +
       "    then roll to a fresh session_id (e.g. '<milestone>_stage2') to reset context, restore ~85% draft acceptance, and maintain ~75-85 tok/s decode velocity.\n" +

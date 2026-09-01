@@ -1,23 +1,27 @@
 #!/usr/bin/env node
 /**
- * Universal Stateful UTF-8 & SSE Stream Sanitizer Proxy
+ * Universal Stateful UTF-8, SSE Stream Sanitizer & Inbound Multimodal Guard Proxy
  *
  * Architecture:
  * - Listens on: 0.0.0.0:18022 (VLLM_PROXY_PORT)
  * - Upstream:   127.0.0.1:18020 (vLLM Engine)
  *
  * Capabilities:
- * 1. Stateful UTF-8 Reconstruction:
+ * 1. Inbound Multimodal Guard:
+ *    When clients (e.g. Goose's read_image tool) send image_url/image blocks,
+ *    intercepts and converts them to descriptive text placeholders before reaching
+ *    vLLM, preventing "Bad request (400): At most 0 image(s) may be provided in one prompt".
+ * 2. Stateful UTF-8 Reconstruction:
  *    Maintains per-stream TextDecoder with { stream: true } to assemble split
  *    multi-byte UTF-8 sequences (math symbols, superscripts 2³, Greek letters,
  *    emojis) across raw TCP/SSE chunk boundaries.
- * 2. Mid-Stream Error Translation:
+ * 3. Mid-Stream Error Translation:
  *    Intercepts mid-stream vLLM error payloads (`data: {"error": ...}`) that
  *    lack `choices` and converts them into valid completion delta chunks before
  *    Goose's serde parser sees them, eliminating `Stream decode error`.
- * 3. Transparent Pass-Through:
- *    Non-SSE requests (GET /v1/models, embeddings, health) are piped directly.
- * 4. Zero External Dependencies:
+ * 4. Transparent Pass-Through:
+ *    Non-SSE / non-chat requests (GET /v1/models, embeddings, health) are piped directly.
+ * 5. Zero External Dependencies:
  *    Standard Node.js http/url modules, runs under WSL2 Linux and Windows.
  */
 
@@ -27,18 +31,10 @@ const UPSTREAM_PORT = parseInt(process.env.VLLM_PORT || "18020", 10);
 const PROXY_PORT = parseInt(process.env.VLLM_PROXY_PORT || "18022", 10);
 const PROXY_HOST = process.env.VLLM_PROXY_HOST || "0.0.0.0";
 
-const server = http.createServer((req, res) => {
-  // Local health check
-  if (req.url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(
-      JSON.stringify({
-        status: "ok",
-        upstream_port: UPSTREAM_PORT,
-        proxy_port: PROXY_PORT,
-        pid: process.pid,
-      })
-    );
+function forwardToUpstream(req, res, reqBodyBuffer) {
+  const headers = { ...req.headers, host: `127.0.0.1:${UPSTREAM_PORT}` };
+  if (reqBodyBuffer) {
+    headers["content-length"] = reqBodyBuffer.length;
   }
 
   const upstreamUrl = `http://127.0.0.1:${UPSTREAM_PORT}${req.url}`;
@@ -46,10 +42,7 @@ const server = http.createServer((req, res) => {
     upstreamUrl,
     {
       method: req.method,
-      headers: {
-        ...req.headers,
-        host: `127.0.0.1:${UPSTREAM_PORT}`,
-      },
+      headers,
     },
     (upstreamRes) => {
       const contentType = upstreamRes.headers["content-type"] || "";
@@ -139,7 +132,68 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ error: "vLLM upstream connection error", details: err.message }));
   });
 
-  req.pipe(upstreamReq);
+  if (reqBodyBuffer) {
+    upstreamReq.end(reqBodyBuffer);
+  } else {
+    req.pipe(upstreamReq);
+  }
+}
+
+const server = http.createServer((req, res) => {
+  // Local health check
+  if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(
+      JSON.stringify({
+        status: "ok",
+        upstream_port: UPSTREAM_PORT,
+        proxy_port: PROXY_PORT,
+        pid: process.pid,
+      })
+    );
+  }
+
+  // Sanitize incoming chat completions requests to guard against multimodal image crashes
+  if (req.method === "POST" && req.url.startsWith("/v1/chat/completions")) {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      const rawBody = Buffer.concat(chunks);
+      try {
+        const bodyStr = rawBody.toString("utf8");
+        if (bodyStr.includes('"image"') || bodyStr.includes('"image_url"')) {
+          const body = JSON.parse(bodyStr);
+          let modified = false;
+          if (Array.isArray(body.messages)) {
+            for (const msg of body.messages) {
+              if (Array.isArray(msg.content)) {
+                for (let i = 0; i < msg.content.length; i++) {
+                  const part = msg.content[i];
+                  if (part && (part.type === "image_url" || part.type === "image")) {
+                    msg.content[i] = {
+                      type: "text",
+                      text: "[Image file omitted: Local Qwen3.8-27B runs in pure text mode for Universal 245K context. Images must be inspected multimodally by the Lead Architect.]",
+                    };
+                    modified = true;
+                  }
+                }
+              }
+            }
+          }
+          if (modified) {
+            const sanitizedBuffer = Buffer.from(JSON.stringify(body), "utf8");
+            return forwardToUpstream(req, res, sanitizedBuffer);
+          }
+        }
+      } catch (err) {
+        // Fall back to piping raw body if parsing fails
+      }
+      forwardToUpstream(req, res, rawBody);
+    });
+    return;
+  }
+
+  forwardToUpstream(req, res, null);
 });
 
 server.on("error", (err) => {

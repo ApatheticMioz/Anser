@@ -19,5 +19,5 @@ export VLLM_WSL2_ENABLE_PIN_MEMORY=1
 export EXTRA_ARGS='--default-chat-template-kwargs {"reasoning_effort":"medium"}'
 # Universal Stateful UTF-8 & SSE Stream Sanitizer Proxy (port 18022 -> 18020)
 pkill -9 -f 'stream_proxy.js' 2>/dev/null || true
-setsid node ~/qwen-serving/stream_proxy.js > /tmp/stream_proxy.log 2>&1 &
+setsid node ~/qwen-serving/stream_proxy.js < /dev/null > /tmp/stream_proxy.log 2>&1 &
 exec bash single-user/start_qwen.sh
