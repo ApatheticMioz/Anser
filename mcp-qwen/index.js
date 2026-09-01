@@ -1487,11 +1487,12 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     }
     finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
     finalTaskPrompt += `=== Operational & Tooling Directives ===\n`;
-    finalTaskPrompt += `- Prefer native Goose tools (\`read\`, \`edit\`, \`write\`, \`patch\`, \`tree\`) over shell subprocesses for inspecting and modifying files for maximum efficiency.\n`;
-    finalTaskPrompt += `- Target Scope: Focus directly on project workspace source files. Do NOT explore or read third-party dependency directories (e.g. \`node_modules\`, \`.venv\`, \`vendor\`, \`target\`) unless an explicit compilation or runtime error specifically requires inspecting a type declaration.\n`;
-    finalTaskPrompt += `- Granular Turn Scope: Focus strictly on the 3-4 target files specified for this turn. Do not perform extraneous edits outside the requested scope.\n`;
+    finalTaskPrompt += `- Available File Tools: Use \`write\` to create or overwrite files, \`edit\` to perform targeted text search-and-replace, \`tree\` to view directories, and \`shell\` (bash) to inspect files using \`cat\`, \`head\`, \`grep\`, or other POSIX utilities.\n`;
+    finalTaskPrompt += `- CRITICAL: Do NOT call \`extensionmanager__read_resource\` or \`read_resource\` to read files. It is strictly an internal MCP resource provider and will fail on filesystem paths.\n`;
+    finalTaskPrompt += `- Direct Execution: Never merely announce in conversational text that you will write or edit files in a future step. You must directly invoke the file modification tools (\`write\` or \`edit\`) in this turn to write the deliverable to disk.\n`;
+    finalTaskPrompt += `- Full Objective Fulfillment: Take as many tool actions and iterations as needed to thoroughly accomplish the task without prematurely truncating your output.\n`;
     if (IS_WINDOWS && !cwdInWsl) {
-      finalTaskPrompt += `- Windows Line Endings: Workspace files may use CRLF (\\r\\n). If \`edit\` or string replacement encounters matching issues, inspect exact line endings with \`read\` or write the normalized file.\n`;
+      finalTaskPrompt += `- Windows Line Endings: Workspace files may use CRLF (\\r\\n). If \`edit\` encounters matching issues, inspect exact line endings with \`head\` or write the normalized file.\n`;
     }
     if (targetInWsl) {
       finalTaskPrompt += `- Linux Environment: Executing in Linux/WSL (bash). Use standard Linux commands and POSIX paths. Windows-drive workspaces live under /mnt/<drive>/.\n`;
@@ -1515,6 +1516,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
       } else {
         args.push("--no-session");
       }
+      args.push("--max-turns", "50");
       args.push("--output-format", "stream-json");
       if (system) {
         args.push("--system", system);
