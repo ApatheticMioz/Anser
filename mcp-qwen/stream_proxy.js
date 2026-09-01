@@ -216,7 +216,7 @@ const server = http.createServer((req, res) => {
     );
   }
 
-  // Sanitize incoming chat completions requests to guard against multimodal image crashes
+  // Deep sanitize incoming chat completions requests to guard against multimodal image crashes
   if (req.method === "POST" && req.url.startsWith("/v1/chat/completions")) {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
@@ -224,25 +224,54 @@ const server = http.createServer((req, res) => {
       const rawBody = Buffer.concat(chunks);
       try {
         const bodyStr = rawBody.toString("utf8");
-        if (bodyStr.includes('"image"') || bodyStr.includes('"image_url"')) {
+        if (
+          bodyStr.includes('"image"') ||
+          bodyStr.includes('"image_url"') ||
+          bodyStr.includes('"input_image"') ||
+          bodyStr.includes('"image_file"') ||
+          bodyStr.includes("data:image/")
+        ) {
           const body = JSON.parse(bodyStr);
           let modified = false;
-          if (Array.isArray(body.messages)) {
-            for (const msg of body.messages) {
-              if (Array.isArray(msg.content)) {
-                for (let i = 0; i < msg.content.length; i++) {
-                  const part = msg.content[i];
-                  if (part && (part.type === "image_url" || part.type === "image")) {
-                    msg.content[i] = {
-                      type: "text",
-                      text: "[Image file omitted: Local Qwen3.8-27B runs in pure text mode for Universal 245K context. Images must be inspected multimodally by the Lead Architect.]",
-                    };
-                    modified = true;
-                  }
-                }
+
+          function sanitizeItem(item) {
+            if (!item) return item;
+            if (typeof item === "string") return item;
+            if (Array.isArray(item)) {
+              return item.map(sanitizeItem);
+            }
+            if (typeof item === "object") {
+              const type = item.type;
+              if (
+                type === "image_url" ||
+                type === "image" ||
+                type === "input_image" ||
+                type === "image_file" ||
+                item.image ||
+                item.image_url
+              ) {
+                modified = true;
+                return {
+                  type: "text",
+                  text: "[Image file omitted: Local Qwen3.8-27B runs in pure text mode for Universal 245K context. Images must be inspected multimodally by the Lead Architect.]",
+                };
+              }
+              for (const k of Object.keys(item)) {
+                item[k] = sanitizeItem(item[k]);
               }
             }
+            return item;
           }
+
+          if (Array.isArray(body.messages)) {
+            for (const msg of body.messages) {
+              msg.content = sanitizeItem(msg.content);
+            }
+          }
+          if (body.prompt) {
+            body.prompt = sanitizeItem(body.prompt);
+          }
+
           if (modified) {
             const sanitizedBuffer = Buffer.from(JSON.stringify(body), "utf8");
             return forwardToUpstream(req, res, sanitizedBuffer);

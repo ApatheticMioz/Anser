@@ -274,16 +274,42 @@ async function ensureServerRunning() {
 }
 
 async function ensureStreamProxyRunning() {
-  try {
-    const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, { signal: AbortSignal.timeout(1000) });
-    if (res.ok) return true;
-  } catch {}
+  // 1. Fast check if already healthy
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) return true;
+    } catch {}
+    if (attempt === 0) await new Promise((r) => setTimeout(r, 200));
+  }
+
+  // 2. Launch or restart proxy
   if (IS_WINDOWS) {
     try {
+      await runWslCommand(`pkill -9 -f 'stream_proxy.js' 2>/dev/null || true`);
+      await new Promise((r) => setTimeout(r, 300));
       await runWslCommand(`setsid node /mnt/d/LLM_Ecosystem/mcp-qwen/stream_proxy.js < /dev/null > /tmp/stream_proxy.log 2>&1 &`);
-      await new Promise((r) => setTimeout(r, 600));
+    } catch {}
+  } else {
+    try {
+      const { spawn } = await import("child_process");
+      const p = spawn("node", [path.join(__dirname, "stream_proxy.js")], {
+        stdio: "ignore",
+        detached: true,
+      });
+      p.unref();
     } catch {}
   }
+
+  // 3. Reliable readiness probe with retries (up to 5 seconds)
+  for (let i = 0; i < 25; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    try {
+      const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) return true;
+    } catch {}
+  }
+  throw new Error(`Stream proxy failed to become healthy on port ${STREAM_PROXY_PORT} after 5s`);
 }
 
 async function stopServer() {
@@ -1526,7 +1552,16 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         args.push("--system", system);
       }
       args.push("-t", finalTaskPrompt);
-      for (const ext of extensions ?? []) {
+      for (const rawExt of extensions ?? []) {
+        let ext = rawExt;
+        if (targetInWsl) {
+          // Normalize Windows-style command wrappers if target runs under WSL
+          ext = ext.replace(/^npx\.cmd\b/, "npx").replace(/^uvx\.exe\b/, "uvx");
+          // Normalize context7 CLI package to official context7 MCP server
+          if (ext.includes("context7@latest") && !ext.includes("@upstash/context7-mcp")) {
+            ext = ext.replace("context7@latest", "@upstash/context7-mcp");
+          }
+        }
         args.push("--with-extension", ext);
       }
 
@@ -1556,7 +1591,20 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           // model never saw them, and its stderr was polluted with
           // "edit: command not found" from the spawn shell, not from the model).
           // --exec passes argv directly to the binary.
-          child = spawn("wsl.exe", ["-d", "Ubuntu", "--cd", targetCwd, "--exec", "/home/apath/.local/bin/goose", ...args], {
+          // Prepend /usr/bin/env PATH=... to guarantee Linux node/npm/npx/uv/uvx binaries
+          // are resolved before any Windows PATH interop directories.
+          const wslArgs = [
+            "-d",
+            "Ubuntu",
+            "--cd",
+            targetCwd,
+            "--exec",
+            "/usr/bin/env",
+            "PATH=/home/apath/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "/home/apath/.local/bin/goose",
+            ...args,
+          ];
+          child = spawn("wsl.exe", wslArgs, {
             env: wslEnv,
             stdio: ["ignore", "pipe", "pipe"],
             detached: false,
@@ -1824,13 +1872,13 @@ server.registerTool(
       "    Run `wait_command` via native shell to block and wake up automatically with the result at $0 token cost.\n" +
       "Supported Extensions:\n" +
       "  - `uvx free-search-mcp` (Deep Web Search, Live Docs, PDF/DOCX Ingestion)\n" +
-      "  - `npx.cmd -y context7@latest` / `npx -y context7@latest` (Version-Accurate Framework & Library Docs)\n" +
+      "  - `npx -y @upstash/context7-mcp` (Version-Accurate Framework & Library Docs via Context7 MCP)\n" +
       "  - `gh` CLI / `git` (Authenticated GitHub operations and atomic git branch/commit workflows)",
     inputSchema: {
-      prompt: z.string().describe("Task, inquiry, or architectural instruction for Qwen"),
+      prompt: z.string().describe("Task, inquiry, or architectural instruction for Qwen (pure text-only; images must be inspected natively by Lead Architect and summarized into text)"),
       session_id: z.string().optional().describe("Named persistent session ID (maintains KV-cache and conversation context across turns)"),
       cwd: z.string().optional().describe("Working directory for filesystem and shell tools (defaults to current workspace)"),
-      extensions: z.array(z.string()).optional().describe("Optional stdio extensions (e.g. ['uvx free-search-mcp'])"),
+      extensions: z.array(z.string()).optional().describe("Optional stdio extensions (e.g. ['uvx free-search-mcp'], ['npx -y @upstash/context7-mcp'])"),
       hypothesis: z.string().optional().describe("Optional NVIDIA AVO hypothesis being tested"),
       test_command: z.string().optional().describe("Optional verification test/benchmark command (e.g. 'pytest tests/test_core.py')"),
       metric_name: z.string().optional().describe("Target metric name in benchmark output (e.g. 'throughput', 'accuracy')"),
