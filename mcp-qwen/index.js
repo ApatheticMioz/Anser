@@ -34,6 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const VLLM_PORT = 18020;
 const STATUS_PORT = 18021;
+const STREAM_PROXY_PORT = 18022;
 const BASE_URL = `http://localhost:${VLLM_PORT}/v1`;
 const MAX_LEN_HUGE = 245760;
 const BOOT_TIMEOUT_MS = 180_000;
@@ -261,9 +262,25 @@ async function ensureServerRunning() {
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, BOOT_POLL_MS));
     const now = await currentMode();
-    if (now) return { switched: true, status: "started" };
+    if (now) {
+      await ensureStreamProxyRunning();
+      return { switched: true, status: "started" };
+    }
   }
   throw new Error(`Timed out waiting for vLLM server to boot (${BOOT_TIMEOUT_MS}ms)`);
+}
+
+async function ensureStreamProxyRunning() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, { signal: AbortSignal.timeout(1000) });
+    if (res.ok) return true;
+  } catch {}
+  if (IS_WINDOWS) {
+    try {
+      await runWslCommand(`setsid node /mnt/d/LLM_Ecosystem/mcp-qwen/stream_proxy.js > /tmp/stream_proxy.log 2>&1 &`);
+      await new Promise((r) => setTimeout(r, 600));
+    } catch {}
+  }
 }
 
 async function stopServer() {
@@ -1414,6 +1431,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     try {
       await withBootMutex(async () => {
         await ensureServerRunning();
+        await ensureStreamProxyRunning();
       });
       // Ride out the first-large-prefill boot stall BEFORE the task runs -
       // otherwise the task itself becomes the stall victim (watchdog kill).
@@ -1517,7 +1535,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
             ...process.env,
             GOOSE_PROVIDER: "openai",
             GOOSE_MODEL: "qwen3.8-27b",
-            OPENAI_BASE_URL: `http://localhost:${VLLM_PORT}/v1`,
+            OPENAI_BASE_URL: `http://localhost:${STREAM_PROXY_PORT}/v1`,
             OPENAI_API_KEY: "dummy",
             PYTHONIOENCODING: "utf-8",
             PYTHONUTF8: "1",
@@ -1545,7 +1563,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
               ...process.env,
               GOOSE_PROVIDER: "openai",
               GOOSE_MODEL: "qwen3.8-27b",
-              OPENAI_BASE_URL: `http://localhost:${STATUS_PORT}/v1`,
+              OPENAI_BASE_URL: `http://localhost:${STREAM_PROXY_PORT}/v1`,
               OPENAI_API_KEY: "dummy",
               PYTHONIOENCODING: "utf-8",
               PYTHONUTF8: "1",
@@ -1568,7 +1586,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
             // (no C:\Users\...\.config\goose\config.yaml on this machine).
             GOOSE_PROVIDER: "openai",
             GOOSE_MODEL: "qwen3.8-27b",
-            OPENAI_BASE_URL: `http://localhost:${STATUS_PORT}/v1`,
+            OPENAI_BASE_URL: `http://localhost:${STREAM_PROXY_PORT}/v1`,
             OPENAI_API_KEY: "dummy",
             PYTHONIOENCODING: "utf-8",
             PYTHONUTF8: "1",
