@@ -58,8 +58,11 @@ const MIN_TIMEOUT_MS = (() => {
   // default, never poison the watchdog arithmetic (totalTimeoutMs = NaN).
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MIN_TIMEOUT_MS;
 })();
-// Inactivity Heartbeat: Kill only if process produces 0 stream chunks for 10 minutes
-const INACTIVITY_TIMEOUT_MS = 600_000;
+// Inactivity Heartbeat: Kill only if process produces 0 stream chunks for 30 minutes (env-overridable)
+const INACTIVITY_TIMEOUT_MS = (() => {
+  const parsed = parseInt(process.env.QWEN_INACTIVITY_TIMEOUT_MS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1_800_000; // 30 min for 245K context
+})();
 // First-Token Timeout: fail fast when goose emits NO output at all shortly after spawn.
 // A healthy engine streams the first chunk within seconds even under load; a wedged or
 // fully saturated engine core delivers nothing (2026-08-28: requests sat 601s with zero
@@ -2079,7 +2082,7 @@ server.registerTool(
       let autoHeal = null;
       if (running && wedge.wedged && AUTO_HEAL) {
         try {
-          autoHeal = await healWedgedEngine(wedge.stats.ageSec);
+          autoHeal = await healWedgedEngine(wedge.stats?.ageSec ?? null);
         } catch (err) {
           autoHeal = { healed: false, error: err.message };
         }
