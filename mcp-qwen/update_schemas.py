@@ -62,8 +62,8 @@ tools = {
             '$schema': 'http://json-schema.org/draft-07/schema#',
             'type': 'object',
             'properties': {
-                'action': {'type': 'string', 'enum': ['status', 'cancel', 'list'], 'description': 'Action to perform on background tasks'},
-                'task_id': {'type': 'string', 'description': 'Task ID (required for status and cancel)'}
+                'action': {'type': 'string', 'enum': ['status', 'cancel', 'cancel_all', 'list'], 'description': 'Action to perform on background tasks'},
+                'task_id': {'type': 'string', 'description': 'Task ID (required for status, optional for cancel/cancel_all to cancel all tasks)'}
             },
             'required': ['action']
         }

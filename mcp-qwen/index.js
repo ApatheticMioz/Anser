@@ -524,6 +524,17 @@ try {
 
 const tasks = new Map();
 
+function pidAlive(pid) {
+  if (!pid) return false;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0); // signal 0 = liveness probe, no signal sent
+    return true;
+  } catch (err) {
+    return err.code === "EPERM"; // EPERM = exists, just not ours
+  }
+}
+
 function saveTaskToDisk(task) {
   if (!task || !task.id) return;
   try {
@@ -534,9 +545,11 @@ function saveTaskToDisk(task) {
       sessionId: task.sessionId,
       cwd: task.cwd,
       prompt: task.prompt,
+      ownerPid: task.ownerPid || process.pid,
       createdAt: task.createdAt,
       startedAt: task.startedAt,
       finishedAt: task.finishedAt,
+      lastHeartbeatAt: task.lastHeartbeatAt || Date.now(),
       status: task.status,
       done: task.done,
       isError: task.isError,
@@ -550,11 +563,44 @@ function saveTaskToDisk(task) {
   } catch {}
 }
 
+function isTaskOrphaned(diskTask) {
+  if (!diskTask || diskTask.done) return false;
+  // If owning process PID is recorded and no longer alive, it's definitely dead
+  if (diskTask.ownerPid && !pidAlive(diskTask.ownerPid)) return true;
+  // If heartbeat/activity is silent for > 5 min without owning process confirmed
+  const lastActive = diskTask.lastHeartbeatAt || diskTask.startedAt || diskTask.createdAt;
+  if (lastActive && Date.now() - lastActive > 300_000) {
+    if (!diskTask.ownerPid || !pidAlive(diskTask.ownerPid)) return true;
+  }
+  return false;
+}
+
+function markTaskOrphanedOnDisk(diskTask) {
+  if (!diskTask || diskTask.done) return diskTask;
+  diskTask.done = true;
+  diskTask.status = "failed";
+  diskTask.isError = true;
+  diskTask.finishedAt = Date.now();
+  diskTask.result = {
+    isError: true,
+    text: `Task orphaned: worker process (PID ${diskTask.ownerPid || "unknown"}) exited unexpectedly before completion.`,
+    toolCalls: diskTask.toolCallsCount || 0,
+    errors: ["WORKER_PROCESS_TERMINATED"],
+    fileOps: diskTask.fileOps || [],
+  };
+  saveTaskToDisk(diskTask);
+  return diskTask;
+}
+
 function readTaskFromDisk(taskId) {
   try {
     const filePath = path.join(TASK_DIR, `${taskId}.json`);
     if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, "utf8"));
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (parsed && !parsed.done && isTaskOrphaned(parsed)) {
+        return markTaskOrphanedOnDisk(parsed);
+      }
+      return parsed;
     }
   } catch {}
   return null;
@@ -623,16 +669,7 @@ function slotFilePath(i) {
   return path.join(TASK_DIR, "goose_slots", `slot_${i}.json`);
 }
 
-function pidAlive(pid) {
-  if (!pid) return false;
-  if (pid === process.pid) return true;
-  try {
-    process.kill(pid, 0); // signal 0 = liveness probe, no signal sent
-    return true;
-  } catch (err) {
-    return err.code === "EPERM"; // EPERM = exists, just not ours
-  }
-}
+// pidAlive is declared earlier above saveTaskToDisk
 
 function readLease(file) {
   try {
@@ -644,8 +681,9 @@ function readLease(file) {
 
 function leaseReclaimable(lease) {
   if (!lease) return true; // unreadable = crashed mid-write
+  // If the claiming process is dead, reclaim the slot immediately (no artificial 90s delay)
+  if (!pidAlive(lease.pid)) return true;
   const age = Date.now() - (lease.hb ?? lease.at ?? 0);
-  if (!pidAlive(lease.pid)) return age > SLOT_STALE_MS;
   return age > SLOT_WEDGED_MS;
 }
 
@@ -698,7 +736,7 @@ function releaseGooseSlot(slot) {
   clearInterval(slot.refresh);
   try {
     const cur = readLease(slot.file);
-    if (!cur || cur.pid === process.pid) fs.rmSync(slot.file, { force: true });
+    if (!cur || cur.pid === process.pid || !pidAlive(cur.pid)) fs.rmSync(slot.file, { force: true });
   } catch {}
 }
 
@@ -718,6 +756,10 @@ async function runQueued(fn, taskEntry) {
   if (!slot) {
     // Cancelled while waiting for a slot - never executed, nothing to clean up.
     return taskEntry?.result ?? { isError: true, text: "Task cancelled before acquiring a goose slot." };
+  }
+  if (taskEntry?.done || taskEntry?.status === "cancelled") {
+    releaseGooseSlot(slot);
+    return taskEntry?.result ?? { isError: true, text: "Task cancelled before execution." };
   }
   if (taskEntry && !taskEntry.done) {
     taskEntry.status = "executing";
@@ -1303,6 +1345,7 @@ const statusHttpServer = http.createServer((req, res) => {
     }
 
     // Disk-based task from another instance: poll disk until done
+    const waitStartTime = Date.now();
     const diskPoll = setInterval(() => {
       const current = readTaskFromDisk(taskId);
       if (!current || current.done) {
@@ -1312,6 +1355,14 @@ const statusHttpServer = http.createServer((req, res) => {
         try {
           res.writeHead(err ? 500 : 200, { "Content-Type": "text/markdown; charset=utf-8" });
           res.end(out);
+        } catch {}
+        return;
+      }
+      if (Date.now() - waitStartTime > DEFAULT_TIMEOUT_MS) {
+        clearInterval(diskPoll);
+        try {
+          res.writeHead(504, { "Content-Type": "text/markdown; charset=utf-8" });
+          res.end("Task wait timed out after maximum duration budget.");
         } catch {}
       }
     }, 2000);
@@ -1397,6 +1448,18 @@ const statusHttpServer = http.createServer((req, res) => {
     return res.end(JSON.stringify({ cancelled: false, error: "Not found" }));
   }
 
+  // POST /tasks/cancel or /tasks/cancel_all (Universal mass cancellation)
+  if ((req.method === "POST" || req.method === "DELETE") && (pathname === "/tasks/cancel" || pathname === "/tasks/cancel_all")) {
+    cancelAllTasks("cancelled via HTTP coordinator").then((count) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ cancelled: true, count }));
+    }).catch((err) => {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ cancelled: false, error: err.message }));
+    });
+    return;
+  }
+
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not found");
 });
@@ -1416,6 +1479,70 @@ try {
   if (err.code === "EADDRINUSE") {
     statusServerOwned = false;
   }
+}
+
+// -----------------------------------------------------------------------------
+// Universal Task Cancellation & Process Tree Cleanup
+// -----------------------------------------------------------------------------
+
+async function cancelAllTasks(reason = "cancelled by caller") {
+  let count = 0;
+  // 1. Cancel in-memory tasks and notify waiters
+  for (const task of tasks.values()) {
+    if (!task.done) {
+      if (task.child) {
+        killProcessTree(task.child, task.sessionId);
+        task.child = null;
+      }
+      task.status = "cancelled";
+      task.done = true;
+      task.isError = true;
+      task.finishedAt = Date.now();
+      task.result = { isError: true, text: `Task ${task.id} was ${reason}.` };
+      saveTaskToDisk(task);
+      notifyWaiters(task);
+      count++;
+    }
+  }
+
+  // 2. Cancel disk tasks
+  for (const diskTask of listTasksFromDisk()) {
+    if (!diskTask.done) {
+      diskTask.status = "cancelled";
+      diskTask.done = true;
+      diskTask.isError = true;
+      diskTask.finishedAt = Date.now();
+      diskTask.result = { isError: true, text: `Task ${diskTask.id} was ${reason}.` };
+      saveTaskToDisk(diskTask);
+      count++;
+    }
+  }
+
+  // 3. Kill all running goose processes machine-wide across Windows and WSL
+  if (IS_WINDOWS) {
+    try {
+      execFile("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", "goose run"], () => {});
+      execFile("taskkill", ["/F", "/IM", "goose.exe"], () => {});
+    } catch {}
+  } else {
+    try {
+      execFile("pkill", ["-9", "-f", "goose run"], () => {});
+    } catch {}
+  }
+
+  // 4. Clean up any lingering slot lease locks so queue doesn't stay wedged
+  try {
+    const slotsDir = path.join(TASK_DIR, "goose_slots");
+    if (fs.existsSync(slotsDir)) {
+      for (const f of fs.readdirSync(slotsDir)) {
+        if (f.startsWith("slot_") && f.endsWith(".json")) {
+          fs.rmSync(path.join(slotsDir, f), { force: true });
+        }
+      }
+    }
+  } catch {}
+
+  return count;
 }
 
 // -----------------------------------------------------------------------------
@@ -1457,14 +1584,24 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
   saveTaskToDisk(taskEntry);
 
   const executionPromise = runQueued(async () => {
+    if (taskEntry.done || taskEntry.status === "cancelled") {
+      return taskEntry.result ?? { isError: true, text: "Task was cancelled before execution." };
+    }
     try {
       await withBootMutex(async () => {
+        if (taskEntry.done || taskEntry.status === "cancelled") return;
         await ensureServerRunning();
         await ensureStreamProxyRunning();
       });
+      if (taskEntry.done || taskEntry.status === "cancelled") {
+        return taskEntry.result ?? { isError: true, text: "Task was cancelled before warmup." };
+      }
       // Ride out the first-large-prefill boot stall BEFORE the task runs -
       // otherwise the task itself becomes the stall victim (watchdog kill).
       const warm = await ensureEngineWarmed();
+      if (taskEntry.done || taskEntry.status === "cancelled") {
+        return taskEntry.result ?? { isError: true, text: "Task was cancelled before dispatch." };
+      }
       if (!warm.warmed) {
         taskEntry.result = {
           isError: true,
@@ -1578,11 +1715,13 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
             GOOSE_MODEL: "qwen3.8-27b",
             OPENAI_BASE_URL: `http://localhost:${STREAM_PROXY_PORT}/v1`,
             OPENAI_API_KEY: "dummy",
+            OPENAI_TIMEOUT: "3600",
+            GOOSE_STREAM_TIMEOUT: "3600",
             PYTHONIOENCODING: "utf-8",
             PYTHONUTF8: "1",
             LANG: "C.UTF-8",
             LC_ALL: "C.UTF-8",
-            WSLENV: "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u:PYTHONIOENCODING/u:PYTHONUTF8/u:LANG/u:LC_ALL/u",
+            WSLENV: "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u:OPENAI_TIMEOUT/u:GOOSE_STREAM_TIMEOUT/u:PYTHONIOENCODING/u:PYTHONUTF8/u:LANG/u:LC_ALL/u",
           };
           // --exec, NOT `--`: `wsl.exe -- <cmd>` runs the command line THROUGH
           // the default shell, so any backticks in the task prompt underwent
@@ -1607,7 +1746,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           child = spawn("wsl.exe", wslArgs, {
             env: wslEnv,
             stdio: ["ignore", "pipe", "pipe"],
-            detached: false,
+            detached: true,
           });
         } else {
           const gooseExe = getGooseExecutable();
@@ -1619,6 +1758,8 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
               GOOSE_MODEL: "qwen3.8-27b",
               OPENAI_BASE_URL: `http://localhost:${STREAM_PROXY_PORT}/v1`,
               OPENAI_API_KEY: "dummy",
+              OPENAI_TIMEOUT: "3600",
+              GOOSE_STREAM_TIMEOUT: "3600",
               PYTHONIOENCODING: "utf-8",
               PYTHONUTF8: "1",
               LANG: "C.UTF-8",
@@ -1660,6 +1801,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
       child.stdout.on("data", (chunk) => {
         lastActivityAt = Date.now();
         taskEntry.lastActivityAt = lastActivityAt;
+        taskEntry.lastHeartbeatAt = lastActivityAt;
         taskEntry.streamBytes = (taskEntry.streamBytes || 0) + chunk.length;
         receivedAnyOutput = true;
         lineBuf += chunk.toString("utf8");
@@ -1784,6 +1926,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         taskEntry.status = summary.isError ? "failed" : "completed";
         taskEntry.result = summary;
 
+        saveTaskToDisk(taskEntry);
         notifyWaiters(taskEntry);
         resolve(summary);
       };
@@ -1830,13 +1973,6 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           finish(
             true,
             `Inactivity Timeout: Goose subprocess produced zero stream activity for ${Math.round(inactiveMs / 1000)}s.`
-          );
-        } else if (totalElapsedMs >= totalTimeoutMs) {
-          clearInterval(watchdog);
-          killProcessTree(child, sessionId);
-          finish(
-            true,
-            `Total Budget Timeout: Reached maximum execution budget of ${Math.round(totalTimeoutMs / 1000)}s (${Math.round(totalTimeoutMs / 60000)} min).`
           );
         }
       }, 5000);
@@ -1972,8 +2108,8 @@ server.registerTool(
     title: "Manage Background Qwen Tasks",
     description: "Check status, retrieve output, cancel, or list background Qwen coworker tasks.",
     inputSchema: {
-      action: z.enum(["status", "cancel", "list"]).describe("Action to perform on background tasks"),
-      task_id: z.string().optional().describe("Task ID (required for 'status' and 'cancel')"),
+      action: z.enum(["status", "cancel", "cancel_all", "list"]).describe("Action to perform on background tasks"),
+      task_id: z.string().optional().describe("Task ID (required for 'status', optional for 'cancel'/'cancel_all' to cancel all tasks)"),
     },
   },
   async ({ action, task_id }) => {
@@ -2001,6 +2137,13 @@ server.registerTool(
       }
       return {
         content: [{ type: "text", text: JSON.stringify({ tasks: Array.from(merged.values()) }, null, 2) }],
+      };
+    }
+
+    if (action === "cancel_all" || (action === "cancel" && (!task_id || task_id.toLowerCase() === "all"))) {
+      const count = await cancelAllTasks("cancelled by caller");
+      return {
+        content: [{ type: "text", text: `Cancelled ${count} active/queued task(s), killed all Goose processes, and cleared slot leases.` }],
       };
     }
 
@@ -2140,12 +2283,18 @@ server.registerTool(
   {
     title: "Manage Local Qwen3.8-27B vLLM Instance Lifecycle",
     description:
-      "Check status, start, or stop the universal 245K context vLLM server in WSL Ubuntu. Status includes live engine gauges from /metrics (running/waiting requests, KV cache %, prefix-cache hit ratio, spec-decode acceptance) and an end-to-end canary completion - the port answering is NOT proof of health, and stats silence cannot see every wedge class (2026-08-29: API-to-core stall with empty queues and 200 answers). A failed canary means wedged; auto-reboots unless QWEN_AUTO_HEAL=0. qwen_coworker dispatches run the same gate before every task.",
+      "Check status, start, or stop the universal 245K context vLLM server in WSL Ubuntu. Status includes live engine gauges from /metrics (running/waiting requests, KV cache %, prefix-cache hit ratio, spec-decode acceptance) and an end-to-end canary completion - the port answering is NOT proof of health. Note: during active task execution, canary latency will be higher due to GPU batch contention; this is normal under load and is NOT a wedge. Only stop the server if the engine is idle or if the human user explicitly commands it.",
     inputSchema: {
       action: z.enum(["status", "start", "stop"]).describe("Lifecycle action to perform"),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Force stop even if a task is actively executing. ONLY permitted if the human USER explicitly requested stopping/rebooting the server or cancelling all tasks. Prohibited for autonomous agent decisions."
+        ),
     },
   },
-  async ({ action }) => {
+  async ({ action, force }) => {
     if (action === "status") {
       const info = await serverInfo();
       const running = !!info;
@@ -2214,23 +2363,100 @@ server.registerTool(
       };
     }
     if (action === "stop") {
+      const activeTasks = listTasksFromDisk().filter((t) => !t.done && t.status === "executing");
+      if (activeTasks.length > 0 && !force) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  status: "rejected",
+                  error: `Refusing to stop vLLM server: task '${activeTasks[0].id}' is actively executing.`,
+                  guidance:
+                    "To cancel the active task without rebooting vLLM, call qwen_task(action: 'cancel', task_id: '" +
+                    activeTasks[0].id +
+                    "'). Only pass force: true to stop the server if the human USER explicitly commanded stopping the server or cancelling all tasks.",
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+      await cancelAllTasks("server stopped by user");
       await stopServer();
       resetEngineHealthCache();
       return {
-        content: [{ type: "text", text: JSON.stringify({ status: "stopped", message: "vLLM server stopped." }, null, 2) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                status: "stopped",
+                message: "vLLM server stopped and all active/queued tasks cancelled.",
+                forced: !!force,
+              },
+              null,
+              2
+            ),
+          },
+        ],
       };
     }
   }
 );
 
+function setupProcessLifecycleHandlers() {
+  const cleanup = (signal) => {
+    try {
+      for (const [id, task] of tasks.entries()) {
+        if (!task.done) {
+          task.done = true;
+          task.status = "cancelled";
+          task.isError = true;
+          task.finishedAt = Date.now();
+          task.result = {
+            isError: true,
+            text: `Task cancelled: MCP server process terminating (${signal || "shutdown"}).`,
+            toolCalls: task.toolCallsCount || 0,
+            errors: ["SERVER_PROCESS_TERMINATED"],
+            fileOps: task.fileOps || [],
+          };
+          saveTaskToDisk(task);
+          notifyWaiters(task);
+          if (task.child) {
+            killProcessTree(task.child, task.sessionId);
+          }
+        }
+      }
+      for (let i = 0; i < MAX_CONCURRENT_GOOSE; i++) {
+        const file = slotFilePath(i);
+        const lease = readLease(file);
+        if (lease && lease.pid === process.pid) {
+          try { fs.rmSync(file, { force: true }); } catch {}
+        }
+      }
+    } catch {}
+  };
+
+  process.once("SIGINT", () => { cleanup("SIGINT"); process.exit(0); });
+  process.once("SIGTERM", () => { cleanup("SIGTERM"); process.exit(0); });
+  process.stdin.on("close", () => { cleanup("stdin_closed"); process.exit(0); });
+  process.stdin.on("end", () => { cleanup("stdin_end"); process.exit(0); });
+  process.on("beforeExit", () => { cleanup("beforeExit"); });
+}
+
 async function main() {
+  setupProcessLifecycleHandlers();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
 // Exported for test_global_semaphore.js - importing this module runs the MCP
 // server on stdio, which the test processes simply leave idle.
-export { acquireGooseSlot, releaseGooseSlot, listGooseSlots, TASK_DIR };
+export { acquireGooseSlot, releaseGooseSlot, listGooseSlots, TASK_DIR, isTaskOrphaned, markTaskOrphanedOnDisk };
 
 if (isMain) {
   main().catch((err) => {

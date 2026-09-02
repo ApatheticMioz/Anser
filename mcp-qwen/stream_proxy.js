@@ -44,16 +44,45 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
     headers["content-length"] = reqBodyBuffer.length;
   }
 
+  const isStreamRequest = req.url.startsWith("/v1/chat/completions") && (
+    (req.headers["accept"] && req.headers["accept"].includes("text/event-stream")) ||
+    (reqBodyBuffer && (reqBodyBuffer.includes('"stream":true') || reqBodyBuffer.includes('"stream": true')))
+  );
+
+  let pingInterval = null;
+  let hasDone = false;
+
+  // For streaming requests, send 200 OK headers immediately and start proactive keep-alive pings.
+  // This keeps the TCP socket active and prevents Goose/reqwest from timing out with
+  // "Stream decode error: error decoding response body" during long 30-45s vLLM prompt prefills.
+  if (isStreamRequest) {
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+    });
+    try {
+      res.write(": keep-alive\n\n");
+    } catch {}
+
+    pingInterval = setInterval(() => {
+      try {
+        res.write(": keep-alive\n\n");
+      } catch {}
+    }, 5000);
+  }
+
   const upstreamUrl = `http://127.0.0.1:${UPSTREAM_PORT}${req.url}`;
   const upstreamReq = http.request(
     upstreamUrl,
     {
       method: req.method,
       headers,
+      agent: false,
     },
     (upstreamRes) => {
       const contentType = upstreamRes.headers["content-type"] || "";
-      const isEventStream = contentType.includes("text/event-stream");
+      const isEventStream = contentType.includes("text/event-stream") || isStreamRequest;
 
       // Non-streaming endpoint: pipe directly
       if (!isEventStream) {
@@ -62,36 +91,83 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
         return;
       }
 
-      // Streaming SSE endpoint: sanitize headers, strip Content-Length / Transfer-Encoding
-      // to let Node's HTTP chunking handle streaming without chunk boundary mismatch.
-      const cleanHeaders = { ...upstreamRes.headers };
-      delete cleanHeaders["content-length"];
-      delete cleanHeaders["transfer-encoding"];
+      // If headers were not pre-flushed, flush them now
+      if (!res.headersSent) {
+        const cleanHeaders = { ...upstreamRes.headers };
+        delete cleanHeaders["content-length"];
+        delete cleanHeaders["transfer-encoding"];
 
-      res.writeHead(upstreamRes.statusCode, {
-        ...cleanHeaders,
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-      });
+        res.writeHead(upstreamRes.statusCode, {
+          ...cleanHeaders,
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+        });
 
-      // Keepalive heartbeat: emit an SSE comment (: ping\n\n) every 15s to keep
-      // TCP sockets alive and prevent client/proxy stream stall timeouts during long prefills.
-      const pingInterval = setInterval(() => {
-        try {
-          res.write(": ping\n\n");
-        } catch {}
-      }, 15000);
+        pingInterval = setInterval(() => {
+          try {
+            res.write(": keep-alive\n\n");
+          } catch {}
+        }, 5000);
+      }
+
+      // If upstream returned an HTTP error (e.g. 400 or 500), intercept and convert to a clean SSE chunk
+      if (upstreamRes.statusCode >= 400) {
+        let errBody = "";
+        const expectedLen = parseInt(upstreamRes.headers["content-length"] || "0", 10);
+        function emitError() {
+          if (hasDone) return;
+          hasDone = true;
+          if (pingInterval) clearInterval(pingInterval);
+          let errMsg = `HTTP ${upstreamRes.statusCode}`;
+          try {
+            const parsed = JSON.parse(errBody);
+            errMsg = parsed.error?.message || parsed.message || errBody;
+          } catch {
+            errMsg = errBody || errMsg;
+          }
+          const safeChunk = {
+            id: "chatcmpl-stream-err",
+            object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000),
+            model: "qwen3.8-27b",
+            choices: [
+              {
+                index: 0,
+                delta: { content: `\n\n[vLLM Error: ${errMsg}]\n\n` },
+                finish_reason: "stop",
+              },
+            ],
+          };
+          res.write(`data: ${JSON.stringify(safeChunk)}\n\ndata: [DONE]\n\n`);
+          res.end();
+          upstreamReq.destroy();
+        }
+        upstreamRes.on("data", (c) => {
+          errBody += c.toString("utf8");
+          if (expectedLen > 0 && Buffer.byteLength(errBody, "utf8") >= expectedLen) {
+            emitError();
+          }
+        });
+        upstreamRes.on("end", emitError);
+        return;
+      }
 
       const decoder = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
       let lineBuffer = "";
-      let hasDone = false;
 
       upstreamRes.on("data", (chunk) => {
         const text = decoder.decode(chunk, { stream: true });
         if (!text) return;
 
         lineBuffer += text;
+        if (lineBuffer.includes("data: [DONE]")) {
+          hasDone = true;
+          if (pingInterval) clearInterval(pingInterval);
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
         const lines = lineBuffer.split("\n");
         lineBuffer = lines.pop(); // Retain incomplete trailing line
 
@@ -99,6 +175,10 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
           const trimmed = line.trim();
           if (trimmed === "data: [DONE]") {
             hasDone = true;
+            if (pingInterval) clearInterval(pingInterval);
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
           } else if (trimmed.startsWith("data: ")) {
             const jsonPayload = trimmed.slice(6).trim();
             if (jsonPayload.startsWith("{") && jsonPayload.includes('"error"')) {
@@ -131,7 +211,7 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
       });
 
       upstreamRes.on("end", () => {
-        clearInterval(pingInterval);
+        if (pingInterval) clearInterval(pingInterval);
         const tail = decoder.decode();
         if (tail) {
           lineBuffer += tail;
@@ -150,7 +230,7 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
       });
 
       upstreamRes.on("error", (err) => {
-        clearInterval(pingInterval);
+        if (pingInterval) clearInterval(pingInterval);
         try {
           if (!hasDone) {
             const errMsg = err ? (err.message || String(err)) : "upstream stream error";
@@ -175,7 +255,7 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
       });
 
       res.on("close", () => {
-        clearInterval(pingInterval);
+        if (pingInterval) clearInterval(pingInterval);
         upstreamReq.destroy();
       });
     }
@@ -184,9 +264,20 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
   upstreamReq.setTimeout(0);
 
   upstreamReq.on("error", (err) => {
+    if (pingInterval) clearInterval(pingInterval);
     if (!res.headersSent) {
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "vLLM upstream connection error", details: err.message }));
+      if (isStreamRequest) {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+        });
+        res.write(`data: {"id":"chatcmpl-err","object":"chat.completion.chunk","created":${Math.floor(Date.now()/1000)},"model":"qwen3.8-27b","choices":[{"index":0,"delta":{"content":"\\n\\n[vLLM Connection Error: ${err.message}]\\n\\n"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`);
+        res.end();
+      } else {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "vLLM upstream connection error", details: err.message }));
+      }
     } else {
       try {
         res.write(`data: {"id":"chatcmpl-err","object":"chat.completion.chunk","created":${Math.floor(Date.now()/1000)},"model":"qwen3.8-27b","choices":[{"index":0,"delta":{"content":"\\n\\n[vLLM Upstream Connection Error: ${err.message}]\\n\\n"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`);
