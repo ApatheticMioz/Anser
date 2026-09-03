@@ -1309,6 +1309,8 @@ const statusHttpServer = http.createServer((req, res) => {
         elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
         done: t.done,
         isError: t.isError,
+        streamBytes: t.streamBytes || 0,
+        streamTail: (t.streamTail || "").replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ").replace(/\s+/g, " ").slice(-150),
       });
     }
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -1403,6 +1405,7 @@ const statusHttpServer = http.createServer((req, res) => {
           startedAt: task.startedAt,
           lastActivitySecAgo,
           streamBytes: task.streamBytes || 0,
+          streamTail: (task.streamTail || "").replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ").replace(/\s+/g, " ").slice(-250),
           fileOps: task.fileOps || [],
           toolCallsCount: task.toolCallsCount || 0,
         },
@@ -1572,6 +1575,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
     finishedAt: null,
     lastActivityAt: null,
     streamBytes: 0,
+    streamTail: "",
     status: "queued",
     done: false,
     isError: false,
@@ -1806,6 +1810,8 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         taskEntry.lastActivityAt = lastActivityAt;
         taskEntry.lastHeartbeatAt = lastActivityAt;
         taskEntry.streamBytes = (taskEntry.streamBytes || 0) + chunk.length;
+        const chunkStr = chunk.toString("utf8");
+        taskEntry.streamTail = ((taskEntry.streamTail || "") + chunkStr).slice(-2000);
         receivedAnyOutput = true;
         lineBuf += chunk.toString("utf8");
         const chunkLines = lineBuf.split("\n");
@@ -1962,6 +1968,20 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         const now = Date.now();
         const inactiveMs = now - lastActivityAt;
         const totalElapsedMs = now - taskEntry.startedAt;
+
+        // Degenerate Repetition Loop Circuit Breaker in Stream Output
+        if (taskEntry.streamTail) {
+          const repeatMatch = taskEntry.streamTail.match(/([^ \t\n\r\-_=*#])\1{34,}/);
+          if (repeatMatch) {
+            clearInterval(watchdog);
+            killProcessTree(child, sessionId);
+            finish(
+              true,
+              `Degenerate Loop Circuit Breaker: Model entered an unrecoverable repetition loop on character "${repeatMatch[1]}" in stream output. Subprocess safely aborted.`
+            );
+            return;
+          }
+        }
 
         if (!receivedAnyOutput && inactiveMs >= FIRST_TOKEN_TIMEOUT_MS) {
           clearInterval(watchdog);
