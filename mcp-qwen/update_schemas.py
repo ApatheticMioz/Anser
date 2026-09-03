@@ -1,14 +1,39 @@
-import json, os, glob
+import json, os, glob, sys
 
-mcp_dir = r'C:\Users\Apath\.gemini\antigravity-ide\mcp\qwen38-local'
+is_win = sys.platform == "win32"
 
-# Clean old schemas
-for f in glob.glob(os.path.join(mcp_dir, '*.json')):
+target_dirs = []
+if is_win:
+    target_dirs.append(r"C:\Users\Apath\.gemini\antigravity-ide\mcp\qwen38-local")
+    wsl_dir = r"\\wsl.localhost\Ubuntu\home\apath\.gemini\antigravity-ide\mcp\qwen38-local"
+    if os.path.exists(os.path.dirname(wsl_dir)) and not os.path.islink(wsl_dir):
+        target_dirs.append(wsl_dir)
+else:
+    target_dirs.append(os.path.expanduser("~/.gemini/antigravity-ide/mcp/qwen38-local"))
+    win_dir = "/mnt/c/Users/Apath/.gemini/antigravity-ide/mcp/qwen38-local"
+    if os.path.exists(win_dir):
+        target_dirs.append(win_dir)
+
+# Deduplicate resolved paths
+unique_dirs = []
+seen = set()
+for d in target_dirs:
     try:
-        os.remove(f)
-        print(f'Removed old schema {f}')
+        os.makedirs(d, exist_ok=True)
+        real = os.path.realpath(d)
+        if real not in seen:
+            seen.add(real)
+            unique_dirs.append(d)
     except Exception:
         pass
+
+for mcp_dir in unique_dirs:
+    for f in glob.glob(os.path.join(mcp_dir, '*.json')):
+        try:
+            os.remove(f)
+            print(f'Removed old schema {f}')
+        except Exception:
+            pass
 
 tools = {
     'qwen_coworker': {
@@ -82,12 +107,6 @@ tools = {
     }
 }
 
-for name, schema in tools.items():
-    p = os.path.join(mcp_dir, f'{name}.json')
-    with open(p, 'w', encoding='utf-8') as f:
-        json.dump(schema, f, indent=2)
-    print(f'Wrote {p}')
-
 instructions_content = """# qwen38-local MCP Server Best Practices & Protocol
 
 ## 1. Quick Reference & Tool Invocation
@@ -115,8 +134,59 @@ To dispatch work to the local autonomous Qwen3.8-27B coworker, call `call_mcp_to
    - If the user sends guidance while a background task is running, acknowledge it, stage the requirement for the next turn, and immediately re-execute the `wait_command` via `run_command` in the same turn.
 """
 
-inst_path = os.path.join(mcp_dir, 'instructions.md')
-with open(inst_path, 'w', encoding='utf-8') as f:
-    f.write(instructions_content)
-print(f'Wrote {inst_path}')
+for mcp_dir in unique_dirs:
+    for name, schema in tools.items():
+        p = os.path.join(mcp_dir, f'{name}.json')
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(schema, f, indent=2)
+        print(f'Wrote {p}')
+
+    inst_path = os.path.join(mcp_dir, 'instructions.md')
+    with open(inst_path, 'w', encoding='utf-8') as f:
+        f.write(instructions_content)
+    print(f'Wrote {inst_path}')
+
+# Ensure mcp_config.json has appropriate platform paths
+win_cfg_path = r"C:\Users\Apath\.gemini\config\mcp_config.json" if is_win else "/mnt/c/Users/Apath/.gemini/config/mcp_config.json"
+wsl_cfg_path = r"\\wsl.localhost\Ubuntu\home\apath\.gemini\config\mcp_config.json" if is_win else os.path.expanduser("~/.gemini/config/mcp_config.json")
+
+win_cfg = {
+    "mcpServers": {
+        "qwen38-local": {
+            "command": "node",
+            "args": [r"D:\LLM_Ecosystem\mcp-qwen\index.js"],
+            "env": {"QWEN_RACE_MS": "150000"}
+        }
+    }
+}
+
+wsl_cfg = {
+    "mcpServers": {
+        "qwen38-local": {
+            "command": "node",
+            "args": ["/mnt/d/LLM_Ecosystem/mcp-qwen/index.js"],
+            "env": {"QWEN_RACE_MS": "150000"}
+        }
+    }
+}
+
+try:
+    if os.path.exists(os.path.dirname(win_cfg_path)):
+        with open(win_cfg_path, 'w', encoding='utf-8') as f:
+            json.dump(win_cfg, f, indent=2)
+        print(f'Verified Windows MCP config: {win_cfg_path}')
+except Exception as e:
+    print(f'Could not write Windows config: {e}')
+
+try:
+    if os.path.exists(os.path.dirname(wsl_cfg_path)):
+        # If it's a symlink, unlink it to avoid overwriting the Windows master
+        if os.path.islink(wsl_cfg_path):
+            os.unlink(wsl_cfg_path)
+        with open(wsl_cfg_path, 'w', encoding='utf-8') as f:
+            json.dump(wsl_cfg, f, indent=2)
+        print(f'Verified WSL MCP config: {wsl_cfg_path}')
+except Exception as e:
+    print(f'Could not write WSL config: {e}')
+
 

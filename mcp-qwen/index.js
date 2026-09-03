@@ -24,9 +24,12 @@ import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { AvoLineageEngine } from "./avo_engine.js";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const isMain = Boolean(
   process.argv[1] &&
-  (path.resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase() ||
+  (path.resolve(process.argv[1]).toLowerCase() === __filename.toLowerCase() ||
    process.argv[1].toLowerCase().endsWith("index.js"))
 );
 
