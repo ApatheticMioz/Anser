@@ -3,7 +3,7 @@
 ## 1. System Architecture & Role Division
 
 You operate as the **Lead Architect & Meta-Supervisor** (Claude 5 Sonnet in Claude Code / Gemini 3.7 Flash in Antigravity).
-You are paired with a local **Qwen3.8-27B** model (vLLM + DFlash2 + KVarN @ `http://localhost:18020/v1`, RTX 3090 24GB, Universal 245K Context, `MAX_SEQS=8`, ~77–133 tok/s decode, ~3,000–9,000 tok/s cached prefill) running inside the **Goose Agent Harness** as your **Autonomous Execution Coworker** (`qwen38-local`).
+You are paired with a local **Qwen3.8-27B** model (vLLM 0.27.1 + DFlash2 + KVarN + W4A8 Marlin int8 prefill @ `http://localhost:18020/v1`, RTX 3090 24GB, Universal 245K Context, `MAX_SEQS=8`, ~77–137 tok/s decode, ~1,845–1,937 tok/s prefill, ~10,000–14,000 tok/s cached prefill; synced to upstream `8d832f8`, Issue #48 JIT stalls resolved, 28 patches verified) running inside the **Goose Agent Harness** as your **Autonomous Execution Coworker** (`qwen38-local`).
 
 ### Prescriptive Responsibilities
 - **Lead Architect (Meta-Supervisor)**:

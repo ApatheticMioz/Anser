@@ -999,3 +999,40 @@ aggravated variant share the same first-JIT-launch signature.
 4. **Upstream Commit Reference State**:
    - `~/qwen-serving`: Local `2ae239f` (pristine base), upstream `origin/main` is `69ba4d0` (112 commits ahead; PR #38 n-gram chains `c954724`, Docker distribution, etc.).
    - `d:\LLM_Ecosystem\llama-cpp`: Build 10566, commit `bb4caa754`.
+
+## 2026-09-03: Issue #48 resolved upstream, synced to HEAD (8d832f8), and full venv rebuild
+
+1. **Issue #48 Root Cause & Resolution**:
+   - Issue: [syv-ai/qwen38-27b-rtx3090#48](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/48) closed 2026-09-02 by @mhenrichsen.
+   - Mechanism: Triton kernel JIT compilations inside the first real chunked-prefill request stalled the CUDA stream under WSL2 during host-device synchronization (`cu_k[-1].item()`).
+   - Root Causes Identified:
+     a. `_prepare_dflash_inputs_kernel`: Capture dummy passes only exercised small `BLOCK_SIZE` values; request 1 was the first time `BLOCK_SIZE=256` was evaluated. Fixed in `05d1a0e` (`patches/dflash2-prewarm.patch`).
+     b. `_kvarn_build_packed_kv_kernel`: Warmup used a 1920-column block table (divisible by 16) vs serving runner's 1921 columns (1 column slack, not divisible by 16). Triton specialized on divisibility-by-16 for `stride_bt_b`. Fixed in `201d237` (`do_not_specialize` on `stride_bt_b` + construction-time `NUM_BLOCKS_LOOKUP` upper bound).
+     c. Rejection Sampler Trio (`_compute_local_logits_stats_kernel`, `_rejection_kernel`, `_resample_kernel`): Dummy sampler runs had `num_draft_tokens == 0`. Fixed in `201d237` (`patches/spec-sampler-prewarm.patch`).
+   - Verified 0 in-request JIT compiles across RTX 3090 and 4090 boxes.
+
+2. **Upstream Git Sync (`69ba4d0` -> `8d832f8`)**:
+   - Pulled 104 commits from upstream `origin/main` to local `~/qwen-serving`.
+   - Key improvements incorporated:
+     - PR #57 / PR #67: Sized int4 3D scratch buffers in query tokens and allocated them *inside* the memory budget (`patches/spec-decode-scratch-within-budget.patch`).
+     - PR #65 / PR #59: Fixed launchers to use bash arrays (`ASYNC_ARGS`, `TOOL_ARGS`, `METRICS_ARGS`) to eliminate `set -e` failure modes.
+     - `verify.sh`: Added `superseded_by()` logic for evolving patches (`5259fc7`).
+     - WSL2 CPU Offload: Device-VA translation fix for OffloadingConnector (`patches/offload-wsl2-devptr.patch`).
+     - Mamba Prefix Caching: Opt-in state snapshot retention fix (`patches/mamba-align-checkpoint-order.patch`).
+
+3. **Rebuild Execution via `uv`**:
+   - Replaced `vllm==0.27.1` cleanly with `uv` in 173ms.
+   - Installed `flashinfer-cubin==0.6.13` via `uv` to enable full CUBIN selector acceleration.
+   - Sequentially applied all 28 patches (`patches/*.patch`) with zero rejections.
+   - Installed KVarN backend and runner patches (`bash kvarn/install.sh`).
+   - `bash verify.sh --no-server` passed with **0 failures**.
+
+4. **Optimal Knobs for Max Sustained Throughput & Max Context in the Same Config**:
+   - **Context**: `CTX=huge` delivers the maximum **245,760 tokens** context window (268,169 token KV pool) on the single RTX 3090 24GB.
+   - **Decode Throughput**: `SPEC=dflash2` provides 7-draft speculative decoding (~125–137 tok/s decode; ~60–63 tok/s at 72k depth; up to 382 tok/s on copy/edits).
+   - **Prefill Throughput**: `INT8_ACT=int8` enables W4A8 Marlin tensor cores for all linears, boosting prefill speed by **+27% to +30%** (1,845 tok/s @ 1k, 1,423 tok/s @ 51k), with decode speed unchanged.
+   - **Multi-turn Efficiency**: `PREFIX_CACHE=1` enables instant (~1–5s) follow-up turns on 100k prompts.
+   - **Verify Stability**: `VLLM_DFLASH2_LOOKUP_ADAPTIVE=0` pins verify block length for stable prefix caching (+26% faster).
+   - **Agent Concurrency**: `MAX_SEQS=8` preserves all 8 concurrent agent worker slots matching `MAX_CONCURRENT_GOOSE=8`.
+   - **Metrics**: `REQ_METRICS=1` surfaces per-request latency & usage metrics.
+   - Added these configurations to `/mnt/d/LLM_Ecosystem/scripts/wsl/start_huge.sh`.
