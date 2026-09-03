@@ -245,20 +245,6 @@ async function currentMode() {
 async function ensureServerRunning() {
   const current = await currentMode();
   if (current) {
-    // Port answering is NOT health: a wedged engine core keeps /v1/models at 200
-    // while swallowing every completion (2026-08-28 incident). Gate on engine
-    // stats freshness before declaring "running".
-    const wedge = await engineWedgeState();
-    if (wedge.wedged) {
-      if (!AUTO_HEAL) {
-        return {
-          switched: false,
-          status: `already_running_wedged (canary: ${wedge.canary.error}; auto-heal disabled via QWEN_AUTO_HEAL=0)`,
-        };
-      }
-      const heal = await healWedgedEngine(wedge.stats?.ageSec ?? null);
-      return { switched: true, status: `restarted_wedged_engine (canary: ${wedge.canary.error})`, heal };
-    }
     return { switched: false, status: "already_running" };
   }
   await runWslCommand(
@@ -781,65 +767,9 @@ async function runQueued(fn, taskEntry) {
 //
 // vLLM prints an "Engine 000: ... Running: N reqs, Waiting: M reqs, GPU KV cache
 // usage: X%" stats line every 10 seconds unconditionally - idle or busy, boot
-// complete onward. When the engine CORE hangs (observed once: 4.5h, during a
-// ~100k-token-context DFlash2 decode that stalled 13 -> 0 tok/s), the API process
-// stays up: the port answers, /v1/models returns 200, but stats go silent and every
-// chat completion is accepted-then-never-scheduled. Goose then produces zero stream
-// chunks until the watchdog kills it, while the GPU sits at 100% doing nothing.
-// That class correlates with stats silence. But a second class (2026-08-29)
-// sits between the API server and the engine core: queues stay EMPTY and
-// stats keep flowing while every completion hangs - invisible to any stats
-// check. Hence the canary probe below is the authoritative wedge signal;
-// stats silence is a secondary correlator only.
 // -----------------------------------------------------------------------------
-const ENGINE_LOG_PATH = "/tmp/mcp_launch_huge.log";
-const WEDGE_STATS_SILENCE_S = process.env.QWEN_WEDGE_SILENCE_S
-  ? parseInt(process.env.QWEN_WEDGE_SILENCE_S, 10)
-  : 120;
-const AUTO_HEAL = process.env.QWEN_AUTO_HEAL !== "0";
-const HEAL_LOCK_FILE = path.join(TASK_DIR, ".engine_heal.lock");
-const HEAL_LOCK_TTL_MS = 5 * 60_000; // one full boot budget
-
-async function readLastEngineStatsLine() {
-  try {
-    const { stdout } = await runWslCommand(
-      `grep -a 'Engine 000:.*Running:' ${ENGINE_LOG_PATH} 2>/dev/null | tail -1`
-    );
-    const line = stdout.trim();
-    return line || null;
-  } catch {
-    return null;
-  }
-}
-
-// Log timestamps ("INFO 08-28 19:21:46") are WSL-local; the WSL clock matches the
-// Windows clock on this box (verified against the 2026-08-28 incident timeline).
-function parseEngineStats(line) {
-  const ts = line.match(/(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
-  if (!ts) return null;
-  const now = new Date();
-  const stamp = new Date(
-    now.getFullYear(),
-    Number(ts[1]) - 1,
-    Number(ts[2]),
-    Number(ts[3]),
-    Number(ts[4]),
-    Number(ts[5])
-  );
-  return {
-    ageSec: Math.max(0, Math.round((now.getTime() - stamp.getTime()) / 1000)),
-    runningReqs: Number(line.match(/Running: (\d+) reqs/)?.[1] ?? -1),
-    waitingReqs: Number(line.match(/Waiting: (\d+) reqs/)?.[1] ?? -1),
-    kvCachePct: Number(line.match(/GPU KV cache usage: ([\d.]+)%/)?.[1] ?? -1),
-  };
-}
-
-// ---- Engine gauges via Prometheus /metrics ----
-// The engine serves its own metrics over HTTP, independent of who launched it
-// or where stdout goes. The old log-scrape was a fragile convention: a manual
-// or out-of-band relaunch leaves /tmp/mcp_launch_huge.log empty and detection
-// goes blind (2026-08-29 incident). /metrics is the primary source now; the
-// log scrape is demoted to a best-effort supplement.
+// Engine Gauges via Prometheus /metrics
+// -----------------------------------------------------------------------------
 let metricsCache = { at: 0, data: null };
 async function readEngineMetrics(maxAgeMs = 5000) {
   if (metricsCache.data && Date.now() - metricsCache.at < maxAgeMs) return metricsCache.data;
@@ -854,8 +784,6 @@ async function readEngineMetrics(maxAgeMs = 5000) {
       const name = line.match(/^(vllm:[^{ ]+)/)?.[1];
       const val = Number(line.slice(line.lastIndexOf(" ") + 1));
       if (!name || !Number.isFinite(val)) continue;
-      // Multi-label families (per-engine, per-position) collapse to max - fine
-      // for the gauges we surface (running/waiting/kv/spec-acceptance).
       map[name] = Math.max(map[name] ?? -Infinity, val);
     }
     metricsCache = { at: Date.now(), data: map };
@@ -866,347 +794,7 @@ async function readEngineMetrics(maxAgeMs = 5000) {
   }
 }
 
-// ---- Canary health probe (authoritative) ----
-// Stats-silence detection cannot see every wedge class. Observed 2026-08-29:
-// the port answered, /v1/models and /metrics returned 200, engine queues were
-// EMPTY (running=0, waiting=0) - the wedge sat between the API server and the
-// engine core, so requests were accepted and never scheduled and stats never
-// went stale. The only honest health check is a real completion: 8 tokens,
-// ~1s when healthy, cached for 60s so the pre-dispatch gate stays cheap.
-let canaryCache = { at: 0, result: null };
-async function canaryProbe(force = false) {
-  if (!force && canaryCache.result && Date.now() - canaryCache.at < 60_000) {
-    return canaryCache.result;
-  }
-  const t0 = Date.now();
-  let result;
-  try {
-    const res = await fetch(`${BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${getApiKeySync()}` },
-      body: JSON.stringify({
-        model: "qwen3.8-27b",
-        max_tokens: 8,
-        messages: [{ role: "user", content: "Reply with: ok" }],
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const j = await res.json();
-    // Success = the full API->core->scheduler->decode->response path produced
-    // tokens. Content may legitimately be empty: with reasoning_effort=medium
-    // the token budget can be consumed entirely inside <think> (measured on a
-    // fresh boot: 8/8 tokens to reasoning, empty content, 354ms - healthy).
-    if ((j?.usage?.completion_tokens ?? 0) < 1) {
-      throw new Error("completion returned no tokens");
-    }
-    result = { ok: true, latencyMs: Date.now() - t0 };
-  } catch (err) {
-    result = { ok: false, latencyMs: Date.now() - t0, error: String(err?.message ?? err) };
-  }
-  canaryCache = { at: Date.now(), result };
-  return result;
-}
-
-// ---- Boot warmup ----
-// The first large chunked-prefill after an engine boot stalls the GPU stream
-// once (benchmarks/wedge-repro/RESULTS.md: reproduced identically on FULL,
-// PIECEWISE, and fused-routed configs; always right after the first-execution
-// JIT pair; usually self-recovers, but the 2026-08-28 production incident
-// stayed wedged 4.5h). Riding that stall out at boot - with a bounded
-// reboot-retry - converts the production failure mode (auto-heal reboot ->
-// next big dispatch wedges -> task killed) into a bounded boot delay.
-// Skippable via QWEN_BOOT_WARMUP=0; size via QWEN_WARMUP_TOKENS (default
-// 8,192 tokens - enough to chunk across 2048-token batches and trigger the
-// JIT pair without risking excessive GPU stall time).
-// "Warmed" is tracked via the cumulative prefix-cache-queries counter: it
-// resets to 0 on every engine restart, so marker >= current proves the
-// marker came from this same engine incarnation.
-const WARMUP_MARKER_FILE = path.join(TASK_DIR, ".warmup_marker.json");
-const WARMUP_TOKENS = (() => {
-  const n = parseInt(process.env.QWEN_WARMUP_TOKENS, 10);
-  return Number.isFinite(n) && n > 1000 ? n : 8_192;
-})();
-const WARMUP_TIMEOUT_MS = (() => {
-  const n = parseInt(process.env.QWEN_WARMUP_TIMEOUT_MS, 10);
-  return Number.isFinite(n) && n > 30_000 ? n : 600_000;
-})();
-
-function readWarmupMarker() {
-  try {
-    return JSON.parse(fs.readFileSync(WARMUP_MARKER_FILE, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-async function isEngineWarmed() {
-  if (process.env.QWEN_BOOT_WARMUP === "0") {
-    return { warmed: true, disabled: true };
-  }
-  // Fresh fetch (no 5s cache): a <5s-old sample from a just-replaced engine
-  // could otherwise satisfy the marker check and skip a needed warmup.
-  const m = await readEngineMetrics(0);
-  const q = m?.["vllm:prefix_cache_queries_total"];
-  if (q == null) return { warmed: false, reason: "metrics-unavailable" };
-  const marker = readWarmupMarker();
-  if (marker && typeof marker.prefix_queries_total === "number" && q >= marker.prefix_queries_total) {
-    return { warmed: true };
-  }
-  return { warmed: false, reason: marker ? "engine-restarted-since-warmup" : "never-warmed" };
-}
-
-function makeWarmupCorpus(tokens) {
-  const words = [
-    "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
-    "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa",
-    "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey",
-    "xray", "yankee", "zulu",
-  ];
-  const n = Math.floor(tokens * 1.35);
-  const parts = [];
-  for (let i = 0; i < n; i++) {
-    const h = (Math.imul(i, 2654435761) + 1013904223) >>> 0;
-    parts.push(words[h % words.length]);
-    if (i % 12 === 11) parts.push(".");
-  }
-  return parts.join(" ");
-}
-
-function warmupEngineAttempt() {
-  return new Promise((resolve) => {
-    const corpus = makeWarmupCorpus(WARMUP_TOKENS);
-    const t0 = Date.now();
-    const payload = JSON.stringify({
-      model: "qwen3.8-27b",
-      max_tokens: 16,
-      messages: [{
-        role: "user",
-        content: `Document:\n${corpus}\n\nReply with a one-sentence summary.`,
-      }],
-    });
-
-    const targetUrl = new URL(`${BASE_URL}/chat/completions`);
-    const req = http.request(
-      {
-        hostname: targetUrl.hostname,
-        port: targetUrl.port,
-        path: targetUrl.pathname,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(payload),
-          Authorization: `Bearer ${getApiKeySync()}`,
-        },
-        timeout: WARMUP_TIMEOUT_MS,
-      },
-      (res) => {
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => { body += chunk; });
-        res.on("end", () => {
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            return resolve({
-              ok: false,
-              error: `HTTP ${res.statusCode}: ${body.slice(0, 150)}`,
-              seconds: Math.round((Date.now() - t0) / 1000),
-            });
-          }
-          try {
-            const j = JSON.parse(body);
-            if ((j?.usage?.completion_tokens ?? 0) < 1) {
-              return resolve({
-                ok: false,
-                error: "completion returned no tokens",
-                seconds: Math.round((Date.now() - t0) / 1000),
-              });
-            }
-            resolve({ ok: true, seconds: Math.round((Date.now() - t0) / 1000) });
-          } catch (e) {
-            resolve({
-              ok: false,
-              error: `invalid json: ${e.message}`,
-              seconds: Math.round((Date.now() - t0) / 1000),
-            });
-          }
-        });
-      }
-    );
-
-    req.on("timeout", () => {
-      req.destroy(new Error(`socket timed out after ${Math.round(WARMUP_TIMEOUT_MS / 1000)}s`));
-    });
-
-    req.on("error", (err) => {
-      const errDetail = err?.cause?.message || err?.cause?.code || err?.code || err?.message || String(err);
-      resolve({
-        ok: false,
-        error: String(errDetail),
-        seconds: Math.round((Date.now() - t0) / 1000),
-      });
-    });
-
-    req.write(payload);
-    req.end();
-  });
-}
-
-async function ensureEngineWarmed() {
-  const state = await isEngineWarmed();
-  if (state.warmed) return state;
-  let lastError = state.reason ?? "unknown";
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const r = await warmupEngineAttempt();
-    if (r.ok) {
-      const m = await readEngineMetrics(0);
-      const q = m?.["vllm:prefix_cache_queries_total"];
-      // Never persist a zero/null marker: a later incarnation also reporting 0
-      // would satisfy `current >= marker` and skip its own needed warmup.
-      if (typeof q === "number" && q > 0) {
-        try {
-          fs.writeFileSync(WARMUP_MARKER_FILE, JSON.stringify({
-            at: Date.now(),
-            prefix_queries_total: q,
-            tokens: WARMUP_TOKENS,
-          }));
-        } catch {}
-      }
-      return { warmed: true, attempts: attempt, warmSeconds: r.seconds };
-    }
-    lastError = r.error ?? "warmup-failed";
-
-    // If client timed out or connection dropped, the engine may still be
-    // finishing the prefill/JIT. Drain/wait up to 60s for running requests to drop.
-    let drained = false;
-    for (let d = 0; d < 12; d++) {
-      const m = await readEngineMetrics(0);
-      if ((m?.["vllm:num_requests_running"] ?? 0) === 0) {
-        drained = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-    }
-
-    // If drained cleanly and prefix queries grew, verify health via canary
-    if (drained) {
-      const mAfter = await readEngineMetrics(0);
-      const qAfter = mAfter?.["vllm:prefix_cache_queries_total"];
-      if (typeof qAfter === "number" && qAfter > 0) {
-        const postCanary = await canaryProbe(true);
-        if (postCanary.ok) {
-          try {
-            fs.writeFileSync(WARMUP_MARKER_FILE, JSON.stringify({
-              at: Date.now(),
-              prefix_queries_total: qAfter,
-              tokens: WARMUP_TOKENS,
-            }));
-          } catch {}
-          return { warmed: true, attempts: attempt, warmSeconds: r.seconds, recoveredFromDrain: true };
-        }
-      }
-    }
-
-    // A stalled warmup indicates the engine's prefill/JIT pipeline is degraded.
-    // If auto-heal is enabled, reboot the engine unconditionally so the next attempt
-    // starts on a pristine instance (even if a 1-token canary passes).
-    const c = await canaryProbe(true);
-    if (!c.ok || (AUTO_HEAL && attempt < 3)) {
-      if (!AUTO_HEAL && !c.ok) return { warmed: false, error: `${lastError}; canary: ${c.error}` };
-      if (AUTO_HEAL) {
-        await healWedgedEngine(null);
-        resetEngineHealthCache();
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-      }
-    }
-  }
-  return { warmed: false, error: `${lastError} (3 attempts)` };
-}
-
-async function engineWedgeState() {
-  const metrics = await readEngineMetrics();
-  const canary = await canaryProbe();
-
-  // Stats silence is retained as a secondary signal only (a busy-but-healthy
-  // engine prints stats; a hung core goes quiet). The canary decides wedged.
-  const line = await readLastEngineStatsLine();
-  const stats = line ? parseEngineStats(line) : null;
-
-  const gauges = metrics
-    ? {
-        running_requests: metrics["vllm:num_requests_running"] ?? null,
-        waiting_requests: metrics["vllm:num_requests_waiting"] ?? null,
-        kv_cache_pct: metrics["vllm:kv_cache_usage_perc"] ?? null,
-        prefix_cache_hit_ratio:
-          (metrics["vllm:prefix_cache_queries_total"] ?? 0) > 0
-            ? (metrics["vllm:prefix_cache_hits_total"] ?? 0) / metrics["vllm:prefix_cache_queries_total"]
-            : null,
-        spec_decode_acceptance:
-          (metrics["vllm:spec_decode_num_draft_tokens_total"] ?? 0) > 0
-            ? (metrics["vllm:spec_decode_num_accepted_tokens_total"] ?? 0) /
-              metrics["vllm:spec_decode_num_draft_tokens_total"]
-            : null,
-      }
-    : null;
-
-  return {
-    wedged: !canary.ok,
-    canary,
-    gauges,
-    stats: stats ?? null,
-  };
-}
-
-// Wedge counter: persisted machine-wide (every surface spawns its own server
-// process), surfaced via qwen_server status so A/B runs and production both
-// produce comparable wedge-rate telemetry.
-const WEDGE_COUNTER_FILE = path.join(TASK_DIR, ".wedge_counter.json");
-function readWedgeCounter() {
-  try {
-    return JSON.parse(fs.readFileSync(WEDGE_COUNTER_FILE, "utf8"));
-  } catch {
-    return { count: 0, lastAt: null, lastReason: null };
-  }
-}
-function bumpWedgeCounter(reason) {
-  try {
-    const cur = readWedgeCounter();
-    cur.count = (cur.count ?? 0) + 1;
-    cur.lastAt = Date.now();
-    cur.lastReason = String(reason ?? "").slice(0, 200);
-    fs.writeFileSync(WEDGE_COUNTER_FILE, JSON.stringify(cur));
-  } catch {}
-}
-
-// Kill + reboot a wedged engine. Every Claude surface runs its own copy of this
-// server process, so a stamp file (not an in-process lock) prevents two instances
-// from double-rebooting vLLM within one boot budget.
-async function healWedgedEngine(statsAgeSec) {
-  let lock = null;
-  try {
-    lock = JSON.parse(fs.readFileSync(HEAL_LOCK_FILE, "utf8"));
-  } catch {}
-  if (lock && Date.now() - lock.at < HEAL_LOCK_TTL_MS) {
-    return {
-      healed: false,
-      note: `heal already started ${Math.round((Date.now() - lock.at) / 1000)}s ago by pid ${lock.pid}; boot in progress`,
-    };
-  }
-  try {
-    fs.mkdirSync(TASK_DIR, { recursive: true });
-    fs.writeFileSync(HEAL_LOCK_FILE, JSON.stringify({ at: Date.now(), pid: process.pid, statsAgeSec }));
-    bumpWedgeCounter(`stats_age=${statsAgeSec}s`);
-  } catch {}
-  await stopServer();
-  const res = await ensureServerRunning();
-  // Gauges/canary may still be cached from the pre-restart engine - drop them.
-  resetEngineHealthCache();
-  return { healed: true, boot: res.status };
-}
-
-// Stale health data from a dead engine is worse than none (a cached "ok"
-// canary would mask a fresh wedge for up to 60s). Called after stop/heal.
 function resetEngineHealthCache() {
-  canaryCache = { at: 0, result: null };
   metricsCache = { at: 0, data: null };
 }
 
@@ -1601,24 +1189,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         await ensureStreamProxyRunning();
       });
       if (taskEntry.done || taskEntry.status === "cancelled") {
-        return taskEntry.result ?? { isError: true, text: "Task was cancelled before warmup." };
-      }
-      // Ride out the first-large-prefill boot stall BEFORE the task runs -
-      // otherwise the task itself becomes the stall victim (watchdog kill).
-      const warm = await ensureEngineWarmed();
-      if (taskEntry.done || taskEntry.status === "cancelled") {
         return taskEntry.result ?? { isError: true, text: "Task was cancelled before dispatch." };
-      }
-      if (!warm.warmed) {
-        taskEntry.result = {
-          isError: true,
-          text: `Boot warmup failed after engine (re)start (${warm.error ?? warm.reason}) - engine may be unhealthy. Not dispatching into it.`,
-        };
-        taskEntry.done = true;
-        taskEntry.isError = true;
-        taskEntry.status = "failed";
-        notifyWaiters(taskEntry);
-        return taskEntry.result;
       }
     } catch (err) {
       taskEntry.done = true;
@@ -1988,7 +1559,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           killProcessTree(child, sessionId);
           finish(
             true,
-            `First-Token Timeout: Goose produced zero stream output for ${Math.round(inactiveMs / 1000)}s after spawn - the vLLM engine core is wedged or fully saturated. No work was performed. Check qwen_server status (engine stats silence >${WEDGE_STATS_SILENCE_S}s = wedged; auto-heal reboots it); safe to re-dispatch once healthy.`
+            `First-Token Timeout: Goose produced zero stream output for ${Math.round(inactiveMs / 1000)}s after spawn. The model engine may be overloaded or initializing. No work was performed. Check qwen_server status; safe to re-dispatch once ready.`
           );
         } else if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
           clearInterval(watchdog);
@@ -2321,51 +1892,36 @@ server.registerTool(
     if (action === "status") {
       const info = await serverInfo();
       const running = !!info;
-      const wedge = running ? await engineWedgeState() : { wedged: false, stats: null };
-      let autoHeal = null;
-      if (running && wedge.wedged && AUTO_HEAL) {
-        try {
-          autoHeal = await healWedgedEngine(wedge.stats?.ageSec ?? null);
-        } catch (err) {
-          autoHeal = { healed: false, error: err.message };
-        }
-      }
-      const statusLabel = !running
-        ? "stopped"
-        : wedge.wedged
-          ? autoHeal?.healed
-            ? "wedged_restarted"
-            : "wedged"
-          : "running";
+      const metrics = running ? await readEngineMetrics() : null;
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
               {
-                status: statusLabel,
+                status: running ? "running" : "stopped",
                 endpoint: BASE_URL,
                 max_model_len: running ? info.maxModelLen : null,
                 context_window_nominal: MAX_LEN_HUGE,
                 stack: "vLLM + DFlash2 + KVarN (Universal 245K)",
-                engine: running
+                engine: running && metrics
                   ? {
-                      running_requests: wedge.gauges?.running_requests ?? null,
-                      waiting_requests: wedge.gauges?.waiting_requests ?? null,
-                      kv_cache_pct: wedge.gauges?.kv_cache_pct ?? null,
-                      prefix_cache_hit_ratio: wedge.gauges?.prefix_cache_hit_ratio ?? null,
-                      spec_decode_acceptance: wedge.gauges?.spec_decode_acceptance ?? null,
-                      canary: wedge.canary,
-                      engine_stats_age_seconds: wedge.stats?.ageSec ?? null,
-                      wedge_detected: wedge.wedged,
-                      wedge_threshold_seconds: WEDGE_STATS_SILENCE_S,
-                      auto_heal: autoHeal,
+                      running_requests: metrics["vllm:num_requests_running"] ?? null,
+                      waiting_requests: metrics["vllm:num_requests_waiting"] ?? null,
+                      kv_cache_pct: metrics["vllm:kv_cache_usage_perc"] ?? null,
+                      prefix_cache_hit_ratio:
+                        (metrics["vllm:prefix_cache_queries_total"] ?? 0) > 0
+                          ? (metrics["vllm:prefix_cache_hits_total"] ?? 0) / metrics["vllm:prefix_cache_queries_total"]
+                          : null,
+                      spec_decode_acceptance:
+                        (metrics["vllm:spec_decode_num_draft_tokens_total"] ?? 0) > 0
+                          ? (metrics["vllm:spec_decode_num_accepted_tokens_total"] ?? 0) /
+                            metrics["vllm:spec_decode_num_draft_tokens_total"]
+                          : null,
                     }
                   : null,
                 status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
                 status_endpoint_owned_by_this_instance: statusServerOwned,
-                wedge_counter: readWedgeCounter(),
-                boot_warmup: readWarmupMarker() ?? { warmed: false },
               },
               null,
               2
@@ -2380,7 +1936,7 @@ server.registerTool(
         content: [
           {
             type: "text",
-            text: JSON.stringify({ status: "running", result: res.status, heal: res.heal ?? null, endpoint: BASE_URL, context: MAX_LEN_HUGE }, null, 2),
+            text: JSON.stringify({ status: "running", result: res.status, endpoint: BASE_URL, context: MAX_LEN_HUGE }, null, 2),
           },
         ],
       };

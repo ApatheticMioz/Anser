@@ -28,10 +28,8 @@ export VLLM_DFLASH2_LOOKUP_ADAPTIVE=0  # A/B tested 2026-08-23: pins verify bloc
 # (+~15s), not a per-request cost. Going past 8 would be extrapolating past upstream's
 # own tested range, not verified - do not raise further without new evidence.
 export MAX_SEQS=8
-# Maximum sustained prefill throughput: W4A8 Marlin int8 tensor cores for all linears
-# Measured in docs/optimizations.md: +27-30% prefill speedup (1,845 tok/s @ 1k, 1,423 tok/s @ 51k),
-# decode speed unchanged, quality preserved (GSM8K 95.0% vs 96.5%).
-export INT8_ACT=int8
+# Maximum Intelligence: Pristine W4A16 (unquantized activations). Retains 96.5% GSM8K
+# reasoning with zero perplexity degradation (+4.1% PPL / -1.5% GSM8K avoided).
 # Per-request usage & timing metrics (issue #51): enables usage reporting & prompt-tokens details
 export REQ_METRICS=1
 # Server-side reasoning default: medium effort when no per-request override is sent.

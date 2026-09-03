@@ -1027,12 +1027,25 @@ aggravated variant share the same first-JIT-launch signature.
    - Installed KVarN backend and runner patches (`bash kvarn/install.sh`).
    - `bash verify.sh --no-server` passed with **0 failures**.
 
-4. **Optimal Knobs for Max Sustained Throughput & Max Context in the Same Config**:
-   - **Context**: `CTX=huge` delivers the maximum **245,760 tokens** context window (268,169 token KV pool) on the single RTX 3090 24GB.
-   - **Decode Throughput**: `SPEC=dflash2` provides 7-draft speculative decoding (~125–137 tok/s decode; ~60–63 tok/s at 72k depth; up to 382 tok/s on copy/edits).
-   - **Prefill Throughput**: `INT8_ACT=int8` enables W4A8 Marlin tensor cores for all linears, boosting prefill speed by **+27% to +30%** (1,845 tok/s @ 1k, 1,423 tok/s @ 51k), with decode speed unchanged.
+4. **Optimal Knobs for Max Intelligence & Max Context in the Same Config**:
+   - **Intelligence & Reasoning (Pristine W4A16)**: Linear activations run unquantized (W4A16). Preserves **96.5% GSM8K** multi-step mathematical and coding reasoning with zero perplexity regression (+4.1% PPL / -1.5% GSM8K penalty of INT8_ACT avoided).
+   - **Context**: `CTX=huge` delivers the maximum **245,760 tokens** context window (268,169 token KV pool) on the single RTX 3090 24GB via KVarN 4/2-bit (passes 218k needle recall with 100% accuracy).
+   - **Decode Throughput**: `SPEC=dflash2` provides 7-draft speculative decoding (~125–137 tok/s decode; ~60–63 tok/s at 72k depth; up to 382 tok/s on copy/edits). Lossless verification against target model logits.
    - **Multi-turn Efficiency**: `PREFIX_CACHE=1` enables instant (~1–5s) follow-up turns on 100k prompts.
    - **Verify Stability**: `VLLM_DFLASH2_LOOKUP_ADAPTIVE=0` pins verify block length for stable prefix caching (+26% faster).
    - **Agent Concurrency**: `MAX_SEQS=8` preserves all 8 concurrent agent worker slots matching `MAX_CONCURRENT_GOOSE=8`.
    - **Metrics**: `REQ_METRICS=1` surfaces per-request latency & usage metrics.
-   - Added these configurations to `/mnt/d/LLM_Ecosystem/scripts/wsl/start_huge.sh`.
+   - Configured in `/mnt/d/LLM_Ecosystem/scripts/wsl/start_huge.sh`.
+
+5. **Historical Infrastructure Gotchas (Merged from root NOTES.md)**:
+
+   ### Bug 0: Zombie Task reporting `EXECUTING` while GPU sits at 0% (Observed 2026-08-30)
+   - **Component**: Goose worker process behind `mcp-qwen` (`127.0.0.1:18021` task tracker + vLLM @ `:18020`).
+   - **Symptom**: `GET /task/<id>/status` reports `actively EXECUTING` with elapsed timer, while `nvidia-smi` shows 0% GPU utilization and vLLM has no running requests.
+   - **Resolution in Stack**: Implemented `pidAlive(task.ownerPid)` liveness probing and `isTaskOrphaned(diskTask)` / `markTaskOrphanedOnDisk()` in `mcp-qwen/index.js` (lines 530-605). If worker process PID exits unexpectedly, the task tracker immediately detects orphan status on read and marks the task `FAILED`.
+
+   ### Bug 1: Coworker Stream Timeout on Massive Turns (`Stream decode error`) (Observed 2026-08-30)
+   - **Component**: Multi-agent coworker harness (`goose` CLI + local vLLM endpoint @ `http://localhost:18020/v1` via `mcp-qwen`).
+   - **Symptom**: `Network error: Stream decode error: error decoding response body` when massive turns (>80k tokens, deep reasoning) exceed Goose's original 600s reqwest read timeout.
+   - **Resolution in Stack**: Goose binary timeout was extended from 600s to 1 hour, and `index.js` configured `INACTIVITY_TIMEOUT_MS = 1_800_000` (30-minute inactivity watchdog) and `DEFAULT_TIMEOUT_MS = 14_400_000` (4 hours) so massive prompt synthesis completes without premature connection termination.
+
