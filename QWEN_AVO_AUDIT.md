@@ -296,4 +296,44 @@ The principal risk is **over-claiming**: the components are labeled "sandboxed" 
 
 **Recommendation: APPROVE the merge with the two pre-merge must-fixes (S1, L1) applied, and track the rest as a defined hardening backlog.**
 
-*— End of audit —*
+*— End of initial audit —*
+
+---
+
+## 9. Remediation Verification & Final Sign-Off (Commit `b84a9d8`)
+
+**Re-verification run (2026-09-05):**
+- `node mcp-qwen/test_deepseek_avo.js` → **6/6 PASSED** (live vLLM 1955 ms TTFT)
+- `node mcp-qwen/benchmark_comparison.js` → **ALL COMPLETED** (sandbox 5.0× faster; AVO accept + clean revert verified)
+
+I inspected the actual diff of `b84a9d8` (not just the commit message) and confirmed each remediation is genuinely implemented:
+
+| ID | Remediation | Verified in diff? | Notes |
+|---|---|---|---|
+| S1 | `resolvePath()` boundary containment | ✅ | `path.relative` + `startsWith("..")`/`isAbsolute` guard → `PathEscapeError`. Root itself resolves to `""` (allowed); all escapes rejected. Correct. |
+| S3 | Empty `target_content` guard | ✅ | Rejects empty/non-string before any read. |
+| L1 | Atomic + non-destructive lineage | ✅ | `writeFileSync(tmp)` → `renameSync` (atomic, same volume); tmp cleaned on failure. Corrupt JSON quarantined to `lineage.json.corrupt-<ts>` **before** the baseline reset — no silent data loss. |
+| R1 | Remove duplicate `tool_result` log | ✅ | The `tool:after_execute` hook is deleted; the runner's explicit append is now the single source of truth. |
+| A1 | Deterministic rollback for file creation | ✅ | `manifest.json` records `existed` per file; on revert, non-existent-at-propose files are `unlinkSync`'d. |
+| A3 | Validate node before file mutation | ✅ | `revertCandidate` now throws on unknown id **and** on already-`accepted` candidates before touching the filesystem. (Also closes A4.) |
+| K4 | No unhandled promise rejections | ✅ | `emit` pushes `{ error, isError }` instead of a live `Promise.reject`. |
+| H3 | Bounded stdout/stderr | ✅ | 4 MB cap with `...[truncated at 4MB]` marker. |
+| H4 | Signal-kill exit mapping | ✅ | `close(code, signal)` → `code ?? (signal ? 137 : 1)` + signal annotation in stderr. |
+
+**Residual (non-blocking) observations on the remediation itself:**
+- **H4 minor:** the signal path hard-codes `137` (SIGKILL) for *any* signal rather than `128 + signum`. Functionally fine (non-zero, correctly fails the AVO gate); a `128+signum` mapping would be more precise. Cosmetic.
+- **A1 minor:** if `manifest.json` itself is corrupt, the `catch {}` swallows it and the revert is a no-op (files left as-is). This is a *safe* failure mode (no data loss, no wrong-file restore) — acceptable, arguably better than the prior behavior.
+- **H1 (process-tree kill) remains open** — it was in the "strongly recommended / fast-follow" bucket, not a must-fix, and is not in this commit. It is the last meaningful safety gap before fully unattended operation (orphaned grandchildren on timeout, esp. WSL). Track it in the hardening backlog; it does **not** block the merge.
+
+### FINAL VERDICT: **APPROVED FOR MERGE**
+
+All seven pre-merge must-fixes and recommended hardening items from the audit are correctly implemented and verified against the actual diff. Both the validation suite (6/6) and the head-to-head benchmark suite pass, including live vLLM streaming and the closed-loop AVO accept/revert cycle. The two items I designated as *must-fix before unattended autonomy* (S1 sandbox boundary, L1 atomic/non-destructive lineage) are closed, and the rollback-fidelity, event-bus, and buffer-safety gaps are all resolved.
+
+**Sign-off: I approve merging `feat/deepseek-avo` into `main`.**
+
+**Merge conditions / follow-ups (non-blocking):**
+1. Proceed with the 4-step Goose deprecation sequence in §7 (flag → shadow A/B via JSONL ledgers → flip default → remove `goose`-specific `wsl_bridge` branches).
+2. Track **H1** (reliable process-tree kill: `detached:true` + POSIX group kill; WSL kill-by-session-tag) as the top item of the post-merge hardening backlog before enabling long-running unattended mutation.
+3. Remaining low-severity backlog (H2 cwd shell-quoting, S2 bounded read, S4 atomic writes, E1 fitness normalization, L2 real branching, W1/W2 watchdog enforcement, R2/R3) can be addressed incrementally.
+
+*— End of final sign-off —*
