@@ -12,10 +12,10 @@ import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import os from "os";
-import path from "path";
 import { acquireGooseSlot, releaseGooseSlot, listGooseSlots } from "./index.js";
+import { SLOTS_DIR } from "./src/config.js";
 
-const SLOT_DIR = path.join(os.homedir(), ".qwen", "goose_slots");
+const SLOT_DIR = SLOTS_DIR;
 
 async function childMode() {
   const slot = await acquireGooseSlot({ id: "child_sem_test" });

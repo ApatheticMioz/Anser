@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -115,6 +115,41 @@ export function killProcessTree(child, sessionId) {
   if (!child?.pid) return;
   if (IS_WINDOWS) {
     execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], () => {});
+  } else {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {}
+    }
+  }
+}
+
+export function killProcessTreeSync(child, sessionId) {
+  if (sessionId) {
+    try {
+      if (IS_WINDOWS) {
+        execFileSync("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", `goose run --name ${sessionId}`], {
+          timeout: 3000,
+          stdio: "ignore",
+        });
+      } else {
+        execFileSync("pkill", ["-9", "-f", `goose run --name ${sessionId}`], {
+          timeout: 3000,
+          stdio: "ignore",
+        });
+      }
+    } catch {}
+  }
+  if (!child?.pid) return;
+  if (IS_WINDOWS) {
+    try {
+      execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        timeout: 3000,
+        stdio: "ignore",
+      });
+    } catch {}
   } else {
     try {
       process.kill(-child.pid, "SIGKILL");

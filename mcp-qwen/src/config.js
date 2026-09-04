@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -46,5 +47,30 @@ export const SLOT_STALE_MS = 90_000;
 export const SLOT_WEDGED_MS = 300_000;
 export const SLOT_POLL_MS = 1_000;
 
-export const TASK_DIR = path.join(os.homedir(), ".qwen", "tasks");
+export const QWEN_STATE_DIR = process.env.QWEN_STATE_DIR || (() => {
+  if (IS_WINDOWS) return path.join(os.homedir(), ".qwen");
+  const winUserHomeQwen = "/mnt/c/Users/Apath/.qwen";
+  try {
+    if (fs.existsSync(winUserHomeQwen)) return winUserHomeQwen;
+  } catch {}
+  return path.join(os.homedir(), ".qwen");
+})();
+
+export const TASK_DIR = path.join(QWEN_STATE_DIR, "tasks");
 export const SLOTS_DIR = path.join(TASK_DIR, "goose_slots");
+
+// Wedge detection & Auto-Heal (Preserves GPU headroom against core deadlocks)
+export const WEDGE_STATS_SILENCE_S = process.env.QWEN_WEDGE_SILENCE_S
+  ? parseInt(process.env.QWEN_WEDGE_SILENCE_S, 10)
+  : 120;
+export const AUTO_HEAL = process.env.QWEN_AUTO_HEAL !== "0";
+export const HEAL_LOCK_FILE = path.join(TASK_DIR, ".engine_heal.lock");
+export const HEAL_LOCK_TTL_MS = 5 * 60_000;
+export const ENGINE_LOG_PATH = process.env.QWEN_ENGINE_LOG || "/tmp/mcp_launch_huge.log";
+export const WEDGE_COUNTER_FILE = path.join(TASK_DIR, ".wedge_counter.json");
+
+// Execution & Turn limits
+export const MAX_TURNS = process.env.QWEN_MAX_TURNS
+  ? parseInt(process.env.QWEN_MAX_TURNS, 10)
+  : null; // null = unbounded, let orchestrator govern
+

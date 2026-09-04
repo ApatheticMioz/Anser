@@ -8,6 +8,8 @@ import {
   RACE_MS,
   IS_WINDOWS,
   MAX_CONCURRENT_GOOSE,
+  AUTO_HEAL,
+  WEDGE_STATS_SILENCE_S,
 } from "./config.js";
 import { normalizeWorkspacePath, killProcessTree } from "./wsl_bridge.js";
 import {
@@ -16,6 +18,9 @@ import {
   ensureServerRunning,
   stopServer,
   resetEngineHealthCache,
+  engineWedgeState,
+  healWedgedEngine,
+  readWedgeCounter,
 } from "./server_lifecycle.js";
 import { listGooseSlots } from "./semaphore.js";
 import {
@@ -393,38 +398,50 @@ export function registerTools(server) {
       if (action === "status") {
         const info = await serverInfo();
         const running = !!info;
-        const metrics = running ? await readEngineMetrics() : null;
+        const wedge = running ? await engineWedgeState() : { wedged: false, stats: null };
+        let autoHeal = null;
+        if (running && wedge.wedged && AUTO_HEAL) {
+          try {
+            autoHeal = await healWedgedEngine(wedge.stats?.ageSec ?? null);
+          } catch (err) {
+            autoHeal = { healed: false, error: err.message };
+          }
+        }
+        const statusLabel = !running
+          ? "stopped"
+          : wedge.wedged
+          ? autoHeal?.healed
+            ? "wedged_restarted"
+            : "wedged"
+          : "running";
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify(
                 {
-                  status: running ? "running" : "stopped",
+                  status: statusLabel,
                   endpoint: BASE_URL,
                   max_model_len: running ? info.maxModelLen : null,
                   context_window_nominal: MAX_LEN_HUGE,
                   stack: "vLLM + DFlash2 + KVarN (Universal 245K)",
-                  engine:
-                    running && metrics
-                      ? {
-                          running_requests: metrics["vllm:num_requests_running"] ?? null,
-                          waiting_requests: metrics["vllm:num_requests_waiting"] ?? null,
-                          kv_cache_pct: metrics["vllm:kv_cache_usage_perc"] ?? null,
-                          prefix_cache_hit_ratio:
-                            (metrics["vllm:prefix_cache_queries_total"] ?? 0) > 0
-                              ? (metrics["vllm:prefix_cache_hits_total"] ?? 0) /
-                                metrics["vllm:prefix_cache_queries_total"]
-                              : null,
-                          spec_decode_acceptance:
-                            (metrics["vllm:spec_decode_num_draft_tokens_total"] ?? 0) > 0
-                              ? (metrics["vllm:spec_decode_num_accepted_tokens_total"] ?? 0) /
-                                metrics["vllm:spec_decode_num_draft_tokens_total"]
-                              : null,
-                        }
-                      : null,
+                  engine: running
+                    ? {
+                        running_requests: wedge.gauges?.running_requests ?? null,
+                        waiting_requests: wedge.gauges?.waiting_requests ?? null,
+                        kv_cache_pct: wedge.gauges?.kv_cache_pct ?? null,
+                        prefix_cache_hit_ratio: wedge.gauges?.prefix_cache_hit_ratio ?? null,
+                        spec_decode_acceptance: wedge.gauges?.spec_decode_acceptance ?? null,
+                        canary: wedge.canary,
+                        engine_stats_age_seconds: wedge.stats?.ageSec ?? null,
+                        wedge_detected: wedge.wedged,
+                        wedge_threshold_seconds: WEDGE_STATS_SILENCE_S,
+                        auto_heal: autoHeal,
+                      }
+                    : null,
                   status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
                   status_endpoint_owned_by_this_instance: statusServerOwned,
+                  wedge_counter: readWedgeCounter(),
                 },
                 null,
                 2

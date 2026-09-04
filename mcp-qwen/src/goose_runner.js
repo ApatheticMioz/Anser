@@ -12,6 +12,7 @@ import {
   INACTIVITY_TIMEOUT_MS,
   FIRST_TOKEN_TIMEOUT_MS,
   TASK_DIR,
+  MAX_TURNS,
 } from "./config.js";
 import {
   isWslLocation,
@@ -161,7 +162,7 @@ export function summarizeGooseRun(
   }
 
   const streamErrorPattern =
-    /Stream decode error|error decoding response body|Network error:\s*Stream decode error/i;
+    /Stream decode error|error decoding response body|Network error:\s*Stream decode error|\[vLLM (?:Error|Connection Error|Upstream Connection Error|Upstream Stream Interrupted|Mid-Stream Warning):|\[StreamProxy Guard:/i;
   const isStreamError =
     (finalText && streamErrorPattern.test(finalText)) ||
     (stderr && streamErrorPattern.test(stderr));
@@ -338,7 +339,9 @@ export function startGooseTask({
         } else {
           args.push("--no-session");
         }
-        args.push("--max-turns", "50");
+        if (MAX_TURNS) {
+          args.push("--max-turns", String(MAX_TURNS));
+        }
         args.push("--output-format", "stream-json");
         if (system) {
           args.push("--system", system);
@@ -370,8 +373,9 @@ export function startGooseTask({
               PYTHONUTF8: "1",
               LANG: "C.UTF-8",
               LC_ALL: "C.UTF-8",
+              GOOSE_WORKING_DIR: targetCwd,
               WSLENV:
-                "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u:OPENAI_TIMEOUT/u:GOOSE_STREAM_TIMEOUT/u:PYTHONIOENCODING/u:PYTHONUTF8/u:LANG/u:LC_ALL/u",
+                "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u:OPENAI_TIMEOUT/u:GOOSE_STREAM_TIMEOUT/u:PYTHONIOENCODING/u:PYTHONUTF8/u:LANG/u:LC_ALL/u:GOOSE_WORKING_DIR/u",
             };
             const wslArgs = [
               "-d",

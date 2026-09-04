@@ -11,7 +11,6 @@ pkill -9 -f 'avo_runner.py' 2>/dev/null || true
 
 echo "[kill_all_tasks] Purging stale goose slot leases..."
 rm -f ~/.qwen/tasks/goose_slots/*.json 2>/dev/null || true
-rm -f ~/.qwen/goose_slots/*.json 2>/dev/null || true
 rm -f /mnt/c/Users/Apath/.qwen/tasks/goose_slots/*.json 2>/dev/null || true
 
 echo "[kill_all_tasks] Done. All tasks cancelled and GPU idled."

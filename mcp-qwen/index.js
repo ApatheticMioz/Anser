@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_CONCURRENT_GOOSE, TASK_DIR } from "./src/config.js";
-import { killProcessTree } from "./src/wsl_bridge.js";
+import { killProcessTree, killProcessTreeSync } from "./src/wsl_bridge.js";
 import {
   acquireGooseSlot,
   releaseGooseSlot,
@@ -61,7 +61,7 @@ function setupProcessLifecycleHandlers() {
           saveTaskToDisk(task);
           notifyWaiters(task);
           if (task.child) {
-            killProcessTree(task.child, task.sessionId);
+            killProcessTreeSync(task.child, task.sessionId);
           }
         }
       }
