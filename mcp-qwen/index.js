@@ -73,7 +73,7 @@ const INACTIVITY_TIMEOUT_MS = (() => {
 // child actually spawns - queued tasks have no watchdog at all.
 const FIRST_TOKEN_TIMEOUT_MS = process.env.QWEN_FIRST_TOKEN_TIMEOUT_MS
   ? parseInt(process.env.QWEN_FIRST_TOKEN_TIMEOUT_MS, 10)
-  : 120_000;
+  : 240_000;
 const EXTENSION_BONUS_TIMEOUT_MS = 600_000;
 const TASK_RETENTION_MS = 10_800_000; // 3 hours
 
@@ -242,6 +242,26 @@ async function currentMode() {
   return "unknown";
 }
 
+async function warmEngine() {
+  try {
+    const key = getApiKeySync();
+    await fetch(`${BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: "qwen3.8-27b",
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+        temperature: 0.0,
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch {}
+}
+
 async function ensureServerRunning() {
   const current = await currentMode();
   if (current) {
@@ -256,6 +276,7 @@ async function ensureServerRunning() {
     const now = await currentMode();
     if (now) {
       await ensureStreamProxyRunning();
+      await warmEngine();
       return { switched: true, status: "started" };
     }
   }
@@ -1511,7 +1532,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         resolve(summary);
       };
 
-      const watchdog = setInterval(() => {
+      const watchdog = setInterval(async () => {
         if (settled) {
           clearInterval(watchdog);
           return;
@@ -1555,6 +1576,19 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         }
 
         if (!receivedAnyOutput && inactiveMs >= FIRST_TOKEN_TIMEOUT_MS) {
+          let engineActive = false;
+          try {
+            const metrics = await readEngineMetrics(2000);
+            if (metrics && ((metrics["vllm:num_requests_running"] ?? 0) > 0 || (metrics["vllm:num_requests_waiting"] ?? 0) > 0)) {
+              engineActive = true;
+            }
+          } catch {}
+
+          if (engineActive) {
+            lastActivityAt = now;
+            return;
+          }
+
           clearInterval(watchdog);
           killProcessTree(child, sessionId);
           finish(
@@ -1609,24 +1643,18 @@ server.registerTool(
   {
     title: "Autonomous Senior Coworker (Goose Agent + Universal 245K vLLM)",
     description:
-      "Primary agentic interface for local Qwen3.8-27B running inside the Goose agent harness for $0. " +
-      "Has native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. " +
-      "Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and AVO candidate mutations. " +
-      "USAGE - conversational pair-programming is the primary mode:\n" +
-      "  - Single Logical Concern per Turn: Scope mutation dispatches to ONE cohesive subsystem, layer, or component\n    (e.g. 'Turn 2a: wrap server actions and Mastra tools') to maintain rapid turn velocity without monolithic task overload.\n" +
-      "  - Slicing Large Files (>300 LOC): Target specific function/AST slices rather than dumping entire files.\n" +
-      "  - Session Lifecycle: Keep a `session_id` active across cohesive multi-turn milestones, rolling to a fresh session_id (e.g. '<milestone>_stage2') when context becomes saturated to maintain peak decode velocity.\n" +
-      "  - Budgets are generous by design (default 1h, 10-min floor; pass more for research+write+post).\n" +
-      "    Split multi-stage jobs so a timeout can never land on the irreversible step (post/commit/deploy):\n" +
-      "    persist artifacts to disk first, then a short follow-up dispatch executes the critical action.\n" +
-      "Execution Contract:\n" +
-      "  - Fast tasks (< 45s): Returns full deliverable directly in Turn 1.\n" +
-      "  - Long tasks (>= 45s): Safely yields `taskId` and a `wait_command` before client deadlines.\n" +
-      "    Run `wait_command` via native shell to block and wake up automatically with the result at $0 token cost.\n" +
-      "Supported Extensions:\n" +
-      "  - `uvx free-search-mcp` (Deep Web Search, Live Docs, PDF/DOCX Ingestion)\n" +
-      "  - `npx -y @upstash/context7-mcp` (Version-Accurate Framework & Library Docs via Context7 MCP)\n" +
-      "  - `gh` CLI / `git` (Authenticated GitHub operations and atomic git branch/commit workflows)",
+      "Primary autonomous execution coworker for local Qwen3.8-27B via Goose agent harness ($0 local text execution). " +
+      "Has full native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. " +
+      "Executes codebase exploration, refactoring, implementation, diagnostics, live web/docs research, and git operations.\n\n" +
+      "ORCHESTRATION RULES:\n" +
+      "  - Single Logical Concern: Scope each prompt to ONE cohesive subsystem, architectural layer, or target AST slice. Do not bundle disparate subsystems or cross-cutting concerns into a single dispatch.\n" +
+      "  - Full Objective Fulfillment: Do not instruct Qwen to limit its tool calls or artificially restrict its execution. Qwen operates autonomously with full tool depth once dispatched with a focused objective.\n" +
+      "  - Session Lifecycle: Use persistent `session_id` across 2-3 focused turns, then roll to a fresh session_id (e.g. '<milestone>_stage2') when context accumulates.\n" +
+      "  - Zero-Turn Execution Contract: Tasks completing within ~45s return results synchronously. Long-running tasks yield a `taskId` and a `wait_command`. Execute the `wait_command` immediately in your shell to block at $0 cost and wake on completion. Do not poll manually or execute parallel exploratory tools while waiting.\n\n" +
+      "SUPPORTED EXTENSIONS:\n" +
+      "  - `uvx free-search-mcp` (Web search, documentation lookup, PDF/DOCX ingestion)\n" +
+      "  - `npx -y @upstash/context7-mcp` (Live framework/library documentation)\n" +
+      "  - `gh` CLI / `git` (Authenticated GitHub operations and atomic commits)",
     inputSchema: {
       prompt: z.string().describe("Task, inquiry, or architectural instruction for Qwen (pure text-only; images must be inspected natively by Lead Architect and summarized into text)"),
       session_id: z.string().optional().describe("Named persistent session ID (maintains KV-cache and conversation context across turns)"),
