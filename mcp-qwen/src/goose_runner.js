@@ -13,6 +13,7 @@ import {
   FIRST_TOKEN_TIMEOUT_MS,
   TASK_DIR,
   MAX_TURNS,
+  QWEN_ENGINE,
 } from "./config.js";
 import {
   isWslLocation,
@@ -35,6 +36,7 @@ import {
   notifyWaiters,
 } from "./task_registry.js";
 import { AvoLineageEngine } from "../avo_engine.js";
+import { DeepSeekAvoRunner } from "./harness/runner.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -231,6 +233,7 @@ export function startGooseTask({
   testCommand,
   metricName,
   higherIsBetter,
+  engine = QWEN_ENGINE,
 }) {
   const taskId = `task_${sessionId}_${Date.now()}`;
   const baseTimeoutMs = Math.max(timeoutMs ?? DEFAULT_TIMEOUT_MS, MIN_TIMEOUT_MS);
@@ -242,6 +245,7 @@ export function startGooseTask({
     sessionId,
     cwd,
     prompt,
+    engine,
     createdAt: Date.now(),
     startedAt: null,
     finishedAt: null,
@@ -322,6 +326,81 @@ export function startGooseTask({
         finalTaskPrompt += `- Shell execution: If executing PowerShell commands via shell, use \`powershell -NoProfile -Command "..."\` or native utilities directly.\n`;
       }
 
+      // Primary Engine: DeepSeek AVO (Cordis Microkernel + Sandboxed Services)
+      if (engine === "deepseek_avo") {
+        taskEntry.startedAt = Date.now();
+        taskEntry.status = "running";
+        saveTaskToDisk(taskEntry);
+
+        const runner = new DeepSeekAvoRunner({ cwd: targetCwd });
+        const abortController = new AbortController();
+        taskEntry.abortController = abortController;
+
+        const maxTurnsVal = MAX_TURNS || 100;
+        try {
+          const runResult = await runner.run({
+            prompt: finalTaskPrompt,
+            cwd: targetCwd,
+            sessionId,
+            maxTurns: maxTurnsVal,
+            signal: abortController.signal,
+            onToken: (tok) => {
+              taskEntry.lastActivityAt = Date.now();
+              taskEntry.lastHeartbeatAt = Date.now();
+              taskEntry.streamBytes = (taskEntry.streamBytes || 0) + tok.length;
+              taskEntry.streamTail = (taskEntry.streamTail + tok).slice(-4096);
+            },
+            onToolCall: (tc) => {
+              taskEntry.toolCallsCount = (taskEntry.toolCallsCount || 0) + 1;
+              taskEntry.fileOps.push(`${tc.name}:${tc.args?.path || ""}`);
+              saveTaskToDisk(taskEntry);
+            },
+          });
+
+          if (lineageEngine && testCommand) {
+            try {
+              await lineageEngine.recordCandidate({
+                hypothesis: hypothesis || "Variation candidate",
+                testCommand,
+                metricName,
+                higherIsBetter,
+                stdout: runResult.finalText,
+              });
+            } catch {}
+          }
+
+          taskEntry.done = true;
+          taskEntry.finishedAt = Date.now();
+          taskEntry.status = runResult.status === "completed" ? "completed" : runResult.status;
+          taskEntry.isError = runResult.status === "error";
+          taskEntry.result = {
+            isError: runResult.status === "error",
+            text: runResult.finalText,
+            toolCalls: taskEntry.toolCallsCount,
+            fileOps: taskEntry.fileOps,
+            durationMs: runResult.durationMs,
+          };
+          saveTaskToDisk(taskEntry);
+          notifyWaiters(taskEntry);
+          return taskEntry.result;
+        } catch (err) {
+          taskEntry.done = true;
+          taskEntry.finishedAt = Date.now();
+          taskEntry.status = "failed";
+          taskEntry.isError = true;
+          taskEntry.result = {
+            isError: true,
+            text: `DeepSeek AVO runner error: ${err.message}`,
+            toolCalls: taskEntry.toolCallsCount,
+            fileOps: taskEntry.fileOps,
+          };
+          saveTaskToDisk(taskEntry);
+          notifyWaiters(taskEntry);
+          return taskEntry.result;
+        }
+      }
+
+      // Fallback Engine: Legacy Goose CLI Wrapper
       return new Promise(async (resolve) => {
         let lastActivityAt = Date.now();
         const lines = taskEntry.lines;

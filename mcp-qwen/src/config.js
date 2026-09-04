@@ -69,6 +69,9 @@ export const HEAL_LOCK_TTL_MS = 5 * 60_000;
 export const ENGINE_LOG_PATH = process.env.QWEN_ENGINE_LOG || "/tmp/mcp_launch_huge.log";
 export const WEDGE_COUNTER_FILE = path.join(TASK_DIR, ".wedge_counter.json");
 
+// Execution Engine: 'deepseek_avo' (Cordis microkernel + NVIDIA AVO) or 'legacy_goose' (CLI wrapper)
+export const QWEN_ENGINE = process.env.QWEN_ENGINE || "deepseek_avo";
+
 // Execution & Turn limits
 export const MAX_TURNS = process.env.QWEN_MAX_TURNS
   ? parseInt(process.env.QWEN_MAX_TURNS, 10)

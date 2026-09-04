@@ -98,6 +98,12 @@ export function registerTools(server) {
           .describe(
             "Task timeout in ms (default 14,400,000ms (4 hours), minimum 600,000ms (10 min) - budgets are floored because a 27B model on consumer silicon routinely needs tens of minutes)"
           ),
+        engine: z
+          .enum(["deepseek_avo", "legacy_goose"])
+          .optional()
+          .describe(
+            "Execution harness engine: 'deepseek_avo' (default: Cordis microkernel, sandboxed filesystem, SSE direct streaming, NVIDIA AVO) or 'legacy_goose' (Goose CLI subprocess)"
+          ),
       },
     },
     async ({
@@ -110,6 +116,7 @@ export function registerTools(server) {
       metric_name,
       higher_is_better,
       timeout_ms,
+      engine,
     }) => {
       const workingDir = normalizeWorkspacePath(cwd ?? process.cwd());
       const resolvedSession = resolveSessionId(workingDir, session_id);
@@ -124,6 +131,7 @@ export function registerTools(server) {
         testCommand: test_command,
         metricName: metric_name,
         higherIsBetter: higher_is_better,
+        engine,
       });
 
       let raceHandle;
