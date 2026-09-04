@@ -1,8 +1,11 @@
 # LLM_Ecosystem
 
-Local-first LLM delegation stack: Claude Sonnet 5 (in Claude Code) / Gemini 3.7 Flash (in Antigravity IDE) orchestrates as the **Lead Architect / Meta-Supervisor**, while a locally-served **Qwen3.8-27B** (vLLM + DFlash2 + KVarN @ 245K context) executes bounded implementation tasks for free ($0 token cost) via the **Goose Agent Harness** as the **Autonomous Variation & Execution Operator (Coworker)**.
+Local-first LLM delegation stack: Claude GLM-5.3 / Gemini 3.8 Flash orchestrates as the **Lead Architect / Meta-Supervisor**, while a locally-served **Qwen3.8-27B** (vLLM + DFlash2 + KVarN @ 245K context) executes bounded implementation tasks for free ($0 token cost) via the **DeepSeek AVO Harness** (Cordis microkernel + NVIDIA AVO closed-loop evolutionary framework) as the **Autonomous Variation & Execution Operator (Coworker)**.
 
-Agent-facing rules and invariant protocols live in the global user memory at `~/.claude/CLAUDE.md` (mirrored to `~/.gemini/GEMINI.md` across Windows and WSL; loaded into every session, so no project-level copy is kept in this repo). This document serves as the comprehensive human-readable architectural specification, benchmark reference, and operational guide.
+> [!IMPORTANT]
+> **Legacy Goose Archival**: The legacy Goose CLI harness has been deprecated and archived to branch [`archive/legacy-goose`](file:///d:/LLM_Ecosystem). It remains available in the codebase as an optional fallback via `engine: "legacy_goose"` or `QWEN_ENGINE="legacy_goose"`. The primary production engine is now **DeepSeek AVO** (`engine: "deepseek_avo"`), delivering sandboxed filesystem access, in-process Cordis microkernel plugin lifecycle, direct SSE token streaming, and closed-loop evolutionary optimization tracked in `.avo/lineage.json`.
+
+Agent-facing rules and invariant protocols live in the global user memory at `~/.claude/CLAUDE.md` (mirrored to `~/.gemini/GEMINI.md` across Windows and WSL; loaded into every session, so no project-level copy is kept in this repo). This document serves as the comprehensive human-readable architectural specification, benchmark reference, and operational guide. Detailed engineering decisions and audit reports are maintained in [`DEEPSEEK_AVO_PROGRESS.md`](file:///d:/LLM_Ecosystem/DEEPSEEK_AVO_PROGRESS.md) and [`QWEN_AVO_AUDIT.md`](file:///d:/LLM_Ecosystem/QWEN_AVO_AUDIT.md).
 
 ---
 
@@ -40,6 +43,9 @@ D:\LLM_Ecosystem\
 ├── mcp-qwen\                   MCP Server (Node.js v4.5.6, modularized in src/) exposing local Qwen to orchestrators
 │   ├── index.js                Clean entry point connecting stdio transport and lifecycle handlers
 │   ├── src/                    Modular core architecture (config, lifecycle, runner, semaphore, tasks, bridge, tools)
+│   │   └── harness/            DeepSeek AVO: Cordis microkernel core, sandboxed services, and NVIDIA AVO engine
+│   ├── test_deepseek_avo.js    Comprehensive 6-part validation suite for DeepSeek AVO runtime
+│   ├── benchmark_comparison.js Head-to-head quantitative benchmark suite (DeepSeek AVO vs. Legacy Goose)
 │   ├── avo_engine.js           AVO lineage engine (git-grounded candidate records in <cwd>/.avo/lineage.json)
 │   ├── test_global_semaphore.js Cross-process lease-semaphore test (no vLLM needed)
 │   ├── update_schemas.py       Regenerates per-tool JSON schemas into Antigravity IDE
