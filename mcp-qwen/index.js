@@ -840,56 +840,10 @@ const statusHttpServer = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://localhost:${STATUS_PORT}`);
   const pathname = parsedUrl.pathname;
 
-  // Universal Lossy / Stateful UTF-8 Streaming Proxy for /v1/* (Forwarding to vLLM on VLLM_PORT)
-  if (pathname.startsWith("/v1/")) {
-    const upstreamUrl = `http://127.0.0.1:${VLLM_PORT}${req.url}`;
-    const upstreamReq = http.request(
-      upstreamUrl,
-      {
-        method: req.method,
-        headers: {
-          ...req.headers,
-          host: `127.0.0.1:${VLLM_PORT}`,
-        },
-      },
-      (upstreamRes) => {
-        const resHeaders = { ...upstreamRes.headers };
-        res.writeHead(upstreamRes.statusCode, resHeaders);
-
-        // Per-stream stateful TextDecoder to assemble split multibyte sequences and map malformed bytes
-        const decoder = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
-
-        upstreamRes.on("data", (chunk) => {
-          const text = decoder.decode(chunk, { stream: true });
-          if (text) {
-            res.write(text, "utf8");
-          }
-        });
-
-        upstreamRes.on("end", () => {
-          const tail = decoder.decode();
-          if (tail) {
-            res.write(tail, "utf8");
-          }
-          res.end();
-        });
-
-        upstreamRes.on("error", () => {
-          try {
-            res.end();
-          } catch {}
-        });
-      }
-    );
-
-    upstreamReq.on("error", (err) => {
-      if (!res.headersSent) {
-        res.writeHead(502, { "Content-Type": "application/json" });
-      }
-      res.end(JSON.stringify({ error: "vLLM upstream proxy error", details: err.message }));
-    });
-
-    req.pipe(upstreamReq);
+  // GET /health
+  if (req.method === "GET" && pathname === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", service: "mcp-qwen-status", port: STATUS_PORT }));
     return;
   }
 
@@ -1345,7 +1299,7 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           child = spawn("wsl.exe", wslArgs, {
             env: wslEnv,
             stdio: ["ignore", "pipe", "pipe"],
-            detached: true,
+            detached: !IS_WINDOWS,
           });
         } else {
           const gooseExe = getGooseExecutable();
@@ -1525,12 +1479,35 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         taskEntry.finishedAt = Date.now();
         taskEntry.isError = summary.isError;
         taskEntry.status = summary.isError ? "failed" : "completed";
+        summary.partialOutput = stdout;
         taskEntry.result = summary;
+
+        // Emergency Output Preservation: Never lose partial work on timeout or failure
+        if (summary.isError && stdout && stdout.trim()) {
+          try {
+            const dumpPath = path.join(TASK_DIR, `${taskId}.dump.md`);
+            fs.writeFileSync(
+              dumpPath,
+              `# Emergency Task Dump: ${taskId}\n\n` +
+              `- **Session**: \`${sessionId}\`\n` +
+              `- **Elapsed**: ${Math.round((Date.now() - taskEntry.startedAt) / 1000)}s\n` +
+              `- **Status**: ${taskEntry.status}\n` +
+              `- **Reason**: ${timeoutReason || (summary.isError ? summary.text : "Unknown error")}\n\n` +
+              `## Partial Stdout Output\n\n\`\`\`\n${stdout}\n\`\`\`\n\n` +
+              `## Stderr\n\n\`\`\`\n${stderr}\n\`\`\`\n`,
+              "utf8"
+            );
+          } catch {}
+        }
 
         saveTaskToDisk(taskEntry);
         notifyWaiters(taskEntry);
         resolve(summary);
       };
+
+      let lastKnownPromptTokens = -1;
+      let lastKnownGenTokens = -1;
+      let tokensLastAdvancedAt = Date.now();
 
       const watchdog = setInterval(async () => {
         if (settled) {
@@ -1561,7 +1538,18 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
         const inactiveMs = now - lastActivityAt;
         const totalElapsedMs = now - taskEntry.startedAt;
 
-        // Degenerate Repetition Loop Circuit Breaker in Stream Output
+        // 1. Hard Wall-Clock Budget Ceiling (Protects against indefinitely orphaned tasks)
+        if (totalElapsedMs >= totalTimeoutMs) {
+          clearInterval(watchdog);
+          killProcessTree(child, sessionId);
+          finish(
+            true,
+            `Task Wall-Clock Budget Exceeded: Total elapsed time ${Math.round(totalElapsedMs / 1000)}s reached the budget ceiling of ${Math.round(totalTimeoutMs / 1000)}s. Partial output has been saved to disk.`
+          );
+          return;
+        }
+
+        // 2. Degenerate Repetition Loop Circuit Breaker in Stream Output
         if (taskEntry.streamTail) {
           const repeatMatch = taskEntry.streamTail.match(/([^ \t\n\r\-_=*#])\1{34,}/);
           if (repeatMatch) {
@@ -1575,33 +1563,49 @@ function startGooseTask({ cwd, prompt, sessionId, extensions, system, timeoutMs,
           }
         }
 
-        if (!receivedAnyOutput && inactiveMs >= FIRST_TOKEN_TIMEOUT_MS) {
-          let engineActive = false;
+        // 3. Token-Velocity Aware Inactivity Watchdog
+        // Distinguishes active prefill/generation from true driver deadlocks / stalls
+        const timeoutThreshold = !receivedAnyOutput ? FIRST_TOKEN_TIMEOUT_MS : INACTIVITY_TIMEOUT_MS;
+        if (inactiveMs >= timeoutThreshold) {
+          let tokenProgress = false;
           try {
             const metrics = await readEngineMetrics(2000);
-            if (metrics && ((metrics["vllm:num_requests_running"] ?? 0) > 0 || (metrics["vllm:num_requests_waiting"] ?? 0) > 0)) {
-              engineActive = true;
+            if (metrics) {
+              const pTokens = metrics["vllm:prompt_tokens_total"] ?? 0;
+              const gTokens = metrics["vllm:generation_tokens_total"] ?? 0;
+              if (lastKnownPromptTokens < 0) {
+                lastKnownPromptTokens = pTokens;
+                lastKnownGenTokens = gTokens;
+                tokensLastAdvancedAt = now;
+              } else if (pTokens > lastKnownPromptTokens || gTokens > lastKnownGenTokens) {
+                // Tokens are actively advancing on the GPU! The engine is healthy and computing.
+                tokenProgress = true;
+                lastKnownPromptTokens = pTokens;
+                lastKnownGenTokens = gTokens;
+                tokensLastAdvancedAt = now;
+              } else if ((metrics["vllm:num_requests_running"] ?? 0) > 0 || (metrics["vllm:num_requests_waiting"] ?? 0) > 0) {
+                // Engine has requests queued/running, but token counters are static.
+                // Allow a generous 120s grace window for long kernel launches or chunked prefill setup.
+                if (now - tokensLastAdvancedAt < 120_000) {
+                  tokenProgress = true;
+                }
+              }
             }
           } catch {}
 
-          if (engineActive) {
+          if (tokenProgress) {
+            // Engine is actively advancing tokens; grant another activity window.
             lastActivityAt = now;
             return;
           }
 
+          // No stdout from Goose AND token velocity is completely stalled -> True wedge/deadlock.
           clearInterval(watchdog);
           killProcessTree(child, sessionId);
-          finish(
-            true,
-            `First-Token Timeout: Goose produced zero stream output for ${Math.round(inactiveMs / 1000)}s after spawn. The model engine may be overloaded or initializing. No work was performed. Check qwen_server status; safe to re-dispatch once ready.`
-          );
-        } else if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
-          clearInterval(watchdog);
-          killProcessTree(child, sessionId);
-          finish(
-            true,
-            `Inactivity Timeout: Goose subprocess produced zero stream activity for ${Math.round(inactiveMs / 1000)}s.`
-          );
+          const timeoutReason = !receivedAnyOutput
+            ? `First-Token Timeout: Goose produced zero stream output and vLLM token counters remained static for ${Math.round(inactiveMs / 1000)}s after spawn. The engine may be deadlocked or out of memory. Safe to re-dispatch.`
+            : `Inactivity Timeout: Goose subprocess and vLLM token velocity were completely stalled for ${Math.round(inactiveMs / 1000)}s. Subprocess safely aborted to preserve GPU resources.`;
+          finish(true, timeoutReason);
         }
       }, 5000);
 

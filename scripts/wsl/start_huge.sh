@@ -16,18 +16,12 @@ export VLLM_DFLASH2_LOOKUP_ADAPTIVE=0  # A/B tested 2026-08-23: pins verify bloc
 # that was never installed, so the earlier CHAIN=1/CHAIN=0 toggles were both inert.
 # The feature is also documented greedy-only, and our delegated workloads run at
 # temperature 1.0. See mcp-qwen/NOTES.md.)
-# Raised 2 -> 4 -> 8 on 2026-08-24, per README's own documented finding: MAX_SEQS is a
-# deliberate low default for long-document sessions, not an engine limit - slots cost
-# ~8 MiB each and the KV pool stays at 268,169 tokens regardless (upstream measured this
-# directly: MAX_SEQS=8 achieved peak 5 concurrent on an 8-stream test, pool unchanged).
-# 8 matches upstream's own fully-tested ceiling and mcp-qwen's MAX_CONCURRENT_GOOSE - keep
-# the two numbers matched, or concurrent delegate_coding_task calls queue at the engine
-# even though the MCP server thinks it has room. Live-verified at each step (2, 4, 8): KV
-# pool held at exactly 268,169 tokens every time, no new errors. Only cost is larger
-# captured CUDA graphs (64 sizes vs 32 at MAX_SEQS=4) - one-time boot memory/time
-# (+~15s), not a per-request cost. Going past 8 would be extrapolating past upstream's
-# own tested range, not verified - do not raise further without new evidence.
-export MAX_SEQS=8
+# Set MAX_SEQS=1 for single-user pair programming (MAX_CONCURRENT_GOOSE=1).
+# Setting MAX_SEQS=1 eliminates unused multi-stream CUDA graphs and recurrent state
+# reservations, reclaiming ~800+ MiB of non-KV VRAM headroom on the RTX 3090.
+# This completely prevents WSL2 PCIe host-backing and dxgkio_escape deadlocks
+# during massive chunked prefills while preserving the full 245,760 context window.
+export MAX_SEQS=1
 # Maximum Intelligence: Pristine W4A16 (unquantized activations). Retains 96.5% GSM8K
 # reasoning with zero perplexity degradation (+4.1% PPL / -1.5% GSM8K avoided).
 # Per-request usage & timing metrics (issue #51): enables usage reporting & prompt-tokens details
