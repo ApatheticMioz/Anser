@@ -50,16 +50,19 @@ export class AvoOperator {
     const snapshotDir = path.join(this.snapshotsDir, candidateId);
     fs.mkdirSync(snapshotDir, { recursive: true });
 
-    // Snapshot existing versions of files
+    // Snapshot existing versions of files and record manifest
     const snapshotManifest = [];
     for (const relPath of files_to_modify) {
       const fullPath = path.isAbsolute(relPath) ? relPath : path.resolve(this.workspaceRoot, relPath);
-      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-        const targetBackup = path.join(snapshotDir, encodeURIComponent(relPath));
+      const existed = fs.existsSync(fullPath) && fs.statSync(fullPath).isFile();
+      let targetBackup = null;
+      if (existed) {
+        targetBackup = path.join(snapshotDir, encodeURIComponent(relPath));
         fs.copyFileSync(fullPath, targetBackup);
-        snapshotManifest.push({ relPath, fullPath, targetBackup });
       }
+      snapshotManifest.push({ relPath, fullPath, targetBackup, existed });
     }
+    fs.writeFileSync(path.join(snapshotDir, "manifest.json"), JSON.stringify(snapshotManifest, null, 2), "utf8");
 
     const node = this.dag.addCandidate({
       id: candidateId,
@@ -67,7 +70,7 @@ export class AvoOperator {
       filesModified: files_to_modify,
       metrics: {
         snapshotDir,
-        snapshotCount: snapshotManifest.length,
+        snapshotCount: snapshotManifest.filter((m) => m.existed).length,
       },
     });
 
@@ -81,7 +84,7 @@ export class AvoOperator {
       candidate_id: candidateId,
       parent_id: node.parentId,
       hypothesis,
-      files_snapshotted: snapshotManifest.length,
+      files_snapshotted: snapshotManifest.filter((m) => m.existed).length,
       message: `Candidate ${candidateId} registered. Workspace files safely snapshotted for rollback. You may now perform code mutations.`,
     };
   }
@@ -169,12 +172,47 @@ export class AvoOperator {
       throw new Error("No candidate specified to revert");
     }
 
+    // A3 Fix: Validate candidate in DAG before touching any files!
+    const node = this.dag.nodes.get(id);
+    if (!node) {
+      throw new Error(`Candidate '${id}' does not exist in lineage DAG`);
+    }
+    if (node.metrics?.status === "accepted") {
+      throw new Error(`Candidate '${id}' is already accepted into baseline and cannot be reverted.`);
+    }
+
     const snapshotDir = path.join(this.snapshotsDir, id);
+    const manifestFile = path.join(snapshotDir, "manifest.json");
     let revertedCount = 0;
 
-    if (fs.existsSync(snapshotDir)) {
+    if (fs.existsSync(manifestFile)) {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+        for (const item of manifest) {
+          if (!item.existed) {
+            // A1 Fix: Newly created file that did not exist before mutation -> delete it cleanly!
+            if (fs.existsSync(item.fullPath)) {
+              try {
+                fs.unlinkSync(item.fullPath);
+                revertedCount++;
+              } catch (err) {
+                console.error(`[AvoOperator] Error deleting new file ${item.fullPath}:`, err.message);
+              }
+            }
+          } else if (item.targetBackup && fs.existsSync(item.targetBackup)) {
+            try {
+              fs.copyFileSync(item.targetBackup, item.fullPath);
+              revertedCount++;
+            } catch (err) {
+              console.error(`[AvoOperator] Error reverting ${item.fullPath}:`, err.message);
+            }
+          }
+        }
+      } catch {}
+    } else if (fs.existsSync(snapshotDir)) {
       const files = fs.readdirSync(snapshotDir);
       for (const f of files) {
+        if (f === "manifest.json") continue;
         const relPath = decodeURIComponent(f);
         const fullPath = path.resolve(this.workspaceRoot, relPath);
         const backupPath = path.join(snapshotDir, f);

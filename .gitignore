@@ -51,3 +51,8 @@ benchmarks/swe-rebench/__pycache__/
 .vscode/
 *.swp
 *~
+
+# AVO candidate lineage & runtime scratch
+.avo/
+.test_avo_tmp/
+.benchmark_tmp/

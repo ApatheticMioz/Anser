@@ -81,12 +81,24 @@ export class ShellExecutorService {
         });
       }, timeout);
 
+      const MAX_OUTPUT_BYTES = 4 * 1024 * 1024; // 4MB
+
       child.stdout.on("data", (chunk) => {
-        stdout += chunk.toString("utf8");
+        if (stdout.length < MAX_OUTPUT_BYTES) {
+          stdout += chunk.toString("utf8");
+          if (stdout.length >= MAX_OUTPUT_BYTES) {
+            stdout += "\n...[stdout truncated at 4MB]";
+          }
+        }
       });
 
       child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString("utf8");
+        if (stderr.length < MAX_OUTPUT_BYTES) {
+          stderr += chunk.toString("utf8");
+          if (stderr.length >= MAX_OUTPUT_BYTES) {
+            stderr += "\n...[stderr truncated at 4MB]";
+          }
+        }
       });
 
       child.on("error", (err) => {
@@ -102,14 +114,15 @@ export class ShellExecutorService {
         });
       });
 
-      child.on("close", (code) => {
+      child.on("close", (code, signal) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        const resolvedExitCode = code !== null ? code : signal ? 137 : 1;
         resolve({
           stdout: stdout.trim(),
-          stderr: stderr.trim(),
-          exitCode: code ?? 0,
+          stderr: (stderr + (signal ? `\n[Process terminated by signal ${signal}]` : "")).trim(),
+          exitCode: resolvedExitCode,
           timedOut: false,
           latencyMs: Date.now() - t0,
         });

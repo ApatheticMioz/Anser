@@ -60,7 +60,7 @@ export class EventBus {
         results.push(res instanceof Promise ? await res : res);
       } catch (err) {
         console.error(`[EventBus] Error in handler for event '${event}':`, err);
-        results.push(Promise.reject(err));
+        results.push({ error: err, isError: true });
       }
     }
     return results;

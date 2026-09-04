@@ -56,7 +56,13 @@ export class SandboxFsService {
         p = path.resolve(this.root, p);
       }
     }
-    return p;
+    const normalizedTarget = path.normalize(p);
+    const normalizedRoot = path.normalize(this.root);
+    const rel = path.relative(normalizedRoot, normalizedTarget);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new Error(`PathEscapeError: Access denied. Path '${inputPath}' escapes sandbox root '${this.root}'`);
+    }
+    return normalizedTarget;
   }
 
   /**
@@ -109,6 +115,9 @@ export class SandboxFsService {
    * Performs an exact text replacement in a file.
    */
   async editFile({ path: filePath, target_content, replacement_content, allow_multiple = false }) {
+    if (!target_content || typeof target_content !== "string" || target_content.length === 0) {
+      throw new Error("target_content cannot be empty");
+    }
     const resolved = this.resolvePath(filePath);
     if (!fs.existsSync(resolved)) {
       throw new Error(`File not found for edit: ${filePath}`);

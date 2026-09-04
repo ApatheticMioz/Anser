@@ -147,20 +147,6 @@ export function eventLoggerPlugin(ctx, options = {}) {
   const logger = new EventLoggerService(options);
   ctx.provide("logger", logger);
 
-  // Hook into kernel tool execution events to automatically record ledger
-  ctx.events.on("tool:after_execute", (payload) => {
-    logger.append({
-      type: "tool_result",
-      toolName: payload.name,
-      toolCallId: payload.toolCallId || payload.args?.id,
-      args: payload.args,
-      result: payload.result,
-      error: payload.error,
-      isError: payload.isError,
-      latencyMs: payload.latencyMs,
-    });
-  });
-
   return () => {
     logger.saveMetadata({ status: "closed" });
   };

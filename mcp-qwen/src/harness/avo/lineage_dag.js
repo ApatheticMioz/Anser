@@ -40,7 +40,14 @@ export class LineageDag {
           }
         }
         return;
-      } catch {}
+      } catch (err) {
+        // Quarantine corrupt file rather than silently overwriting it
+        const corruptBackup = path.join(this.avoDir, `lineage.json.corrupt-${Date.now()}`);
+        console.error(`[LineageDag] Corrupt lineage.json detected. Quarantining to ${corruptBackup}:`, err.message);
+        try {
+          fs.copyFileSync(this.dagFile, corruptBackup);
+        } catch {}
+      }
     }
 
     // Initialize root baseline node
@@ -67,10 +74,15 @@ export class LineageDag {
       nodes: Array.from(this.nodes.values()),
       updatedAt: new Date().toISOString(),
     };
+    const tmpFile = path.join(this.avoDir, `lineage.tmp_${process.pid}_${Date.now()}`);
     try {
-      fs.writeFileSync(this.dagFile, JSON.stringify(data, null, 2), "utf8");
+      fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2), "utf8");
+      fs.renameSync(tmpFile, this.dagFile);
     } catch (err) {
-      console.error(`[LineageDag] Failed to persist lineage.json:`, err.message);
+      console.error(`[LineageDag] Failed to persist lineage.json atomically:`, err.message);
+      try {
+        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+      } catch {}
     }
   }
 
