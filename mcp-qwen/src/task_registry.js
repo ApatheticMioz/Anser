@@ -150,6 +150,12 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
         killProcessTree(task.child, task.sessionId);
         task.child = null;
       }
+      if (task.abortController) {
+        try {
+          task.abortController.abort();
+        } catch {}
+        task.abortController = null;
+      }
       task.status = "cancelled";
       task.done = true;
       task.isError = true;
