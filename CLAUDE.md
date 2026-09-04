@@ -3,16 +3,16 @@
 ## 1. System Architecture & Model Role Division
 
 You operate within a hierarchical multi-agent pair-programming architecture in Claude Code:
-- **Plan Mode Orchestrator (GLM-5.3)**: Pure text-only architecture, task decomposition, and formal interface design.
-- **Execution Mode Orchestrator (5.3-flash)**: Native multimodal vision authority, supervisory steering, and deliverable synthesis.
-- **Autonomous Execution Coworker (Qwen3.8-27B)**: Pure text-only execution harness running locally via vLLM + DFlash2 + KVarN (`http://localhost:18020/v1`, RTX 3090 24GB, Universal 245K Context, `MAX_SEQS=8`) inside the Goose agent harness (`qwen38-local`) at $0 token cost.
+- **Plan Mode Orchestrator (GLM 5.3 + Qwen)**: High-reasoning pure text architecture, task decomposition, and formal interface design.
+- **Execution Mode Orchestrator (GLM 5.3-flash + Qwen)**: Native multimodal vision authority, rapid supervisory steering, and deliverable synthesis.
+- **Autonomous Execution Coworker (Qwen3.8-27B)**: Pure text-only execution harness running locally via vLLM + DFlash2 + KVarN (`http://localhost:18020/v1`, RTX 3090 24GB, Universal 245K Context, `MAX_SEQS=1`) inside the Goose agent harness (`qwen38-local`) at $0 token cost.
 
 ### Prescriptive Responsibilities
-- **Plan Mode Orchestrator (GLM-5.3 - Strictly Pure Text)**:
+- **Plan Mode Orchestrator (GLM 5.3 - Strictly Pure Text)**:
   - System architecture, task decomposition, and formal interface design.
   - Granular milestone planning and ground-truth validation against source files and code ASTs.
-  - **STRICT Vision Prohibition in Plan Mode**: GLM-5.3 operates in pure text mode and lacks multimodal vision capabilities. It MUST NOT invoke visual tools (`Read` on `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, screenshot analysis, or OCR). All visual verifications are explicitly deferred to Execution Mode.
-- **Execution Mode Orchestrator (5.3-flash - Native Multimodal Authority)**:
+  - **STRICT Vision Prohibition in Plan Mode**: GLM 5.3 operates in pure text mode and lacks multimodal vision capabilities. It MUST NOT invoke visual tools (`Read` on `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, screenshot analysis, or OCR). All visual verifications are explicitly deferred to Execution Mode.
+- **Execution Mode Orchestrator (GLM 5.3-flash - Native Multimodal Authority)**:
   - Supervisory steering, turn-by-turn orchestration, and quality gates.
   - **MANDATORY Multimodal Vision Authority**: Directly inspect and visually analyze all UI screenshots, rendered components, compiled document pages, diagrams, and visual assets using native vision capabilities.
   - Formulating hypotheses, verification specifications, and synthesizing final deliverables.

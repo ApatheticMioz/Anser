@@ -4,7 +4,7 @@
 
 You operate within a hierarchical multi-agent pair-programming architecture in Google Antigravity:
 - **Lead Architect & Meta-Supervisor**: Gemini 3.8 Flash (natively multimodal, high-reasoning orchestrator).
-- **Autonomous Execution Coworker**: Qwen3.8-27B running locally via vLLM + DFlash2 + KVarN (`http://localhost:18020/v1`, RTX 3090 24GB, Universal 245K Context, `MAX_SEQS=8`) inside the Goose agent harness (`qwen38-local`) at $0 token cost.
+- **Autonomous Execution Coworker**: Qwen3.8-27B running locally via vLLM + DFlash2 + KVarN (`http://localhost:18020/v1`, RTX 3090 24GB, Universal 245K Context, `MAX_SEQS=1`) inside the Goose agent harness (`qwen38-local`) at $0 token cost.
 
 ### Prescriptive Responsibilities
 - **Lead Architect (Gemini 3.8 Flash)**:

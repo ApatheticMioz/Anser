@@ -37,16 +37,11 @@ D:\LLM_Ecosystem\
 │       └── wait_qb.sh          Batch queue waiter
 ├── llama-cpp\                  Native Windows CUDA build of llama.cpp (serves
 │                               scripts\uncensored\ GGUF models on Windows)
-├── mcp-qwen\                   MCP Server (Node.js v4.5.3) exposing local Qwen to orchestrators
-│   ├── index.js                3 consolidated SOTA tools (qwen_coworker, qwen_task,
-│   │                           qwen_server), zero-turn wait HTTP server @ localhost:18021,
-│   │                           global goose semaphore (cross-process leases,
-│   │                           MAX_CONCURRENT_GOOSE=1), and WSL path routing
-│   ├── avo_engine.js           AVO lineage engine (git-grounded candidate records
-│   │                           in <cwd>/.avo/lineage.json)
-│   ├── test_fifo_queue.js      Automated test suite for serialized task execution
+├── mcp-qwen\                   MCP Server (Node.js v4.5.6, modularized in src/) exposing local Qwen to orchestrators
+│   ├── index.js                Clean entry point connecting stdio transport and lifecycle handlers
+│   ├── src/                    Modular core architecture (config, lifecycle, runner, semaphore, tasks, bridge, tools)
+│   ├── avo_engine.js           AVO lineage engine (git-grounded candidate records in <cwd>/.avo/lineage.json)
 │   ├── test_global_semaphore.js Cross-process lease-semaphore test (no vLLM needed)
-│   ├── mcp_client_test.js      MCP client connectivity & protocol test harness
 │   ├── update_schemas.py       Regenerates per-tool JSON schemas into Antigravity IDE
 │   ├── NOTES.md                Complete engineering decisions, benchmark logs & changelog
 │   └── package.json            Dependencies (@modelcontextprotocol/sdk, zod)
@@ -76,8 +71,8 @@ User <───> Meta-Supervisor / Lead Architect
                                │  - qwen_server (status, start, stop)
                                ▼
             ┌─────────────────────────────────────────────────────────┐
-            │  mcp-qwen/index.js (v4.5.3 Unified MCP Server)           │
-            │  ├── 45s Sync Race (fast tasks return Turn 1 directly)   │
+            │  mcp-qwen/index.js (v4.5.6 Modular MCP Server)          │
+            │  ├── 45s / 150s Sync Race (Claude: 45s, Antigravity: 150s)│
             │  ├── Background Task Manager (~/.qwen/tasks/ JSON)       │
             │  ├── Global Goose Semaphore (MAX_CONCURRENT_GOOSE=1)     │
             │  ├── Native WSL / Windows Path Routing & UNC Sanitizer   │
@@ -114,9 +109,9 @@ User <───> Meta-Supervisor / Lead Architect
 ### Execution Contracts & Invariants
 1. **Rule 0 — No Raw I/O Loops (Turn 1 Invariant)**: The Lead Architect is strictly forbidden from manually calling exploratory file tools (`list_dir`, `view_file`, `grep_search`, `run_command`) to inspect unfamiliar repositories or documents on Turn 1. It must dispatch exploration and fact ingestion directly to `qwen_coworker` at $0.
 2. **Zero-Turn Long-Poll Execution Contract**:
-   - **Fast Tasks (< 45s)**: `qwen_coworker` completes inside the 45s synchronous race window and returns the complete deliverable directly in Turn 1.
-   - **Long Tasks (>= 45s)**: `qwen_coworker` yields a durable `taskId` and a `wait_command` (`curl -s http://127.0.0.1:18021/task/<id>/wait`). The orchestrator runs this wait command in the background, blocking at OS level with **$0 token cost** until automatically notified on completion. Manual LLM timer loops are prohibited.
-3. **Global Concurrency Control (`MAX_CONCURRENT_GOOSE=1`)**: All coworker tasks *machine-wide* are serialized through a cross-process disk-lease semaphore (`~/.qwen/goose_slots/`) shared by every MCP server instance — N concurrent Claude sessions still yield exactly one goose at a time (an in-process limit alone was useless, since every surface spawns its own server process). Tasks waiting for a slot are `queued` on disk (`~/.qwen/tasks/`) with no watchdog or budget ticking, and dispatch automatically when the holder releases; dead holders' leases are reclaimed (pid liveness + heartbeat staleness). Raise the global cap with `QWEN_MAX_CONCURRENT` (keep ≤ engine `MAX_SEQS=8`, or dispatches queue invisibly inside vLLM instead of here).
+   - **Fast Tasks (< 45s / 150s)**: `qwen_coworker` completes inside the synchronous race window (45s on Claude Code, 150s on Antigravity) and returns the complete deliverable directly in Turn 1.
+   - **Long Tasks (>= 45s / 150s)**: `qwen_coworker` yields a durable `taskId` and a `wait_command` (`curl -s http://127.0.0.1:18021/task/<id>/wait`). The orchestrator runs this wait command in the background, blocking at OS level with **$0 token cost** until automatically notified on completion. Manual LLM timer loops are prohibited.
+3. **Global Concurrency Control (`MAX_CONCURRENT_GOOSE=1`)**: All coworker tasks *machine-wide* are serialized through a cross-process disk-lease semaphore (`~/.qwen/tasks/goose_slots/`) shared by every MCP server instance across Windows and WSL via `QWEN_STATE_DIR` — N concurrent sessions still yield exactly one goose at a time. Tasks waiting for a slot are `queued` on disk (`~/.qwen/tasks/`) with no watchdog or budget ticking, and dispatch automatically when the holder releases; dead holders' leases are reclaimed (pid liveness + heartbeat staleness). The engine operates with `MAX_SEQS=1` to eliminate unobservable head-of-line queueing and GPU VRAM fragmentation.
 4. **Cross-Platform WSL/Windows Agnosticism**: Seamless path translation maps POSIX paths (`/home/apath/...`) to Windows UNC (`\\wsl.localhost\Ubuntu\...`) and Windows paths (`D:\...`) to POSIX (`/mnt/d/...`). UNC working directories are cleanly resolved inside WSL to prevent Windows `cmd.exe` UNC directory crashes.
 5. **Milestone-Scoped Session Lifecycle & Multi-Turn Chat**:
    - **Long-Lived Multi-Turn Sessions**: 245K context exists to be used — drive work iteratively in short turns within the same named `session_id` (`<workspace>_<milestone>`). Reuses the warm vLLM prefix cache (~8,000–9,000 tok/s prefill, <0.5s wakeup) for continuous episodic memory. Never roll a session merely for context size.
@@ -145,7 +140,7 @@ Primary agentic interface for multi-turn collaboration, code editing, deep resea
   - `test_command` *(string, optional)*: Post-run verification test command.
   - `metric_name` *(string, optional)*: Quantitative optimization metric name.
   - `higher_is_better` *(boolean, optional)*: Metric optimization direction.
-  - `timeout_ms` *(number, optional)*: Maximum background execution budget (default 1 hour).
+  - `timeout_ms` *(number, optional)*: Maximum background execution budget (default 4 hours / 14,400,000ms).
 
 ### `qwen_task`
 Manages and queries coworker task execution across memory and disk (`~/.qwen/tasks/`).
