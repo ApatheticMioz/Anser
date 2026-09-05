@@ -12,6 +12,12 @@
  *       from history, retry counted
  *   (f) always-empty generations    -> terminates at the EMPTY_STREAM_RETRIES
  *       bound with honest status "engine_empty_response"
+ *   (g) empty-STOP turn (finish "stop", zero content, zero tool calls) then a
+ *       normal stop-with-content turn -> retried via the P2b path with reason
+ *       "empty_stop", session completes
+ *   (h) reasoning-only length cutoff (metrics.hadReasoning) -> continuation
+ *       injects the REASONING_LANDING_DIRECTIVE ("reasoning_landing"), not the
+ *       generic resume directive
  *
  * No vLLM, no network. The LLM provider and event logger are injected via the
  * runner's constructor seams (this._llm / this._logger).
@@ -24,9 +30,8 @@ import assert from "node:assert";
 process.env.QWEN_MAX_CONTINUATION_TURNS = "3";
 process.env.QWEN_EMPTY_STREAM_RETRIES = "2";
 
-const { DeepSeekAvoRunner, CONTINUATION_DIRECTIVE } = await import(
-  "../src/harness/runner.js"
-);
+const { DeepSeekAvoRunner, CONTINUATION_DIRECTIVE, REASONING_LANDING_DIRECTIVE } =
+  await import("../src/harness/runner.js");
 const { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } = await import(
   "../src/config.js"
 );
@@ -38,8 +43,12 @@ function makeMockLlm(script) {
   let call = 0;
   return {
     _calls: 0,
-    async streamChat() {
+    _lastMessages: null,
+    async streamChat({ messages } = {}) {
       this._calls++;
+      // Snapshot: `messages` is a live array the runner keeps mutating, so a
+      // bare reference would show post-call state (aliasing).
+      this._lastMessages = messages ? [...messages] : null;
       const step = script[Math.min(call, script.length - 1)];
       call++;
       const metrics = {
@@ -48,6 +57,7 @@ function makeMockLlm(script) {
         ttftMs: 1,
         totalMs: 1,
         tokensPerSec: 0,
+        hadReasoning: step.hadReasoning ?? false,
       };
       // If the step explicitly carries a "finishReason" key (even if it is
       // undefined), honor it verbatim — this models an aborted/zero-byte
@@ -61,6 +71,7 @@ function makeMockLlm(script) {
         content: step.content ?? "",
         toolCalls: step.toolCalls ?? [],
         finishReason: hasFinishReason ? step.finishReason : "stop",
+        hadReasoning: step.hadReasoning ?? false,
         metrics,
       };
     },
@@ -346,6 +357,85 @@ async function vectorF() {
 }
 
 // ---------------------------------------------------------------------------
+// Vector (g): empty-STOP turn (finish "stop", zero content, zero tool calls —
+// the classic reasoning-burned-the-whole-budget signature) then a normal
+// stop-with-content turn. Must route through the P2b retry path with reason
+// "empty_stop" and complete.
+// ---------------------------------------------------------------------------
+async function vectorG() {
+  const llm = makeMockLlm([
+    { content: "", toolCalls: [], finishReason: "stop", hadReasoning: true },
+    { content: "Recovered after the empty stop.", finishReason: "stop" },
+  ]);
+  const logger = makeMockLogger();
+  const runner = new DeepSeekAvoRunner({ llm, logger });
+
+  const res = await runner.run({
+    prompt: "Do the thing.",
+    sessionId: "test_g",
+    maxTurns: 10,
+  });
+
+  assert.strictEqual(res.status, "completed", "g: status should be completed");
+  const retries = logger.events.filter((e) => e.type === "empty_stream_retry");
+  assert.strictEqual(retries.length, 1, "g: exactly one empty_stream_retry");
+  assert.strictEqual(retries[0].reason, "empty_stop", "g: reason must be empty_stop");
+  assert.strictEqual(
+    countType(logger, "continuation_injected"),
+    0,
+    "g: NOT a length cutoff -> no continuation"
+  );
+  assert.strictEqual(
+    res.finalText,
+    "Recovered after the empty stop.",
+    "g: finalText is the recovered content"
+  );
+  console.log("  [PASS] (g) empty-stop -> retried via empty_stop reason, completed");
+}
+
+// ---------------------------------------------------------------------------
+// Vector (h): reasoning-only length cutoff (metrics.hadReasoning=true, zero
+// content) -> the continuation must inject REASONING_LANDING_DIRECTIVE and
+// log directive "reasoning_landing".
+// ---------------------------------------------------------------------------
+async function vectorH() {
+  const llm = makeMockLlm([
+    { content: "", toolCalls: [], finishReason: "length", hadReasoning: true },
+    { content: "Landed with concrete output.", finishReason: "stop" },
+  ]);
+  const logger = makeMockLogger();
+  const runner = new DeepSeekAvoRunner({ llm, logger });
+
+  const res = await runner.run({
+    prompt: "Think, then act.",
+    sessionId: "test_h",
+    maxTurns: 10,
+  });
+
+  assert.strictEqual(res.status, "completed", "h: status completed");
+  const conts = logger.events.filter((e) => e.type === "continuation_injected");
+  assert.strictEqual(conts.length, 1, "h: exactly one continuation");
+  assert.strictEqual(
+    conts[0].directive,
+    "reasoning_landing",
+    "h: directive must be reasoning_landing"
+  );
+  // The message pushed to the LLM before the retry must be the landing text.
+  const lastMsg = llm._lastMessages?.[llm._lastMessages.length - 1];
+  assert.strictEqual(
+    lastMsg?.content,
+    REASONING_LANDING_DIRECTIVE,
+    "h: injected message is the landing directive text"
+  );
+  assert.notStrictEqual(
+    lastMsg?.content,
+    CONTINUATION_DIRECTIVE,
+    "h: must NOT use the generic resume directive"
+  );
+  console.log("  [PASS] (h) reasoning-length cutoff -> reasoning_landing directive injected");
+}
+
+// ---------------------------------------------------------------------------
 // Run all vectors.
 // ---------------------------------------------------------------------------
 async function main() {
@@ -363,6 +453,8 @@ async function main() {
     ["(d)", vectorD],
     ["(e)", vectorE],
     ["(f)", vectorF],
+    ["(g)", vectorG],
+    ["(h)", vectorH],
   ];
 
   for (const [label, fn] of vectors) {

@@ -9,7 +9,12 @@
  * - Reversible Cordis plugin binding
  */
 
-import { STREAM_PROXY_PORT, VLLM_PORT } from "../../config.js";
+import {
+  STREAM_PROXY_PORT,
+  VLLM_PORT,
+  MAX_TOKENS,
+  getReasoningEffort,
+} from "../../config.js";
 
 export class VllmProviderService {
   constructor(options = {}) {
@@ -17,7 +22,7 @@ export class VllmProviderService {
     this.fallbackUrl = options.fallbackUrl || `http://127.0.0.1:${VLLM_PORT}/v1`;
     this.model = options.model || "qwen3.8-27b";
     this.defaultTemperature = options.temperature ?? 0.0;
-    this.defaultMaxTokens = options.maxTokens ?? 16384;
+    this.defaultMaxTokens = options.maxTokens ?? MAX_TOKENS;
   }
 
   /**
@@ -51,7 +56,7 @@ export class VllmProviderService {
    *   content: string,
    *   toolCalls: Array<{ id: string, name: string, arguments: string }>,
    *   finishReason: string,
-   *   metrics: { promptTokens: number, completionTokens: number, ttftMs: number, totalMs: number, tokensPerSec: number }
+   *   metrics: { promptTokens: number, completionTokens: number, ttftMs: number, totalMs: number, tokensPerSec: number, reasoningTokens: number, hadReasoning: boolean }
    * }>}
    */
   async streamChat({
@@ -66,6 +71,8 @@ export class VllmProviderService {
     const t0 = Date.now();
     let ttft = null;
     let completionTokens = 0;
+    let reasoningTokens = 0;
+    let hadReasoning = false;
 
     const payload = {
       model: this.model,
@@ -78,6 +85,15 @@ export class VllmProviderService {
     if (tools && tools.length > 0) {
       payload.tools = tools;
       payload.tool_choice = "auto";
+    }
+
+    // Reasoning-effort passthrough: when the orchestrator sets
+    // QWEN_REASONING_EFFORT, forward it to the vLLM chat template so the
+    // engine can trade thinking depth for latency per dispatch. When unset,
+    // send nothing and let the server default apply.
+    const reasoningEffort = getReasoningEffort();
+    if (reasoningEffort) {
+      payload.chat_template_kwargs = { reasoning_effort: reasoningEffort };
     }
 
     let activeUrl = this.baseUrl;
@@ -145,8 +161,34 @@ export class VllmProviderService {
             const delta = choice.delta;
             if (!delta) continue;
 
-            // Measure Time to First Token
-            if (ttft === null && (delta.content || delta.tool_calls)) {
+            // Server-side reasoning (thinking) is streamed by vLLM's
+            // --reasoning-parser qwen3 as delta.reasoning (the LIVE field, per
+            // a live SSE capture), while some engines / older parsers use
+            // delta.reasoning_content. Normalize BOTH so accounting works
+            // regardless of which the engine emits. We account for it (so the
+            // ledger shows thinking volume and TTFT reflects the first output
+            // of ANY kind) but we do NOT append it to fullContent or forward it
+            // to onToken — the user-visible token stream stays clean, and the
+            // engine-side /metrics token counters already cover watchdog
+            // velocity.
+            const reasoningText =
+              typeof delta.reasoning === "string"
+                ? delta.reasoning
+                : typeof delta.reasoning_content === "string"
+                  ? delta.reasoning_content
+                  : null;
+            if (reasoningText && reasoningText.length > 0) {
+              hadReasoning = true;
+              // ~chars/4 is a reasonable token estimate for thinking text.
+              reasoningTokens += Math.max(1, Math.round(reasoningText.length / 4));
+            }
+
+            // Measure Time to First Token: the first delta of ANY kind
+            // (content, tool call, or reasoning) means generation started.
+            if (
+              ttft === null &&
+              (delta.content || delta.tool_calls || reasoningText)
+            ) {
               ttft = Date.now() - t0;
             }
 
@@ -190,6 +232,8 @@ export class VllmProviderService {
       ttftMs: ttft ?? totalMs,
       totalMs,
       tokensPerSec,
+      reasoningTokens,
+      hadReasoning,
     };
 
     if (onMetrics) onMetrics(metrics);
@@ -208,6 +252,8 @@ export class VllmProviderService {
       toolCalls,
       finishReason: finishReason || (toolCalls.length > 0 ? "tool_calls" : "stop"),
       metrics,
+      reasoningTokens,
+      hadReasoning,
     };
   }
 }

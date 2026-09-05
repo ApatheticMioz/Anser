@@ -46,6 +46,21 @@ export const CONTINUATION_DIRECTIVE =
   "Your previous output was cut off by the token ceiling. " +
   "Resume exactly where you stopped. Do not repeat already-emitted content.";
 
+/**
+ * User-role directive injected when the token-ceiling cutoff (finish_reason:
+ * "length") happened DURING server-side reasoning (thinking) — i.e. the model
+ * burned its output budget deliberating and was cut off before emitting any
+ * visible content or tool calls. Unlike the generic resume directive, this one
+ * tells the model to STOP deliberating and immediately produce concrete,
+ * visible output (content or tool calls) rather than re-entering extended
+ * reasoning.
+ */
+export const REASONING_LANDING_DIRECTIVE =
+  "Your reasoning was cut off by the output token ceiling. " +
+  "Stop deliberating now — wrap up immediately and emit your concrete next " +
+  "actions as visible content or tool calls (edit_file / write_file / bash). " +
+  "Do not re-enter extended reasoning.";
+
 export class DeepSeekAvoRunner {
   constructor(options = {}) {
     this.defaultCwd = options.cwd ? normalizeWorkspacePath(options.cwd) : process.cwd();
@@ -183,14 +198,34 @@ export class DeepSeekAvoRunner {
             turnResult.finishReason === null ||
             turnResult.finishReason === "");
 
-        if (isEmptyGeneration) {
+        // --- Empty-STOP guard (P2d) -----------------------------------------
+        // A turn that ends with finish_reason "stop" yet produced NO content
+        // (empty / whitespace) and NO tool calls is pathological: the model
+        // ended its turn having said nothing (the classic signature of a
+        // reasoning-only turn that burned the whole max_tokens budget on
+        // thinking and then "stopped" with zero output). This is distinct from
+        // the P2b case (no real finish_reason) and from the P2 length
+        // continuation (finish_reason "length"). Route it through the SAME
+        // emptyStreamRetries retry path as P2b: do NOT record it as an
+        // assistant turn, do NOT set finalText, and retry up to the budget.
+        // NOTE: turns with tool calls are never "empty" (a tool call is real
+        // output). Turns with hadReasoning + empty content + finish "length"
+        // are handled by the existing continuation path below (unchanged).
+        const isEmptyStop =
+          turnResult.finishReason === "stop" &&
+          (!turnResult.content || turnResult.content.trim() === "") &&
+          (!turnResult.toolCalls || turnResult.toolCalls.length === 0);
+
+        if (isEmptyGeneration || isEmptyStop) {
           if (emptyStreamRetries < EMPTY_STREAM_RETRIES) {
             emptyStreamRetries++;
             logger.append({
               type: "empty_stream_retry",
               retryNumber: emptyStreamRetries,
               maxRetries: EMPTY_STREAM_RETRIES,
-              reason: "empty_generation",
+              // "empty_generation" = P2b (no real finish_reason);
+              // "empty_stop" = P2d (finish "stop" with zero content + zero tool calls).
+              reason: isEmptyStop ? "empty_stop" : "empty_generation",
             });
             continue;
           }
@@ -200,12 +235,16 @@ export class DeepSeekAvoRunner {
           break;
         }
 
-        // Record assistant response
+        // Record assistant response. reasoningTokens is surfaced as a top-level
+        // field (in addition to metrics) so ledgers show thinking volume even
+        // when the metrics object is summarized or dropped downstream.
         logger.append({
           type: "assistant_message",
           content: turnResult.content,
           toolCalls: turnResult.toolCalls,
           finishReason: turnResult.finishReason,
+          reasoningTokens:
+            turnResult.metrics?.reasoningTokens ?? turnResult.reasoningTokens ?? 0,
           metrics: turnResult.metrics,
         });
 
@@ -226,12 +265,22 @@ export class DeepSeekAvoRunner {
           if (turnResult.finishReason === "length") {
             if (continuationsInjected < MAX_CONTINUATION_TURNS) {
               continuationsInjected++;
-              messages.push({ role: "user", content: CONTINUATION_DIRECTIVE });
+              // If the cutoff happened DURING thinking (the model burned its
+              // budget on reasoning and emitted no visible content), use the
+              // reasoning-landing directive to force it to stop deliberating
+              // and emit concrete output; otherwise use the generic resume.
+              const hadReasoning =
+                turnResult.metrics?.hadReasoning ?? turnResult.hadReasoning ?? false;
+              const directive = hadReasoning
+                ? REASONING_LANDING_DIRECTIVE
+                : CONTINUATION_DIRECTIVE;
+              messages.push({ role: "user", content: directive });
               logger.append({
                 type: "continuation_injected",
                 continuationNumber: continuationsInjected,
                 maxContinuations: MAX_CONTINUATION_TURNS,
                 reason: "length",
+                directive: hadReasoning ? "reasoning_landing" : "resume",
               });
               continue;
             }
@@ -325,12 +374,21 @@ export class DeepSeekAvoRunner {
           continuationsInjected < MAX_CONTINUATION_TURNS
         ) {
           continuationsInjected++;
-          messages.push({ role: "user", content: CONTINUATION_DIRECTIVE });
+          // Same directive selection as the no-tool-calls length branch: if the
+          // cutoff happened during thinking, force the model to stop
+          // deliberating and re-emit concrete output / tool calls.
+          const hadReasoning =
+            turnResult.metrics?.hadReasoning ?? turnResult.hadReasoning ?? false;
+          const directive = hadReasoning
+            ? REASONING_LANDING_DIRECTIVE
+            : CONTINUATION_DIRECTIVE;
+          messages.push({ role: "user", content: directive });
           logger.append({
             type: "continuation_injected",
             continuationNumber: continuationsInjected,
             maxContinuations: MAX_CONTINUATION_TURNS,
             reason: "length",
+            directive: hadReasoning ? "reasoning_landing" : "resume",
             droppedToolCalls: droppedTruncatedCalls,
           });
         }

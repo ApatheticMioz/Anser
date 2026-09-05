@@ -13,6 +13,25 @@ export const MAX_LEN_HUGE = 245760;
 export const BOOT_TIMEOUT_MS = 180_000;
 export const BOOT_POLL_MS = 3000;
 
+// Output budget: default max_tokens for a single generation turn. Raised from
+// 16384 to 49152 so that server-side reasoning (thinking) tokens no longer
+// consume the entire budget before any content / tool calls are emitted.
+// Overridable per-dispatch via QWEN_MAX_TOKENS (the 245K context window easily
+// fits ~100k prompt + 49k output).
+export const DEFAULT_MAX_TOKENS = 49152;
+export const MAX_TOKENS = (() => {
+  const parsed = parseInt(process.env.QWEN_MAX_TOKENS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_TOKENS;
+})();
+
+// Reasoning-effort passthrough: read dynamically (at call time) so callers and
+// tests can toggle it per-dispatch. Returns the string value, or null when
+// unset — in which case the vLLM server default applies.
+export function getReasoningEffort() {
+  const v = process.env.QWEN_REASONING_EFFORT;
+  return v ? v : null;
+}
+
 export const DEFAULT_RACE_MS = 45_000;
 export const RACE_MS = process.env.QWEN_RACE_MS
   ? parseInt(process.env.QWEN_RACE_MS, 10)
