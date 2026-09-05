@@ -12,6 +12,8 @@
  *   (d) healWedgedEngine with no live work (gatekeeper false)
  *       -> heal proceeds: heal lock written, stop invoked, healed=true.
  *   (e) engine IDLE (0/0) + canary ok -> wedged=false.
+ *   (f) canaryProbe evidence-based ok (reasoning-parser blind spot):
+ *       content-only / reasoning-only / generation-less / max_tokens=512 / HTTP 500.
  *
  * global.fetch is monkey-patched; the WSL runner and heal gatekeeper are
  * injected via the module's setWslRunner / setHealGatekeeper seams.
@@ -35,6 +37,7 @@ const {
   setWslRunner,
   setHealGatekeeper,
   readWedgeCounter,
+  canaryProbe,
 } = await import("../src/server_lifecycle.js");
 const { HEAL_LOCK_FILE, WEDGE_COUNTER_FILE, BASE_URL } = await import(
   "../src/config.js"
@@ -44,8 +47,10 @@ const { HEAL_LOCK_FILE, WEDGE_COUNTER_FILE, BASE_URL } = await import(
 // fetch mock: dispatch on URL.
 // ---------------------------------------------------------------------------
 let fetchLog = [];
+let lastCanaryBody = null; // captured /chat/completions request body (parsed)
 let metricsMap = {}; // vllm metric name -> value
-let canaryBehavior = "ok"; // "ok" | "http500" | "timeout"
+// "ok" | "http500" | "timeout" | "reasoning_only" | "generationless"
+let canaryBehavior = "ok";
 let modelsUp = true;
 
 function fakeResponse(status, body) {
@@ -77,6 +82,7 @@ globalThis.fetch = async (url, opts) => {
     return fakeResponse(200, { data: [{ max_model_len: 245760 }] });
   }
   if (u.includes("/chat/completions")) {
+    lastCanaryBody = opts?.body ? JSON.parse(opts.body) : null;
     if (canaryBehavior === "timeout") {
       const err = new Error("aborted");
       err.name = "TimeoutError";
@@ -85,8 +91,21 @@ globalThis.fetch = async (url, opts) => {
     if (canaryBehavior === "http500") {
       return fakeResponse(500, { error: "boom" });
     }
+    if (canaryBehavior === "reasoning_only") {
+      // Engine with --reasoning-parser: thinking consumed the token budget,
+      // visible content is empty, but the reasoning field proves generation.
+      return fakeResponse(200, {
+        choices: [{ message: { content: "", reasoning: "thinking..." } }],
+      });
+    }
+    if (canaryBehavior === "generationless") {
+      // HTTP 200 but no content AND no reasoning: the silent failure shape.
+      return fakeResponse(200, {
+        choices: [{ message: { content: "" }, finish_reason: "stop" }],
+      });
+    }
     return fakeResponse(200, {
-      choices: [{ message: { content: "ok" } }],
+      choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
     });
   }
   // stream proxy health etc.
@@ -115,6 +134,7 @@ function recentStatsLine() {
 function reset() {
   fetchLog = [];
   wslCalls = [];
+  lastCanaryBody = null;
   metricsMap = {};
   canaryBehavior = "ok";
   modelsUp = true;
@@ -244,6 +264,63 @@ check(
   (readWedgeCounter().count ?? 0) === 1,
   "d: wedge counter bumped once"
 );
+
+// ---------------------------------------------------------------------------
+// (f) canaryProbe: evidence-based ok (reasoning-parser blind spot)
+// ---------------------------------------------------------------------------
+console.log("\n[Test f: canaryProbe evidence-based ok]");
+
+// (i) 200 + content "ok" -> ok, reply "ok", content_chars 2, no reasoning
+reset();
+canaryBehavior = "ok";
+const f1 = await canaryProbe(true);
+check(f1.ok === true, "f1: 200 + content -> ok=true");
+check(f1.reply === "ok", "f1: reply === 'ok'");
+check(f1.content_chars === 2, "f1: content_chars === 2");
+check(f1.has_reasoning === false, "f1: has_reasoning === false");
+check(f1.finish_reason === "stop", "f1: finish_reason surfaced");
+
+// (ii) 200 + empty content + reasoning -> ok (reasoning counts as evidence)
+reset();
+canaryBehavior = "reasoning_only";
+const f2 = await canaryProbe(true);
+check(f2.ok === true, "f2: 200 + reasoning-only -> ok=true (generation evidence)");
+check(f2.reply === "", "f2: reply empty (no visible content)");
+check(f2.has_reasoning === true, "f2: has_reasoning === true");
+check(f2.content_chars === 0, "f2: content_chars === 0");
+
+// (iii) 200 + empty content + no reasoning -> generation-less failure
+reset();
+canaryBehavior = "generationless";
+const f3 = await canaryProbe(true);
+check(f3.ok === false, "f3: 200 + no content + no reasoning -> ok=false");
+check(
+  typeof f3.error === "string" && f3.error.includes("generation-less"),
+  `f3: error mentions generation-less (got: ${f3.error})`
+);
+check(f3.reply === "", "f3: reply present and empty");
+check(f3.content_chars === 0, "f3: content_chars === 0");
+check(f3.has_reasoning === false, "f3: has_reasoning === false");
+
+// (iv) captured request payload uses max_tokens 512
+reset();
+canaryBehavior = "ok";
+await canaryProbe(true);
+check(
+  lastCanaryBody?.max_tokens === 512,
+  `f4: canary request max_tokens === 512 (got: ${lastCanaryBody?.max_tokens})`
+);
+
+// (v) HTTP 500 -> ok=false (existing failure behavior preserved)
+reset();
+canaryBehavior = "http500";
+const f5 = await canaryProbe(true);
+check(f5.ok === false, "f5: HTTP 500 -> ok=false");
+check(
+  typeof f5.error === "string" && f5.error.includes("500"),
+  `f5: error mentions HTTP 500 (got: ${f5.error})`
+);
+check(f5.reply === undefined || f5.reply === "", "f5: reply absent/empty");
 
 // ---------------------------------------------------------------------------
 // cleanup

@@ -89,7 +89,12 @@ export async function canaryProbe(force = false) {
       },
       body: JSON.stringify({
         model: "qwen3.8-27b",
-        max_tokens: 8,
+        // Ceiling only: the canary prompt ("Reply with: ok") makes a healthy
+        // engine stop after a few visible tokens, so latency stays sub-second.
+        // 8 was too small: with --reasoning-parser qwen3, server-side thinking
+        // streams into the reasoning field and can consume the entire budget,
+        // leaving message.content empty on a perfectly healthy engine.
+        max_tokens: 512,
         messages: [{ role: "user", content: "Reply with: ok" }],
       }),
       signal: AbortSignal.timeout(15_000),
@@ -99,8 +104,37 @@ export async function canaryProbe(force = false) {
       result = { ok: false, latency_ms: dt, error: `HTTP ${res.status}` };
     } else {
       const data = await res.json();
-      const text = data?.choices?.[0]?.message?.content ?? "";
-      result = { ok: true, latency_ms: dt, reply: text.trim() };
+      const content = data?.choices?.[0]?.message?.content ?? "";
+      const reasoning =
+        data?.choices?.[0]?.message?.reasoning ??
+        data?.choices?.[0]?.message?.reasoning_content ??
+        "";
+      const contentTrimmed = content.trim();
+      const reasoningTrimmed = reasoning.toString().trim();
+      const hasEvidence = contentTrimmed.length > 0 || reasoningTrimmed.length > 0;
+      if (hasEvidence) {
+        result = {
+          ok: true,
+          latency_ms: dt,
+          reply: contentTrimmed,
+          content_chars: contentTrimmed.length,
+          has_reasoning: reasoningTrimmed.length > 0,
+          finish_reason: data?.choices?.[0]?.finish_reason ?? null,
+        };
+      } else {
+        // HTTP 200 with no visible content AND no reasoning: a generation-less
+        // response — the exact failure shape that silently broke task runs
+        // (commit 742e007). Do NOT treat this as a healthy engine.
+        result = {
+          ok: false,
+          latency_ms: dt,
+          reply: "",
+          content_chars: 0,
+          has_reasoning: false,
+          finish_reason: data?.choices?.[0]?.finish_reason ?? null,
+          error: "generation-less response (no content, no reasoning)",
+        };
+      }
     }
   } catch (err) {
     result = {
