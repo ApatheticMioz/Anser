@@ -157,6 +157,104 @@ export function gooseBin() {
 }
 
 // ---------------------------------------------------------------------------
+// POSIX shell (bash-compatible) resolver
+// ---------------------------------------------------------------------------
+
+let _posixShell = null;
+let _posixShellResolved = false;
+
+/**
+ * Cheap probe: run `<candidate> -c "echo __ok__"` and check the output.
+ * Returns true if the candidate is a working bash-compatible shell.
+ * Never throws.
+ */
+function _probeShellCandidate(candidate) {
+  if (!candidate) return false;
+  try {
+    const out = execFileSync(candidate, ["-c", "echo __ok__"], {
+      timeout: 3_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.toString().includes("__ok__");
+  } catch {
+    return false;
+  }
+}
+
+// Test seam: lets offline tests inject a fake candidate probe (mirrors the
+// setWslUserProbe seam). Pass null to restore the real probe.
+let _probeCandidate = _probeShellCandidate;
+export function setPosixShellProbeCandidate(fn) {
+  _probeCandidate = typeof fn === "function" ? fn : _probeShellCandidate;
+}
+
+/** Find `bash` (or `bash.exe`) on PATH. Returns the first match or null. */
+function _findBashOnPath() {
+  try {
+    const cmd = IS_WINDOWS ? "where.exe" : "which";
+    const target = IS_WINDOWS ? "bash.exe" : "bash";
+    const out = execFileSync(cmd, [target], {
+      timeout: 3_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const first = out.toString().split(/\r?\n/)[0].trim();
+    return first || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Probe the POSIX shell candidates in resolution order:
+ *   1. QWEN_POSIX_SHELL env override
+ *   2. Git Bash standard locations
+ *   3. bash on PATH (last resort, might be the WSL System32 stub)
+ * Returns the first candidate that passes the probe, or null.
+ */
+function _probePosixShell() {
+  const candidates = [];
+  if (process.env.QWEN_POSIX_SHELL) {
+    candidates.push(process.env.QWEN_POSIX_SHELL);
+  }
+  if (IS_WINDOWS) {
+    candidates.push(
+      "C:\\Program Files\\Git\\bin\\bash.exe",
+      "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+    );
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      candidates.push(path.join(localAppData, "Programs", "Git", "bin", "bash.exe"));
+    }
+  }
+  const onPath = _findBashOnPath();
+  if (onPath) candidates.push(onPath);
+
+  for (const c of candidates) {
+    if (_probeCandidate(c)) return c;
+  }
+  return null;
+}
+
+/**
+ * POSIX shell (bash-compatible) resolver.
+ * Env QWEN_POSIX_SHELL overrides; otherwise Git Bash standard locations;
+ * otherwise bash on PATH. Lazily resolved and cached. Never throws.
+ * Returns null if no working POSIX shell is found.
+ */
+export function posixShell() {
+  if (_posixShellResolved) return _posixShell;
+  _posixShell = _probePosixShell();
+  _posixShellResolved = true;
+  return _posixShell;
+}
+
+/** Clear the cached POSIX shell so the next call re-probes. Test-only. */
+export function _resetPosixShellCache() {
+  _posixShell = null;
+  _posixShellResolved = false;
+}
+
+// ---------------------------------------------------------------------------
 // Stream proxy path (WSL-side)
 // ---------------------------------------------------------------------------
 

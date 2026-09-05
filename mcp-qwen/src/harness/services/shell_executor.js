@@ -31,7 +31,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { IS_WINDOWS } from "../../config.js";
 import { isWslLocation, normalizeWorkspacePath, killProcessTreeSync } from "../../wsl_bridge.js";
-import { toPosixWslPath } from "../../platform.js";
+import { toPosixWslPath, toWindowsPath, posixShell } from "../../platform.js";
 import {
   validateShellSafety,
   assertDeadManFuse,
@@ -94,7 +94,29 @@ export class ShellExecutorService {
         const posixCwd = toPosixWslPath(effectiveCwd);
         args = ["-d", "Ubuntu", "--", "bash", "-c", `EXEC_TAG="${execTag}" && cd "${posixCwd}" && ${command}`];
         spawnCwd = undefined; // let WSL handle cd
+      } else if (process.env.QWEN_SHELL_MODE !== "cmd" && posixShell()) {
+        // POSIX shell routing (P4g): the command is handed to a real
+        // bash-compatible shell (Git Bash preferred) as a SINGLE -c operand
+        // via an argv array — never through `cmd.exe /c` string
+        // interpolation, which mangles quotes (Bug 1.2) and lacks POSIX
+        // pipes/utilities (Bug 1.1).
+        //
+        // CWD FIDELITY: Git Bash consumes Windows paths (D:\foo\bar) as cwd
+        // directly, so the normalized path is passed verbatim. If a
+        // POSIX-style path (/mnt/d/x) arrives, translate it with the
+        // existing toWindowsPath() (maps /mnt/d/x -> D:\x) — NEVER by naive
+        // string concat (a D:\mnt\d -> D:\ junction exists on this machine
+        // and realpath through it produces a false SymlinkEscapeError).
+        let posixSpawnCwd = effectiveCwd;
+        if (effectiveCwd.startsWith("/")) {
+          posixSpawnCwd = toWindowsPath(effectiveCwd);
+        }
+        executable = posixShell();
+        args = ["-c", `EXEC_TAG="${execTag}" && ${command}`];
+        spawnCwd = posixSpawnCwd;
       } else {
+        // Legacy cmd.exe path: zero regression for machines without a
+        // POSIX shell, and the QWEN_SHELL_MODE=cmd escape hatch.
         executable = process.env.ComSpec || "cmd.exe";
         args = ["/d", "/s", "/c", command];
       }
