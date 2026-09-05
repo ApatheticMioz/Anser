@@ -16,6 +16,8 @@ import path from "node:path";
 import { LineageDag } from "./lineage_dag.js";
 import { ClosedLoopEvaluator } from "./evaluator.js";
 import { AvoWatchdog } from "./watchdog.js";
+import { IS_WINDOWS } from "../../config.js";
+import { toPosixWslPath, toWindowsPath } from "../../wsl_bridge.js";
 
 export class AvoOperator {
   constructor(options = {}) {
@@ -35,6 +37,21 @@ export class AvoOperator {
     try {
       fs.mkdirSync(this.snapshotsDir, { recursive: true });
     } catch {}
+  }
+
+  assertWithinWorkspace(targetPath) {
+    let p = String(targetPath || "").trim();
+    if (!IS_WINDOWS && (p.includes("\\") || /^[a-zA-Z]:/.test(p))) {
+      p = toPosixWslPath(p);
+    } else if (IS_WINDOWS && (p.startsWith("/mnt/") || p.startsWith("/"))) {
+      p = toWindowsPath(p);
+    }
+    const normTarget = path.normalize(p);
+    const normRoot = path.normalize(this.workspaceRoot);
+    const rel = path.relative(normRoot, normTarget);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new Error(`SecurityContainmentError: Refusing file operation outside workspace root: '${targetPath}'`);
+    }
   }
 
   /**
@@ -195,6 +212,7 @@ export class AvoOperator {
             // A1 Fix: Newly created file that did not exist before mutation -> delete it cleanly!
             if (fs.existsSync(item.fullPath)) {
               try {
+                this.assertWithinWorkspace(item.fullPath);
                 fs.unlinkSync(item.fullPath);
                 revertedCount++;
               } catch (err) {
@@ -203,6 +221,7 @@ export class AvoOperator {
             }
           } else if (item.targetBackup && fs.existsSync(item.targetBackup)) {
             try {
+              this.assertWithinWorkspace(item.fullPath);
               fs.copyFileSync(item.targetBackup, item.fullPath);
               revertedCount++;
             } catch (err) {

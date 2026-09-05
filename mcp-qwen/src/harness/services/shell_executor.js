@@ -12,6 +12,40 @@ import { spawn } from "node:child_process";
 import { IS_WINDOWS } from "../../config.js";
 import { isWslLocation, normalizeWorkspacePath, toPosixWslPath, killProcessTreeSync } from "../../wsl_bridge.js";
 
+const DANGEROUS_COMMAND_PATTERNS = [
+  /\brm\s+-[a-zA-Z]*r[a-zA-Z]*f*\s+(\/|\/\*|~|~\/\*|[A-Za-z]:[/\\]*|[A-Za-z]:[/\\]\*)/i,
+  /\brmdir\s+\/[sS]\s+\/[qQ]\s+([A-Za-z]:[/\\]*)/i,
+  /\bdel\s+\/[fF]\s+\/[sS]\s+\/[qQ]\s+([A-Za-z]:[/\\]*)/i,
+  /\b(mkfs(\.[a-z0-9]+)?|fdisk|parted)\b/i,
+  /\bformat\s+[A-Za-z]:/i,
+  /\bdd\s+.*of=\/dev\/(sd[a-z]|nvme|hd[a-z]|vd[a-z])/i,
+  /\b(rm|del|rmdir)\b.*([A-Za-z]:\\Windows|[A-Za-z]:\\Users|[A-Za-z]:\\Program\s*Files|\/mnt\/[a-z]\/Windows|\/mnt\/[a-z]\/Users)/i,
+  /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/
+];
+
+export function validateShellSafety(command, effectiveCwd, rootCwd) {
+  if (!command || typeof command !== "string" || command.trim().length === 0) {
+    throw new Error("InvalidCommandError: Shell command must be a non-empty string");
+  }
+
+  // CWD containment check: ensure working directory is within workspace
+  if (effectiveCwd && rootCwd) {
+    const normTarget = path.normalize(effectiveCwd);
+    const normRoot = path.normalize(rootCwd);
+    const rel = path.relative(normRoot, normTarget);
+    if (rel.startsWith("..") || (path.isAbsolute(rel) && !rel.startsWith(normRoot))) {
+      throw new Error(`PathEscapeError: Working directory '${effectiveCwd}' escapes workspace root '${rootCwd}'`);
+    }
+  }
+
+  // Pattern check against catastrophic system-level destruction
+  for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
+    if (pattern.test(command)) {
+      throw new Error(`CommandSecurityError: Execution blocked. Command matches prohibited destructive pattern: ${pattern}`);
+    }
+  }
+}
+
 export class ShellExecutorService {
   constructor(options = {}) {
     this.defaultCwd = options.cwd ? normalizeWorkspacePath(options.cwd) : process.cwd();
@@ -32,6 +66,9 @@ export class ShellExecutorService {
     const t0 = Date.now();
     const effectiveCwd = cwd ? normalizeWorkspacePath(cwd) : this.defaultCwd;
     const timeout = timeout_ms || this.defaultTimeoutMs;
+
+    // Strict shell security validation
+    validateShellSafety(command, effectiveCwd, this.defaultCwd);
 
     const isWslTarget = use_wsl || isWslLocation(effectiveCwd);
 

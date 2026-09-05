@@ -51,7 +51,20 @@ export class AstService {
 
   resolvePath(inputPath) {
     if (!inputPath) throw new Error("Path parameter is required for AST operation");
+    if (typeof inputPath !== "string") {
+      throw new Error("InvalidPathError: Path must be a string");
+    }
+    if (inputPath.includes("\0")) {
+      throw new Error("NullByteError: Path contains prohibited null byte character");
+    }
+
     let p = inputPath.trim();
+    const baseName = path.basename(p.replace(/\\/g, "/")).toUpperCase();
+    const reserved = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/;
+    if (reserved.test(baseName)) {
+      throw new Error(`DeviceNameError: Prohibited access to Windows reserved device '${baseName}'`);
+    }
+
     if (IS_WINDOWS) {
       p = toWindowsPath(p);
       if (!path.isAbsolute(p)) {
@@ -69,7 +82,38 @@ export class AstService {
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
       throw new Error(`PathEscapeError: Access denied. Path '${inputPath}' escapes sandbox root '${this.root}'`);
     }
+
+    // Symlink escape verification
+    this.verifySymlinkContainment(normalizedTarget, normalizedRoot);
+
     return normalizedTarget;
+  }
+
+  verifySymlinkContainment(targetPath, rootPath) {
+    try {
+      if (fs.existsSync(targetPath)) {
+        const real = fs.realpathSync(targetPath);
+        const relReal = path.relative(rootPath, path.normalize(real));
+        if (relReal.startsWith("..") || path.isAbsolute(relReal)) {
+          throw new Error(`SymlinkEscapeError: Real path '${real}' escapes sandbox root '${rootPath}'`);
+        }
+      } else {
+        let parent = path.dirname(targetPath);
+        while (parent && parent !== path.dirname(parent)) {
+          if (fs.existsSync(parent)) {
+            const realParent = fs.realpathSync(parent);
+            const relReal = path.relative(rootPath, path.normalize(realParent));
+            if (relReal.startsWith("..") || path.isAbsolute(relReal)) {
+              throw new Error(`SymlinkEscapeError: Parent directory '${parent}' resolves to '${realParent}' escaping root '${rootPath}'`);
+            }
+            break;
+          }
+          parent = path.dirname(parent);
+        }
+      }
+    } catch (err) {
+      if (err.message.startsWith("SymlinkEscapeError")) throw err;
+    }
   }
 
   getBinary() {
