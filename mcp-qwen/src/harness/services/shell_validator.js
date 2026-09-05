@@ -24,6 +24,8 @@
  * Provides:
  * - Path-aware protected-roots analysis (blocks root, home, Windows/Users, raw dev)
  * - Recursive command unwrapping (sudo, doas, env, nice, nohup, xargs, shell -c)
+ * - Chain/delimiter segment splitting (`;` `&&` `||` `|` newline) so every
+ *   command segment is analyzed, not just the first
  * - Fail-closed refusal of unexpanded shell references ($VAR, $(cmd), backticks)
  * - Windows flag disambiguation (/s /q as flags, not path operands)
  * - Hard-coded in-memory dead-man fuse with synthetic canary token support
@@ -132,6 +134,65 @@ export function tokenizeCommand(cmd) {
   return tokens;
 }
 
+/**
+ * Split a command line into its constituent command segments on the shell
+ * control operators `;`, `&&`, `||`, `|`, and newlines. Quoted regions are
+ * respected (a `;` inside quotes is data, not a separator).
+ *
+ * This is the key to closing the "destructive command hidden as a later
+ * segment" evasion: `cd /tmp && rm -rf /` must be analyzed as TWO commands
+ * (`cd /tmp` and `rm -rf /`), not one.
+ *
+ * Returns an array of segment strings (whitespace-trimmed, empties dropped).
+ */
+export function splitCommandSegments(cmd) {
+  const segments = [];
+  let cur = "";
+  let quote = null;
+  let pendingOp = null; // the operator that triggered the last split
+  const flush = () => {
+    const t = cur.trim();
+    if (t.length) segments.push(t);
+    cur = "";
+  };
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      }
+      cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    // Two-char operators first (&& and ||).
+    if (ch === "&" && cmd[i + 1] === "&") {
+      flush();
+      pendingOp = "&&";
+      i++; // skip the second &
+      continue;
+    }
+    if (ch === "|" && cmd[i + 1] === "|") {
+      flush();
+      pendingOp = "||";
+      i++; // skip the second |
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") {
+      flush();
+      pendingOp = ch;
+      continue;
+    }
+    cur += ch;
+  }
+  flush();
+  return segments;
+}
+
 /** Extract the command name (basename, lowercased) from the first token. */
 export function commandNameOf(token) {
   if (!token) return "";
@@ -148,17 +209,20 @@ export function isFlag(token) {
 
 /**
  * Fail-closed guard: a destructive operand containing an unexpanded shell
- * reference ($VAR, ${VAR}, $(...), backtick) cannot be safely resolved, so it
- * must be blocked. Literal paths (no $) are unaffected.
+ * reference — a `$` variable/command substitution ($VAR, ${VAR}, $(...)) OR a
+ * backtick command substitution (`cmd`) — cannot be safely resolved, so it
+ * must be blocked. Literal paths (no $ and no backtick) are unaffected.
  */
 export function hasUnexpandedReference(operand) {
-  return /\$/.test(operand);
+  return /[$`]/.test(operand);
 }
 
 /**
  * Expand `~` using the platform resolvers.
  * Windows-form commands (del/rmdir/rd) use winHome();
  * POSIX-form commands (rm) use wslHome().
+ * Also handles `~user` (another user's home) so it can be checked against
+ * protected roots.
  */
 export function expandTilde(operand, isWindowsCmd) {
   if (operand === "~") {
@@ -167,6 +231,20 @@ export function expandTilde(operand, isWindowsCmd) {
   if (operand.startsWith("~/") || operand.startsWith("~\\")) {
     const home = isWindowsCmd ? winHome() : wslHome();
     return home + operand.slice(1).replace(/\\/g, "/");
+  }
+  // `~user` / `~user/sub` — another user's home (POSIX) or `~\user` (Windows).
+  // Distinguished from `~/...` (home-relative) by the char right after `~`
+  // NOT being a path separator. Fail closed: resolve to that user's home so
+  // the protected-root check can see it.
+  const m = operand.match(/^~([^\\\/])(.*)$/);
+  if (m) {
+    const user = m[1] + m[2]; // e.g. "user" or "user/sub"
+    if (isWindowsCmd) {
+      // C:\Users\<user>
+      return `C:\\Users\\${user}`;
+    }
+    // /home/<user> (or /root for root)
+    return user === "root" ? "/root" : `/home/${user}`;
   }
   return operand;
 }
@@ -177,6 +255,10 @@ export function expandTilde(operand, isWindowsCmd) {
  */
 export function normalizeOperand(operand, cwd, isWindowsCmd) {
   let p = expandTilde(operand, isWindowsCmd);
+  // Unicode/homoglyph defense: fold fullwidth & compatibility forms to their
+  // canonical ASCII equivalents (e.g. fullwidth `Ｗ` U+FF37 -> `W`) so a
+  // homoglyph path cannot dodge the protected-root string comparison.
+  p = p.normalize("NFKC");
   // Convert to POSIX form via the existing translator
   let posix = toPosixWslPath(p);
   // Preserve a trailing wildcard component (e.g. "/*", "C:\Users\*") so it is
@@ -226,6 +308,11 @@ export function buildProtectedRoots() {
   // Windows home as seen from WSL
   const whw = winHomeWsl();
   if (whw) roots.add(whw.toLowerCase());
+  // Home directories are high-value targets: block the home tree root and the
+  // root user's home. `~user` expands to /home/<user> (or /root), which is a
+  // direct child of /home, so the /home direct-wildcard check catches it.
+  roots.add("/root");
+  roots.add("/home");
   // Drive roots: /mnt/a through /mnt/z
   for (let i = 0; i < 26; i++) {
     const letter = String.fromCharCode(97 + i);
@@ -261,31 +348,31 @@ export function isProtectedRootOrWildcard(posixPath) {
     const directWildcard = root === "/" ? "/*" : root + "/*";
     if (p === directWildcard) return true;
   }
+  // User home directories are high-value targets (same class as `~`): block
+  // /root and any /home/<user> (a user's home), but still allow deeper
+  // subpaths (e.g. /home/<user>/proj) consistent with the protected-root
+  // "block the root + direct wildcard, allow deeper subpaths" policy.
+  if (p === "/root" || /^\/home\/[^\/]+$/.test(p)) return true;
   return false;
 }
 
 /**
- * Recursively analyze a command string for destructive intent.
+ * Analyze a single command segment (no control operators) for destructive
+ * intent. This is the per-segment core of the recursive analysis.
  *
  * At each level:
  *   1. Run the verbatim pattern-level blocks (fork bomb, mkfs, format, dd).
  *   2. Tokenize and skip transparent prefixes (sudo/doas/env+VAR=nice/nohup/xargs).
  *   3. If the command is a shell wrapper (bash/sh/dash/zsh -c, cmd /c,
  *      powershell/pwsh -Command), recurse on the inner command string
- *      (bounded depth to avoid pathological nesting).
+ *      (bounded depth to avoid pathological nesting). The inner string is
+ *      re-split into segments so a chain hidden inside a wrapper
+ *      (e.g. `bash -c "cd /tmp && rm -rf /"`) is fully analyzed.
  *   4. If the command is a destructive path command (rm/del/rmdir/rd/
  *      remove-item/ri/erase), fail closed on unexpanded shell references and
  *      block any operand that normalizes to a protected root or its wildcard.
  */
-export function analyzeCommand(command, cwd, depth) {
-  // Pattern-level blocks (verbatim, not path-aware). Run at every recursion
-  // level so wrapped forms (e.g. `bash -c "mkfs ..."`) are caught too.
-  for (const pattern of PATTERN_LEVEL_BLOCKS) {
-    if (pattern.test(command)) {
-      throw new Error(`CommandSecurityError: Execution blocked. Command matches prohibited destructive pattern: ${pattern}`);
-    }
-  }
-
+export function analyzeSegment(command, cwd, depth) {
   const tokens = tokenizeCommand(command);
   if (tokens.length === 0) return;
 
@@ -321,6 +408,8 @@ export function analyzeCommand(command, cwd, depth) {
         if (i + 2 < tokens.length) inner = tokens.slice(i + 2).join(" ");
       }
       if (inner !== undefined) {
+        // Re-split the inner string into segments so a chain hidden inside a
+        // wrapper (e.g. `bash -c "cd /tmp && rm -rf /"`) is fully analyzed.
         analyzeCommand(inner, cwd, depth + 1);
       }
     }
@@ -332,8 +421,19 @@ export function analyzeCommand(command, cwd, depth) {
     const isWindowsCmd = name !== "rm"; // rm is POSIX; the rest are Windows forms
     const operands = [];
     for (let j = i + 1; j < tokens.length; j++) {
-      if (!isFlag(tokens[j])) {
-        operands.push(tokens[j]);
+      const tok = tokens[j];
+      // `--name=value` / `-name=value` flags can carry a PATH as their value
+      // (e.g. `rm -rf --no-preserve-root=/`). Fail closed: treat the value as
+      // an operand so it is subject to the unexpanded-ref + protected-root
+      // checks. A bare flag (no `=`) is still skipped.
+      const eq = tok.indexOf("=");
+      if (eq > 0 && (tok.startsWith("-") || tok.startsWith("/"))) {
+        const value = tok.slice(eq + 1);
+        if (value.length) operands.push(value);
+        continue;
+      }
+      if (!isFlag(tok)) {
+        operands.push(tok);
       }
     }
     for (const operand of operands) {
@@ -350,6 +450,34 @@ export function analyzeCommand(command, cwd, depth) {
         );
       }
     }
+  }
+}
+
+/**
+ * Recursively analyze a command string for destructive intent.
+ *
+ * The command line is first split into its constituent segments on the shell
+ * control operators (`;`, `&&`, `||`, `|`, newlines) and EVERY segment is
+ * analyzed — so a destructive command hidden as a later segment
+ * (e.g. `cd /tmp && rm -rf /`) cannot slip past a first-segment-only check.
+ * A single-segment command (no control operators) behaves exactly as before.
+ */
+export function analyzeCommand(command, cwd, depth) {
+  // Pattern-level blocks (verbatim, not path-aware) run on the FULL command
+  // string — NOT per-segment — because signatures like the fork bomb
+  // `:(){ :|:& };:` span multiple `|`/`;`-separated segments. Running them on
+  // the whole string (at every recursion level) catches both bare and
+  // wrapped forms (e.g. `bash -c "mkfs ..."`) without being broken by the
+  // segment split.
+  for (const pattern of PATTERN_LEVEL_BLOCKS) {
+    if (pattern.test(command)) {
+      throw new Error(`CommandSecurityError: Execution blocked. Command matches prohibited destructive pattern: ${pattern}`);
+    }
+  }
+
+  const segments = splitCommandSegments(command);
+  for (const seg of segments) {
+    analyzeSegment(seg, cwd, depth);
   }
 }
 

@@ -202,6 +202,33 @@ async function verifySecurity() {
     "rm -rf $HOME/projects",
     // GAP 3: PowerShell destructive alias (remove-item) analyzed as destructive.
     'powershell -Command "Remove-Item C:\\Users\\* -Recurse -Force"',
+    // GAP 4 (Qwen adversarial): chain/delimiter evasion — a destructive command
+    // hidden as a LATER segment after ; && || | or a newline. Every segment
+    // must be analyzed, not just the first.
+    "cd /tmp && rm -rf /",
+    "echo a; rm -rf /",
+    "echo a || rm -rf /",
+    "echo a | rm -rf /",
+    "echo a\nrm -rf /",
+    "true && rm -rf ~",
+    "ls; rm -rf /mnt/c/Windows",
+    // GAP 5 (Qwen adversarial): backtick command substitution as the operand
+    // (fail-closed: an unresolvable substitution cannot be safely targeted).
+    "rm -rf `pwd`",
+    "del /q `dir`",
+    "rm -rf `echo /`",
+    // GAP 6 (Qwen adversarial): --flag=value carrying a PATH as its value on a
+    // destructive command (e.g. --no-preserve-root=/).
+    "rm -rf --no-preserve-root=/",
+    // GAP 7 (Qwen adversarial): ~user / ~root (another user's home) fail closed.
+    "rm -rf ~user",
+    "rm -rf ~root",
+    // GAP 8 (Qwen adversarial): fullwidth/homoglyph path chars that would dodge
+    // the protected-root string comparison (NFKC-folded before comparison).
+    "rm -rf /mnt/c/\uFF37indows",
+    // GAP 9 (Qwen adversarial): a chain hidden INSIDE a shell wrapper's inner
+    // string — the inner string must be re-split into segments.
+    'bash -c "cd /tmp && rm -rf /"',
   ];
 
   // Category 5: Dangerous Shell Command Blocking (pure in-memory validation via shell_validator.js)
