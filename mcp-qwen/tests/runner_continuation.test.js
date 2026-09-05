@@ -7,6 +7,11 @@
  *   (b) "length" always             -> terminates at the MAX_CONTINUATION_TURNS cap
  *   (c) "length" + invalid-JSON tool call -> call dropped, never executed, continuation injected
  *   (d) happy path "stop" + no tool calls -> breaks immediately, zero continuations
+ *   (e) empty generation (no content, no tool calls, no real finish_reason)
+ *       then a normal stop-with-content turn -> completed, empty turn absent
+ *       from history, retry counted
+ *   (f) always-empty generations    -> terminates at the EMPTY_STREAM_RETRIES
+ *       bound with honest status "engine_empty_response"
  *
  * No vLLM, no network. The LLM provider and event logger are injected via the
  * runner's constructor seams (this._llm / this._logger).
@@ -14,14 +19,17 @@
 
 import assert from "node:assert";
 
-// Set the continuation budget BEFORE importing the runner so the config
-// module picks it up at load time.
+// Set the continuation + empty-stream budgets BEFORE importing the runner so
+// the config module picks them up at load time.
 process.env.QWEN_MAX_CONTINUATION_TURNS = "3";
+process.env.QWEN_EMPTY_STREAM_RETRIES = "2";
 
 const { DeepSeekAvoRunner, CONTINUATION_DIRECTIVE } = await import(
   "../src/harness/runner.js"
 );
-const { MAX_CONTINUATION_TURNS } = await import("../src/config.js");
+const { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } = await import(
+  "../src/config.js"
+);
 
 // ---------------------------------------------------------------------------
 // Mock LLM: returns a scripted sequence of turn results.
@@ -41,10 +49,18 @@ function makeMockLlm(script) {
         totalMs: 1,
         tokensPerSec: 0,
       };
+      // If the step explicitly carries a "finishReason" key (even if it is
+      // undefined), honor it verbatim — this models an aborted/zero-byte
+      // stream that produced NO real finish_reason frame. Otherwise default
+      // to "stop" (the provider's default-fill for a clean turn).
+      const hasFinishReason = Object.prototype.hasOwnProperty.call(
+        step,
+        "finishReason"
+      );
       return {
         content: step.content ?? "",
         toolCalls: step.toolCalls ?? [],
-        finishReason: step.finishReason ?? "stop",
+        finishReason: hasFinishReason ? step.finishReason : "stop",
         metrics,
       };
     },
@@ -231,11 +247,111 @@ async function vectorD() {
 }
 
 // ---------------------------------------------------------------------------
+// Vector (e): first turn is an EMPTY generation (no content, no tool calls,
+// no real finish_reason -> undefined), then a normal stop-with-content turn.
+// The empty turn must be retried (not recorded as an assistant message), and
+// the session must complete with the real content.
+// ---------------------------------------------------------------------------
+async function vectorE() {
+  const llm = makeMockLlm([
+    // Aborted / zero-byte stream: no content, no tool calls, no finish_reason.
+    { content: "", toolCalls: [], finishReason: undefined },
+    // The retry succeeds with a real, clean stop turn.
+    { content: "Recovered after the empty stream.", finishReason: "stop" },
+  ]);
+  const logger = makeMockLogger();
+  const runner = new DeepSeekAvoRunner({ llm, logger });
+
+  const res = await runner.run({
+    prompt: "Do the thing.",
+    sessionId: "test_e",
+    maxTurns: 10,
+  });
+
+  assert.strictEqual(res.status, "completed", "e: status should be completed");
+  assert.strictEqual(
+    res.finalText,
+    "Recovered after the empty stream.",
+    "e: finalText should be the recovered content, not the empty turn"
+  );
+  // The empty turn must NOT have been recorded as an assistant message.
+  const assistantMsgs = logger.events.filter((e) => e.type === "assistant_message");
+  assert.strictEqual(
+    assistantMsgs.length,
+    1,
+    "e: exactly ONE assistant_message (the empty turn was not recorded)"
+  );
+  assert.strictEqual(
+    assistantMsgs[0].content,
+    "Recovered after the empty stream.",
+    "e: the recorded assistant message is the recovered one"
+  );
+  // The retry was counted.
+  assert.strictEqual(
+    countType(logger, "empty_stream_retry"),
+    1,
+    "e: exactly one empty_stream_retry entry"
+  );
+  // Two LLM calls total: the empty turn + the successful retry.
+  assert.strictEqual(llm._calls, 2, "e: LLM called exactly twice (empty + retry)");
+  console.log("  [PASS] (e) empty-then-stop -> completed, empty turn absent from history, retry counted");
+}
+
+// ---------------------------------------------------------------------------
+// Vector (f): the engine ALWAYS returns empty generations (no content, no
+// tool calls, no real finish_reason). The runner must terminate at the
+// EMPTY_STREAM_RETRIES bound with the honest status "engine_empty_response".
+// ---------------------------------------------------------------------------
+async function vectorF() {
+  const llm = makeMockLlm([
+    // Always the same empty / no-finish_reason turn.
+    { content: "", toolCalls: [], finishReason: undefined },
+  ]);
+  const logger = makeMockLogger();
+  const runner = new DeepSeekAvoRunner({ llm, logger });
+
+  const res = await runner.run({
+    prompt: "Keep trying.",
+    sessionId: "test_f",
+    maxTurns: 1000, // high so the retry bound, not maxTurns, governs
+  });
+
+  assert.strictEqual(
+    res.status,
+    "engine_empty_response",
+    "f: status should be engine_empty_response"
+  );
+  // No assistant message should ever be recorded for an empty generation.
+  assert.strictEqual(
+    countType(logger, "assistant_message"),
+    0,
+    "f: no assistant_message recorded for empty generations"
+  );
+  // The retry budget was exhausted: exactly EMPTY_STREAM_RETRIES retries.
+  assert.strictEqual(
+    countType(logger, "empty_stream_retry"),
+    EMPTY_STREAM_RETRIES,
+    "f: exactly EMPTY_STREAM_RETRIES empty_stream_retry entries"
+  );
+  // Bounded: turns = bound + 1 (the final turn that hits the bound and breaks).
+  assert.ok(
+    res.turnsTaken <= EMPTY_STREAM_RETRIES + 1,
+    "f: turn count must be bounded by the empty-stream retry bound"
+  );
+  // No false finalText.
+  assert.strictEqual(res.finalText, "", "f: finalText must remain empty");
+  console.log(
+    `  [PASS] (f) always-empty -> engine_empty_response at bound (${res.turnsTaken} turns, ${EMPTY_STREAM_RETRIES} retries)`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Run all vectors.
 // ---------------------------------------------------------------------------
 async function main() {
   console.log("=== Runner Continuation-on-Cutoff Verification (offline) ===");
   console.log(`MAX_CONTINUATION_TURNS = ${MAX_CONTINUATION_TURNS}`);
+  console.log(`EMPTY_STREAM_RETRIES = ${EMPTY_STREAM_RETRIES}`);
   console.log(`CONTINUATION_DIRECTIVE = "${CONTINUATION_DIRECTIVE}"\n`);
 
   let passed = 0;
@@ -245,6 +361,8 @@ async function main() {
     ["(b)", vectorB],
     ["(c)", vectorC],
     ["(d)", vectorD],
+    ["(e)", vectorE],
+    ["(f)", vectorF],
   ];
 
   for (const [label, fn] of vectors) {

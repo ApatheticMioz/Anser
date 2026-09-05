@@ -19,7 +19,7 @@ import { vllmProviderPlugin } from "./services/provider_vllm.js";
 import { avoPlugin } from "./avo/avo_operator.js";
 import { astPlugin } from "./services/ast_service.js";
 import { normalizeWorkspacePath } from "../wsl_bridge.js";
-import { MAX_CONTINUATION_TURNS } from "../config.js";
+import { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } from "../config.js";
 
 const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the DeepSeek AVO harness.
 You pair with the Lead Architect (Gemini / Claude) to explore, design, edit, test, and optimize software systems.
@@ -136,6 +136,7 @@ export class DeepSeekAvoRunner {
     let status = "completed";
     let totalCompletionTokens = 0;
     let continuationsInjected = 0;
+    let emptyStreamRetries = 0;
 
     try {
       while (true) {
@@ -164,6 +165,40 @@ export class DeepSeekAvoRunner {
             if (onMetrics) onMetrics(m);
           },
         });
+
+        // --- Empty-generation guard (P2b) -----------------------------------
+        // An aborted / zero-byte stream yields NO content, NO tool calls, and
+        // NO real finish_reason frame. The provider default-fills that missing
+        // finish_reason as "stop", so the raw signal of "no real finish_reason"
+        // is finishReason being undefined / null / "" (NOT the string "stop").
+        // Treating such a turn as a clean completion is what made a full
+        // ~7k-token generation look like a silent zero-byte "stop" to the
+        // client. Instead: do NOT record it as an assistant turn, do NOT set
+        // finalText, and retry the turn up to the empty-stream retry budget.
+        // A legitimate "stop" turn (with content) is unaffected.
+        const isEmptyGeneration =
+          (!turnResult.content || turnResult.content.trim() === "") &&
+          (!turnResult.toolCalls || turnResult.toolCalls.length === 0) &&
+          (turnResult.finishReason === undefined ||
+            turnResult.finishReason === null ||
+            turnResult.finishReason === "");
+
+        if (isEmptyGeneration) {
+          if (emptyStreamRetries < EMPTY_STREAM_RETRIES) {
+            emptyStreamRetries++;
+            logger.append({
+              type: "empty_stream_retry",
+              retryNumber: emptyStreamRetries,
+              maxRetries: EMPTY_STREAM_RETRIES,
+              reason: "empty_generation",
+            });
+            continue;
+          }
+          // Budget exhausted: the engine keeps returning empty generations.
+          // Report the honest status instead of a false "completed".
+          status = "engine_empty_response";
+          break;
+        }
 
         // Record assistant response
         logger.append({

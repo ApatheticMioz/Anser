@@ -85,3 +85,14 @@ export const MAX_CONTINUATION_TURNS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CONTINUATION_TURNS;
 })();
 
+// Empty-stream retry budget: max times we re-issue a turn when the engine
+// returns an EMPTY generation (no content, no tool calls, and no real
+// finish_reason — the signature of an aborted/zero-byte stream that the
+// provider default-fills as "stop"). After this many empty turns we report
+// the honest status "engine_empty_response" instead of a false "completed".
+export const DEFAULT_EMPTY_STREAM_RETRIES = 2;
+export const EMPTY_STREAM_RETRIES = (() => {
+  const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRIES, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRIES;
+})();
+

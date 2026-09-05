@@ -26,63 +26,11 @@
  */
 
 import http from "http";
+import { RepetitionDetector } from "./src/repetition_detector.js";
 
 const UPSTREAM_PORT = parseInt(process.env.VLLM_PORT || "18020", 10);
 const PROXY_PORT = parseInt(process.env.VLLM_PROXY_PORT || "18022", 10);
 const PROXY_HOST = process.env.VLLM_PROXY_HOST || "0.0.0.0";
-
-class RepetitionDetector {
-  constructor() {
-    this.lastChar = "";
-    this.charRepeatCount = 0;
-    this.rolling = "";
-  }
-
-  // Returns { type, pattern, count } if degenerate repetition is detected, else null
-  feed(text) {
-    if (!text || typeof text !== "string") return null;
-
-    // 1. Single character consecutive repetition (e.g. "!!!!!!!!!!!!!!!!...")
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (ch === this.lastChar) {
-        this.charRepeatCount++;
-        // Allow higher limits for whitespace and standard markdown divider characters
-        const limit = ["-", "=", "*", "#", " ", "\t", "\n", "_"].includes(ch) ? 120 : 35;
-        if (this.charRepeatCount >= limit) {
-          return { type: "character", pattern: ch, count: this.charRepeatCount };
-        }
-      } else {
-        this.lastChar = ch;
-        this.charRepeatCount = 1;
-      }
-    }
-
-    // 2. Multi-character pattern repetition (e.g. repeating phrases or tokens)
-    this.rolling = (this.rolling + text).slice(-600);
-    const len = this.rolling.length;
-    for (let unitLen = 2; unitLen <= 24; unitLen++) {
-      const neededLen = unitLen * 18;
-      if (len < neededLen) continue;
-      const unit = this.rolling.slice(-unitLen);
-      // Skip pure whitespace and divider patterns
-      if (/^[-=*#_ \t\n]+$/.test(unit)) continue;
-      let isRep = true;
-      for (let r = 1; r < 18; r++) {
-        const seg = this.rolling.slice(len - (r + 1) * unitLen, len - r * unitLen);
-        if (seg !== unit) {
-          isRep = false;
-          break;
-        }
-      }
-      if (isRep) {
-        return { type: "pattern", pattern: unit, count: 18 };
-      }
-    }
-
-    return null;
-  }
-}
 
 function forwardToUpstream(req, res, reqBodyBuffer) {
   // Disable socket-level timeouts on incoming client connection

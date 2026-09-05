@@ -1,8 +1,54 @@
 import http from "http";
 import assert from "assert";
+import { RepetitionDetector } from "../src/repetition_detector.js";
 
 const MOCK_VLLM_PORT = 18995;
 const PROXY_PORT = 18996;
+
+// ---------------------------------------------------------------------------
+// Repetition-detector tiering (P2b): code/diff-significant chars (e.g. a
+// git-diff '+' hunk) get a HIGH limit of 500, so legitimate long runs in
+// model reports pass through, while true degeneracy still trips.
+// ---------------------------------------------------------------------------
+function testRepetitionTiering() {
+  // 120 consecutive '+' (a code char) must PASS (limit 500).
+  let d = new RepetitionDetector();
+  assert.strictEqual(
+    d.feed("+".repeat(120)),
+    null,
+    "120 consecutive '+' must pass (code char, limit 500)"
+  );
+
+  // 400 consecutive '+' must still PASS (below the 500 code limit).
+  d = new RepetitionDetector();
+  assert.strictEqual(
+    d.feed("+".repeat(400)),
+    null,
+    "400 consecutive '+' must pass (code char, limit 500)"
+  );
+
+  // 800 consecutive '+' must TRIP the breaker (exceeds the 500 code limit).
+  d = new RepetitionDetector();
+  const trip = d.feed("+".repeat(800));
+  assert.ok(trip, "800 consecutive '+' must trip the breaker");
+  assert.strictEqual(trip.type, "character", "800 '+' trips as a character repeat");
+  assert.strictEqual(trip.pattern, "+", "800 '+' pattern is '+'");
+
+  // Regression guard: a true degeneracy char (a plain letter, NOT in the
+  // code set) still trips at the strict default limit of 35.
+  d = new RepetitionDetector();
+  const letter = d.feed("a".repeat(40));
+  assert.ok(letter, "40 consecutive 'a' must still trip (default limit 35)");
+  assert.strictEqual(letter.type, "character");
+
+  // Whitespace/divider (e.g. '-') keeps the 120 limit: 119 passes, 120 trips.
+  d = new RepetitionDetector();
+  assert.strictEqual(d.feed("-".repeat(119)), null, "119 '-' must pass (divider limit 120)");
+  d = new RepetitionDetector();
+  assert.ok(d.feed("-".repeat(120)), "120 '-' must trip (divider limit 120)");
+
+  console.log("[PASS] Repetition tiering: 120/400 '+' pass, 800 '+' trips, 'a' trips at 35, '-' trips at 120.");
+}
 
 function createProxy(upstreamPort, listenPort) {
   const server = http.createServer((req, res) => {
@@ -101,6 +147,9 @@ function createProxy(upstreamPort, listenPort) {
 
 async function testSuite() {
   console.log("=== Testing Stream Proxy with Multi-Byte Splitting & Mid-Stream Error Translation ===");
+
+  // Repetition-detector tiering (offline, no server needed).
+  testRepetitionTiering();
 
   // Mock server
   const mockServer = http.createServer((req, res) => {
