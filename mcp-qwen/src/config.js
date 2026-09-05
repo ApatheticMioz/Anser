@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { winHomeWsl } from "./platform.js";
 
 export const IS_WINDOWS = process.platform === "win32";
 
@@ -68,10 +69,13 @@ export const SLOT_POLL_MS = 1_000;
 
 export const QWEN_STATE_DIR = process.env.QWEN_STATE_DIR || (() => {
   if (IS_WINDOWS) return path.join(os.homedir(), ".qwen");
-  const winUserHomeQwen = "/mnt/c/Users/Apath/.qwen";
-  try {
-    if (fs.existsSync(winUserHomeQwen)) return winUserHomeQwen;
-  } catch {}
+  const winHomeWsl = winHomeWsl();
+  if (winHomeWsl) {
+    const winUserHomeQwen = path.join(winHomeWsl, ".qwen");
+    try {
+      if (fs.existsSync(winUserHomeQwen)) return winUserHomeQwen;
+    } catch {}
+  }
   return path.join(os.homedir(), ".qwen");
 })();
 

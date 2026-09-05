@@ -16,6 +16,7 @@ import {
   WEDGE_COUNTER_FILE,
 } from "./config.js";
 import { getApiKeySync, runWslCommand } from "./wsl_bridge.js";
+import { streamProxyPath } from "./platform.js";
 
 // Indirection for the WSL command runner so tests can run fully offline
 // (no real wsl.exe / bash subprocesses). Defaults to the real runner.
@@ -329,7 +330,7 @@ export async function ensureStreamProxyRunning() {
       await runWslCommand(`pkill -9 -f 'stream_proxy.js' 2>/dev/null || true`);
       await new Promise((r) => setTimeout(r, 300));
       await runWslCommand(
-        `setsid node /mnt/d/LLM_Ecosystem/mcp-qwen/stream_proxy.js < /dev/null > /tmp/stream_proxy.log 2>&1 &`
+        `setsid node ${streamProxyPath()} < /dev/null > /tmp/stream_proxy.log 2>&1 &`
       );
     } catch {}
   } else {

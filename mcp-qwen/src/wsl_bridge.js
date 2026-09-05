@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { IS_WINDOWS, BOOT_TIMEOUT_MS } from "./config.js";
+import { wslDistro, wslHome, winHome, apiKeyCandidates } from "./platform.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,10 +25,10 @@ export function isWslLocation(inputPath) {
 }
 
 /**
- * Normalizes any path to a clean POSIX WSL path (e.g. /home/apath/Work).
+ * Normalizes any path to a clean POSIX WSL path (e.g. <wslHome>/Work).
  */
 export function toPosixWslPath(inputPath) {
-  if (!inputPath) return "/home/apath";
+  if (!inputPath) return wslHome();
   let p = inputPath.trim();
   const uncMatch = p.match(/^\\\\wsl(?:\.localhost|\$)\\[^\\]+\\(.*)/i);
   if (uncMatch) {
@@ -43,13 +44,13 @@ export function toPosixWslPath(inputPath) {
 }
 
 /**
- * Normalizes any path to a valid Windows path (e.g. D:\LLM_Ecosystem or \\wsl.localhost\Ubuntu\home\...).
+ * Normalizes any path to a valid Windows path (e.g. D:\LLM_Ecosystem or \\wsl.localhost\<distro>\home\...).
  */
 export function toWindowsPath(inputPath) {
   if (!inputPath) return process.cwd();
   let p = inputPath.trim();
   if (p.startsWith("/home/")) {
-    return `\\\\wsl.localhost\\Ubuntu${p.replace(/\//g, "\\")}`;
+    return `\\\\wsl.localhost\\${wslDistro()}${p.replace(/\//g, "\\")}`;
   }
   const mntMatch = p.match(/^\/mnt\/([a-zA-Z])\/(.*)/);
   if (mntMatch) {
@@ -71,10 +72,11 @@ export function normalizeWorkspacePath(inputPath) {
 
 export function getGooseExecutable() {
   if (IS_WINDOWS) {
-    return "C:\\Users\\Apath\\.local\\bin\\goose.exe";
+    return path.join(winHome(), ".local", "bin", "goose.exe");
   }
-  if (existsSync("/home/apath/.local/bin/goose")) {
-    return "/home/apath/.local/bin/goose";
+  const wslGoose = `${wslHome()}/.local/bin/goose`;
+  if (existsSync(wslGoose)) {
+    return wslGoose;
   }
   return "goose";
 }
@@ -82,16 +84,7 @@ export function getGooseExecutable() {
 let cachedApiKey = null;
 export function getApiKeySync() {
   if (cachedApiKey) return cachedApiKey;
-  const candidatePaths = IS_WINDOWS
-    ? [
-        "\\\\wsl.localhost\\Ubuntu\\home\\apath\\qwen-serving\\api_key.txt",
-        "\\\\wsl$\\Ubuntu\\home\\apath\\qwen-serving\\api_key.txt",
-        "C:\\Users\\Apath\\qwen-serving\\api_key.txt",
-      ]
-    : [
-        "/home/apath/qwen-serving/api_key.txt",
-        path.join(process.env.HOME || "/root", "qwen-serving/api_key.txt"),
-      ];
+  const candidatePaths = apiKeyCandidates();
 
   for (const cp of candidatePaths) {
     try {
@@ -107,7 +100,7 @@ export function getApiKeySync() {
 export function killProcessTree(child, sessionId) {
   if (sessionId) {
     if (IS_WINDOWS) {
-      execFile("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", `goose run --name ${sessionId}`], () => {});
+      execFile("wsl.exe", ["-d", wslDistro(), "--", "pkill", "-9", "-f", `goose run --name ${sessionId}`], () => {});
     } else {
       execFile("pkill", ["-9", "-f", `goose run --name ${sessionId}`], () => {});
     }
@@ -130,7 +123,7 @@ export function killProcessTreeSync(child, tag) {
   if (tag) {
     try {
       if (IS_WINDOWS) {
-        execFileSync("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", tag], {
+        execFileSync("wsl.exe", ["-d", wslDistro(), "--", "pkill", "-9", "-f", tag], {
           timeout: 3000,
           stdio: "ignore",
         });
@@ -163,7 +156,7 @@ export function killProcessTreeSync(child, tag) {
 
 export function runWslCommand(cmd) {
   if (IS_WINDOWS) {
-    return execFileAsync("wsl.exe", ["-d", "Ubuntu", "--", "bash", "-c", cmd], {
+    return execFileAsync("wsl.exe", ["-d", wslDistro(), "--", "bash", "-c", cmd], {
       timeout: BOOT_TIMEOUT_MS + 10_000,
     });
   } else {

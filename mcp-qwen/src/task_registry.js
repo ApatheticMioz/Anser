@@ -12,6 +12,7 @@ import {
 } from "./config.js";
 import { pidAlive, listGooseSlots, clearAllGooseSlots } from "./semaphore.js";
 import { killProcessTree } from "./wsl_bridge.js";
+import { wslDistro } from "./platform.js";
 
 try {
   fs.mkdirSync(TASK_DIR, { recursive: true });
@@ -205,7 +206,7 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
   // 3. Kill all running goose processes machine-wide across Windows and WSL
   if (IS_WINDOWS) {
     try {
-      execFile("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", "goose run"], () => {});
+      execFile("wsl.exe", ["-d", wslDistro(), "--", "pkill", "-9", "-f", "goose run"], () => {});
       execFile("taskkill", ["/F", "/IM", "goose.exe"], () => {});
     } catch {}
   } else {
@@ -396,7 +397,7 @@ export const statusHttpServer = http.createServer((req, res) => {
     if (diskTask) {
       if (diskTask.sessionId) {
         if (IS_WINDOWS) {
-          execFile("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
+          execFile("wsl.exe", ["-d", wslDistro(), "--", "pkill", "-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
         } else {
           execFile("pkill", ["-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
         }

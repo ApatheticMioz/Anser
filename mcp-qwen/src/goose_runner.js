@@ -22,6 +22,7 @@ import {
   getGooseExecutable,
   killProcessTree,
 } from "./wsl_bridge.js";
+import { buildSpawnProfile, wslHome } from "./platform.js";
 import {
   ensureServerRunning,
   ensureStreamProxyRunning,
@@ -186,15 +187,27 @@ export async function sessionExistsOnDisk(sessionId, targetInWsl = false) {
   try {
     let stdout = "";
     if (targetInWsl && IS_WINDOWS) {
-      const res = await execFileAsync(
-        "wsl.exe",
-        ["-d", "Ubuntu", "--exec", "/home/apath/.local/bin/goose", "session", "list"],
-        { timeout: 10000 }
-      );
+      const profile = buildSpawnProfile({
+        command: `${wslHome()}/.local/bin/goose`,
+        args: ["session", "list"],
+        mode: "wsl",
+        useCd: false,
+      });
+      const res = await execFileAsync(profile.command, profile.args, {
+        ...profile.options,
+        timeout: 10000,
+      });
       stdout = res.stdout;
     } else {
-      const gooseExe = getGooseExecutable();
-      const res = await execFileAsync(gooseExe, ["session", "list"], { timeout: 10000 });
+      const profile = buildSpawnProfile({
+        command: getGooseExecutable(),
+        args: ["session", "list"],
+        mode: "windows",
+      });
+      const res = await execFileAsync(profile.command, profile.args, {
+        ...profile.options,
+        timeout: 10000,
+      });
       stdout = res.stdout;
     }
     const lines = stdout.split("\n");
@@ -440,44 +453,40 @@ export function startGooseTask({
         let child;
         if (targetInWsl) {
           if (IS_WINDOWS) {
-            const wslEnv = {
-              ...process.env,
-              GOOSE_PROVIDER: "openai",
-              GOOSE_MODEL: "qwen3.8-27b",
-              OPENAI_BASE_URL: `http://localhost:${STREAM_PROXY_PORT}/v1`,
-              OPENAI_API_KEY: "dummy",
-              OPENAI_TIMEOUT: "3600",
-              GOOSE_STREAM_TIMEOUT: "3600",
-              PYTHONIOENCODING: "utf-8",
-              PYTHONUTF8: "1",
-              LANG: "C.UTF-8",
-              LC_ALL: "C.UTF-8",
-              GOOSE_WORKING_DIR: targetCwd,
-              WSLENV:
-                "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u:OPENAI_TIMEOUT/u:GOOSE_STREAM_TIMEOUT/u:PYTHONIOENCODING/u:PYTHONUTF8/u:LANG/u:LC_ALL/u:GOOSE_WORKING_DIR/u",
-            };
-            const wslArgs = [
-              "-d",
-              "Ubuntu",
-              "--cd",
-              targetCwd,
-              "--exec",
-              "/usr/bin/env",
-              "PATH=/home/apath/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-              "/home/apath/.local/bin/goose",
-              ...args,
-            ];
-            child = spawn("wsl.exe", wslArgs, {
-              env: wslEnv,
-              stdio: ["ignore", "pipe", "pipe"],
-              detached: false,
-            });
-          } else {
-            const gooseExe = getGooseExecutable();
-            child = spawn(gooseExe, args, {
+            const profile = buildSpawnProfile({
+              command: "/usr/bin/env",
+              args: [
+                `PATH=${wslHome()}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+                `${wslHome()}/.local/bin/goose`,
+                ...args,
+              ],
               cwd: targetCwd,
+              mode: "wsl",
               env: {
-                ...process.env,
+                GOOSE_PROVIDER: "openai",
+                GOOSE_MODEL: "qwen3.8-27b",
+                OPENAI_BASE_URL: `http://localhost:${STREAM_PROXY_PORT}/v1`,
+                OPENAI_API_KEY: "dummy",
+                OPENAI_TIMEOUT: "3600",
+                GOOSE_STREAM_TIMEOUT: "3600",
+                PYTHONIOENCODING: "utf-8",
+                PYTHONUTF8: "1",
+                LANG: "C.UTF-8",
+                LC_ALL: "C.UTF-8",
+                GOOSE_WORKING_DIR: targetCwd,
+                WSLENV:
+                  "GOOSE_PROVIDER/u:GOOSE_MODEL/u:OPENAI_BASE_URL/u:OPENAI_API_KEY/u:OPENAI_TIMEOUT/u:GOOSE_STREAM_TIMEOUT/u:PYTHONIOENCODING/u:PYTHONUTF8/u:LANG/u:LC_ALL/u:GOOSE_WORKING_DIR/u",
+              },
+            });
+            child = spawn(profile.command, profile.args, profile.options);
+          } else {
+            const profile = buildSpawnProfile({
+              command: getGooseExecutable(),
+              args,
+              cwd: targetCwd,
+              mode: "windows",
+              detached: true,
+              env: {
                 GOOSE_PROVIDER: "openai",
                 GOOSE_MODEL: "qwen3.8-27b",
                 OPENAI_BASE_URL: `http://localhost:${STREAM_PROXY_PORT}/v1`,
@@ -490,16 +499,17 @@ export function startGooseTask({
                 LC_ALL: "C.UTF-8",
                 GOOSE_WORKING_DIR: targetCwd,
               },
-              stdio: ["ignore", "pipe", "pipe"],
-              detached: true,
             });
+            child = spawn(profile.command, profile.args, profile.options);
           }
         } else {
-          const gooseExe = getGooseExecutable();
-          child = spawn(gooseExe, args, {
+          const profile = buildSpawnProfile({
+            command: getGooseExecutable(),
+            args,
             cwd: targetCwd,
+            mode: "windows",
+            detached: !IS_WINDOWS,
             env: {
-              ...process.env,
               GOOSE_WORKING_DIR: targetCwd,
               GOOSE_PROVIDER: "openai",
               GOOSE_MODEL: "qwen3.8-27b",
@@ -510,9 +520,8 @@ export function startGooseTask({
               LANG: "C.UTF-8",
               LC_ALL: "C.UTF-8",
             },
-            stdio: ["ignore", "pipe", "pipe"],
-            detached: !IS_WINDOWS,
           });
+          child = spawn(profile.command, profile.args, profile.options);
         }
 
         taskEntry.child = child;
@@ -586,30 +595,39 @@ export function startGooseTask({
               let execOptions = { timeout: 300_000 };
               if (targetInWsl) {
                 if (IS_WINDOWS) {
-                  shellCmd = {
-                    bin: "wsl.exe",
+                  const profile = buildSpawnProfile({
+                    command: "/usr/bin/env",
                     args: [
-                      "-d",
-                      "Ubuntu",
-                      "--cd",
-                      targetCwd,
-                      "--exec",
-                      "/usr/bin/env",
-                      "PATH=/home/apath/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                      `PATH=${wslHome()}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
                       "/bin/bash",
                       "-c",
                       testCommand,
                     ],
-                  };
+                    cwd: targetCwd,
+                    mode: "wsl",
+                  });
+                  shellCmd = { bin: profile.command, args: profile.args };
                 } else {
-                  shellCmd = { bin: "bash", args: ["-c", testCommand] };
-                  execOptions.cwd = targetCwd;
+                  const profile = buildSpawnProfile({
+                    command: "bash",
+                    args: ["-c", testCommand],
+                    cwd: targetCwd,
+                    mode: "windows",
+                  });
+                  shellCmd = { bin: profile.command, args: profile.args };
+                  execOptions.cwd = profile.options.cwd;
                 }
               } else {
-                shellCmd = IS_WINDOWS
-                  ? { bin: "powershell.exe", args: ["-NoProfile", "-Command", testCommand] }
-                  : { bin: "bash", args: ["-c", testCommand] };
-                execOptions.cwd = toWindowsPath(cwd);
+                const profile = buildSpawnProfile({
+                  command: IS_WINDOWS ? "powershell.exe" : "bash",
+                  args: IS_WINDOWS
+                    ? ["-NoProfile", "-Command", testCommand]
+                    : ["-c", testCommand],
+                  cwd: toWindowsPath(cwd),
+                  mode: "windows",
+                });
+                shellCmd = { bin: profile.command, args: profile.args };
+                execOptions.cwd = profile.options.cwd;
               }
 
               let testOut = "";
