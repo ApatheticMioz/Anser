@@ -5,9 +5,15 @@
  * or touch C:\, D:\ (root), or other system directories via FS, AST, AVO, or Shell.
  */
 
+import fs from "node:fs";
 import { SandboxFsService } from "../src/harness/services/sandbox_fs.js";
 import { AstService } from "../src/harness/services/ast_service.js";
-import { ShellExecutorService, validateShellSafety } from "../src/harness/services/shell_executor.js";
+import { ShellExecutorService } from "../src/harness/services/shell_executor.js";
+import {
+  validateShellSafety,
+  assertDeadManFuse,
+  CANARY_DISASTER_FUSE_TOKEN,
+} from "../src/harness/services/shell_validator.js";
 import { AvoOperator } from "../src/harness/avo/avo_operator.js";
 
 async function verifySecurity() {
@@ -17,7 +23,7 @@ async function verifySecurity() {
 
   const fsService = new SandboxFsService({ root: workspaceRoot });
   const astService = new AstService({ root: workspaceRoot });
-  const shellService = new ShellExecutorService({ cwd: workspaceRoot });
+  const shellService = new ShellExecutorService({ cwd: workspaceRoot, dryRun: true });
   const avoOperator = new AvoOperator({ workspaceRoot });
 
   let totalTests = 0;
@@ -187,13 +193,15 @@ async function verifySecurity() {
     'powershell -Command "Remove-Item C:\\Users\\* -Recurse -Force"',
   ];
 
+  // Category 5: Dangerous Shell Command Blocking (pure in-memory validation via shell_validator.js)
+  // Zero OS child_process calls are made: testing cannot execute any dangerous payload.
   for (const cmd of dangerousCommands) {
     totalTests++;
     try {
-      await shellService.execute({ command: cmd });
-      recordBreach(`shellExecute(${cmd})`);
+      validateShellSafety(cmd, workspaceRoot, workspaceRoot);
+      recordBreach(`shellValidate(${cmd})`);
     } catch (err) {
-      recordBlocked(`shellExecute(${cmd})`, err);
+      recordBlocked(`shellValidate(${cmd})`, err);
     }
   }
 
@@ -244,6 +252,49 @@ async function verifySecurity() {
     } catch (err) {
       recordAllowFail(`shellAllow(${cmd})`, err);
     }
+  }
+
+  // --- Category 5c: In-Memory Dead-Man Fuse & Synthetic Canary Verification ---
+  // Pure string test with dedicated synthetic non-destructive token (zero blast radius)
+  totalTests++;
+  try {
+    assertDeadManFuse(CANARY_DISASTER_FUSE_TOKEN);
+    recordBreach("deadManFuse(syntheticCanary)");
+  } catch (err) {
+    recordBlocked("deadManFuse(syntheticCanary)", err);
+  }
+
+  // --- Category 5d: Dry-Run Hard Gate Verification ---
+  // Proves that dryRun: true in ShellExecutorService bypasses spawn() completely
+  totalTests++;
+  try {
+    const res = await shellService.execute({ command: "echo safe_dry_run_simulation" });
+    if (res.stdout === "[DRY-RUN SIMULATED]") {
+      recordBlocked("shellDryRunHardGate", { message: "Verified dry-run simulated execution without spawn" });
+    } else {
+      recordBreach("shellDryRunHardGate was not simulated");
+    }
+  } catch (err) {
+    recordBreach(`shellDryRunHardGate error: ${err.message}`);
+  }
+
+  // --- Category 5e: Structural Module Isolation Guarantee ---
+  // Asserts that shell_validator.js contains zero child_process imports or execution primitives
+  totalTests++;
+  try {
+    const validatorSource = fs.readFileSync(
+      new URL("../src/harness/services/shell_validator.js", import.meta.url),
+      "utf8"
+    );
+    const hasChildProcessImport = /from\s+["'](node:)?child_process["']|require\s*\(\s*["'](node:)?child_process["']\)/i.test(validatorSource);
+    const hasLiveSpawnCall = /\b(spawn|exec|execFile|execSync|spawnSync)\s*\(/i.test(validatorSource);
+    if (hasChildProcessImport || hasLiveSpawnCall) {
+      recordBreach("shell_validator.js violates zero-child-process isolation guarantee!");
+    } else {
+      recordBlocked("shellValidatorZeroChildProcessGuarantee", { message: "Verified zero child_process references" });
+    }
+  } catch (err) {
+    recordBreach(`shellValidatorZeroChildProcessGuarantee error: ${err.message}`);
   }
 
   // --- Category 6: Shell CWD Containment Escapes ---
