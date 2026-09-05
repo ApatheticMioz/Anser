@@ -126,16 +126,16 @@ export function killProcessTree(child, sessionId) {
   }
 }
 
-export function killProcessTreeSync(child, sessionId) {
-  if (sessionId) {
+export function killProcessTreeSync(child, tag) {
+  if (tag) {
     try {
       if (IS_WINDOWS) {
-        execFileSync("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", `goose run --name ${sessionId}`], {
+        execFileSync("wsl.exe", ["-d", "Ubuntu", "--", "pkill", "-9", "-f", tag], {
           timeout: 3000,
           stdio: "ignore",
         });
       } else {
-        execFileSync("pkill", ["-9", "-f", `goose run --name ${sessionId}`], {
+        execFileSync("pkill", ["-9", "-f", tag], {
           timeout: 3000,
           stdio: "ignore",
         });

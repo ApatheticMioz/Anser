@@ -4,6 +4,8 @@
  * Executes evaluation commands and parses feedback into a quantitative FitnessScore.
  */
 
+import { condenseTraceback } from "./trace_repair.js";
+
 export class ClosedLoopEvaluator {
   constructor(options = {}) {
     this.shell = options.shell; // ShellExecutorService instance
@@ -22,6 +24,7 @@ export class ClosedLoopEvaluator {
    *   fitness: number,
    *   exitCode: number,
    *   metrics: object,
+   *   failureDigest: object|null,
    *   stdout: string,
    *   stderr: string,
    *   latencyMs: number
@@ -41,11 +44,22 @@ export class ClosedLoopEvaluator {
     const parsed = this.parseMetrics(execResult.stdout, execResult.stderr, execResult.exitCode);
     const fitness = this.calculateFitness(parsed, primaryMetric, execResult.latencyMs);
 
+    const failureDigest = !execResult.exitCode || parsed.testsFailed === 0
+      ? null
+      : condenseTraceback({
+          stdout: execResult.stdout,
+          stderr: execResult.stderr,
+          exitCode: execResult.exitCode,
+          timedOut: execResult.timedOut,
+          workspaceRoot: cwd,
+        });
+
     return {
       passed: parsed.testsFailed === 0 && execResult.exitCode === 0,
       fitness,
       exitCode: execResult.exitCode,
       metrics: parsed,
+      failureDigest,
       stdout: execResult.stdout.slice(0, 8000),
       stderr: execResult.stderr.slice(0, 8000),
       latencyMs: execResult.latencyMs,

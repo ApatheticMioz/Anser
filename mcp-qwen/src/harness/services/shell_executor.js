@@ -39,11 +39,13 @@ export class ShellExecutorService {
     let args;
     let spawnCwd = effectiveCwd;
 
+    const execTag = `qwen_sh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
     if (IS_WINDOWS) {
       if (isWslTarget) {
         executable = "wsl.exe";
         const posixCwd = toPosixWslPath(effectiveCwd);
-        args = ["-d", "Ubuntu", "--", "bash", "-c", `cd "${posixCwd}" && ${command}`];
+        args = ["-d", "Ubuntu", "--", "bash", "-c", `EXEC_TAG="${execTag}" && cd "${posixCwd}" && ${command}`];
         spawnCwd = undefined; // let WSL handle cd
       } else {
         executable = process.env.ComSpec || "cmd.exe";
@@ -51,7 +53,7 @@ export class ShellExecutorService {
       }
     } else {
       executable = "bash";
-      args = ["-c", command];
+      args = ["-c", `EXEC_TAG="${execTag}" && ${command}`];
     }
 
     return new Promise((resolve) => {
@@ -62,8 +64,9 @@ export class ShellExecutorService {
 
       const child = spawn(executable, args, {
         cwd: spawnCwd,
-        env: { ...process.env, PAGER: "cat", CI: "1" },
+        env: { ...process.env, PAGER: "cat", CI: "1", EXEC_TAG: execTag },
         stdio: ["ignore", "pipe", "pipe"],
+        detached: !IS_WINDOWS,
         windowsHide: true,
       });
 
@@ -71,7 +74,7 @@ export class ShellExecutorService {
         if (settled) return;
         timedOut = true;
         settled = true;
-        killProcessTreeSync(child);
+        killProcessTreeSync(child, execTag);
         resolve({
           stdout: stdout.trim(),
           stderr: (stderr + `\n[Command timed out after ${timeout}ms]`).trim(),

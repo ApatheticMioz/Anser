@@ -19,7 +19,17 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@ast-grep/napi": "^0.45.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@ast-grep/cli": "^0.45.3"
+  },
+  "optionalDependencies": {
+    "@ast-grep/cli-linux-x64-gnu": "^0.45.3",
+    "@ast-grep/cli-win32-x64-msvc": "^0.45.3",
+    "@ast-grep/napi-linux-x64-gnu": "^0.45.3",
+    "@ast-grep/napi-win32-x64-msvc": "^0.45.3"
   }
 }

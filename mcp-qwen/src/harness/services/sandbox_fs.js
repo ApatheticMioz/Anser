@@ -102,7 +102,16 @@ export class SandboxFsService {
    * Writes or overwrites a file.
    */
   async writeFile({ path: filePath, content, overwrite = true }) {
+    if (!filePath || typeof filePath !== "string" || filePath.trim().length === 0) {
+      throw new Error("InvalidPathError: filePath parameter is required and must be a non-empty string");
+    }
     const resolved = this.resolvePath(filePath);
+    if (resolved === path.normalize(this.root)) {
+      throw new Error(`InvalidPathError: Target path '${filePath}' resolves to the workspace root directory, not a file`);
+    }
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+      throw new Error(`InvalidPathError: Target path '${filePath}' is an existing directory, cannot overwrite as file`);
+    }
     if (fs.existsSync(resolved) && !overwrite) {
       throw new Error(`File already exists and overwrite is false: ${filePath}`);
     }

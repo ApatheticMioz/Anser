@@ -128,8 +128,10 @@ export class AvoOperator {
       best_known_fitness: best?.metrics?.fitness ?? 0,
       is_improvement: isImprovement,
       metrics: evalResult.metrics,
-      stdout: evalResult.stdout.slice(0, 2000),
-      stderr: evalResult.stderr.slice(0, 2000),
+      failure_digest: evalResult.failureDigest?.summary || null,
+      failure_detail: evalResult.failureDigest || null,
+      stdout: evalResult.stdout.slice(0, 1000),
+      stderr: evalResult.stderr.slice(0, 1000),
       recommendation: isImprovement
         ? "Fitness improved or verified. Call avo_select_candidate to accept."
         : "Candidate failed or degraded fitness. Call avo_revert_candidate to cleanly rollback.",

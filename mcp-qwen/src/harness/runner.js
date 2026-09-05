@@ -17,6 +17,7 @@ import { shellExecutorPlugin } from "./services/shell_executor.js";
 import { eventLoggerPlugin } from "./services/event_logger.js";
 import { vllmProviderPlugin } from "./services/provider_vllm.js";
 import { avoPlugin } from "./avo/avo_operator.js";
+import { astPlugin } from "./services/ast_service.js";
 import { normalizeWorkspacePath } from "../wsl_bridge.js";
 
 const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the DeepSeek AVO harness.
@@ -25,12 +26,15 @@ You pair with the Lead Architect (Gemini / Claude) to explore, design, edit, tes
 Operating Guidelines:
 1. Ground truth lives in active source code, tests, and build artifacts. Never assume or hallucinate.
 2. Use sandboxed filesystem tools: 'read_file', 'write_file', 'edit_file', 'list_dir', 'search_code'.
-3. Use 'bash' to run builds, tests, benchmarks, or git operations safely.
-4. When optimizing or refactoring, use NVIDIA AVO tools:
+3. Use structural AST tools for code discovery and refactoring:
+   - 'ast_search' to find code by syntactic pattern with metavariables (e.g. 'function $NAME($ARGS) { $$$BODY }').
+   - 'ast_replace' to perform AST-verified node replacement with compile-check safety.
+4. Use 'bash' to run builds, tests, benchmarks, or git operations safely.
+5. When optimizing or refactoring, use NVIDIA AVO tools:
    - 'avo_propose_candidate' to snapshot files before modifying.
-   - 'avo_evaluate_candidate' to test and compute fitness score.
+   - 'avo_evaluate_candidate' to test and compute fitness score (receives compact failure digests on error).
    - 'avo_select_candidate' to accept improvements, or 'avo_revert_candidate' to rollback regressions.
-5. Provide concise, direct technical summaries of your actions and findings.`;
+6. Provide concise, direct technical summaries of your actions and findings.`;
 
 export class DeepSeekAvoRunner {
   constructor(options = {}) {
@@ -81,6 +85,7 @@ export class DeepSeekAvoRunner {
     ctx.plugin(eventLoggerPlugin, { sessionId });
     ctx.plugin(vllmProviderPlugin);
     ctx.plugin(avoPlugin, { workspaceRoot: effectiveCwd });
+    ctx.plugin(astPlugin, { root: effectiveCwd });
 
     const logger = ctx.get("logger");
     const llm = ctx.get("llm");
