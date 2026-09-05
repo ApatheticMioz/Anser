@@ -11,7 +11,7 @@ import {
   AUTO_HEAL,
   WEDGE_STATS_SILENCE_S,
 } from "./config.js";
-import { normalizeWorkspacePath, killProcessTree } from "./wsl_bridge.js";
+import { normalizeWorkspacePath, canonicalizePath, killProcessTree } from "./wsl_bridge.js";
 import {
   serverInfo,
   readEngineMetrics,
@@ -125,7 +125,20 @@ export function registerTools(server) {
       timeout_ms,
       engine,
     }) => {
-      const workingDir = normalizeWorkspacePath(cwd ?? process.cwd());
+      // P4i: canonicalize the working directory ONCE at the single task-entry
+      // point, through the OS symlink/junction resolution layer. This is the
+      // provenance fix: if the MCP server process was launched with a
+      // junction/symlink cwd (e.g. D:\mnt\d\LLM_Ecosystem\mcp-qwen -> D:\),
+      // process.cwd() returns the junction literal, and every downstream
+      // service (SandboxFsService, AstService, AvoOperator, the spawned
+      // goose/runner) would inherit that literal and produce false
+      // SymlinkEscapeError/PathEscapeError. Canonicalizing here — before the
+      // cwd is persisted to the task entry, hashed into the session id, and
+      // passed to the runner — makes the entire pipeline operate on the real
+      // path. A requested real-path cwd is unaffected (realpath is a no-op on
+      // a non-junction path), and a genuinely outside cwd is still caught by
+      // the per-service containment checks downstream.
+      const workingDir = canonicalizePath(normalizeWorkspacePath(cwd ?? process.cwd()));
       const resolvedSession = resolveSessionId(workingDir, session_id);
 
       const { taskId, taskEntry, executionPromise, totalTimeoutMs } = startGooseTask({

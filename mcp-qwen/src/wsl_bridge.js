@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
+import fs from "node:fs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { IS_WINDOWS, BOOT_TIMEOUT_MS } from "./config.js";
@@ -68,6 +69,60 @@ export function normalizeWorkspacePath(inputPath) {
   if (!inputPath) return process.cwd();
   let p = inputPath.trim();
   return IS_WINDOWS ? toWindowsPath(p) : toPosixWslPath(p);
+}
+
+/**
+ * P4i: Canonicalize a path through the OS symlink/junction resolution layer.
+ *
+ * On Windows, `fs.realpathSync` resolves NTFS junctions (e.g. the
+ * `D:\mnt\d -> D:\` junction on this machine) and reparse points. On
+ * Linux/WSL it resolves POSIX symlinks. The result is the "real" path
+ * that the filesystem actually uses, which is what containment checks
+ * must compare against.
+ *
+ * Never-throw discipline: if the path does not yet exist (e.g. a root
+ * directory that has not been created), or if realpath fails for any
+ * reason, we fall back to the normalized literal. This keeps the
+ * constructor safe for not-yet-created roots while still canonicalizing
+ * every path that actually exists on disk.
+ *
+ * @param {string} p A path (Windows or POSIX form).
+ * @returns {string} The realpath-resolved path, or the normalized literal
+ *   if realpath could not be performed.
+ */
+export function canonicalizePath(p) {
+  if (!p) return p;
+  const normalized = path.normalize(p);
+  try {
+    // Fast path: the full path exists → resolve it entirely (junctions,
+    // symlinks, reparse points). This is the common case for existing files.
+    return fs.realpathSync(normalized);
+  } catch {
+    // The full path does not exist yet (e.g. a new file being written).
+    // Resolve the LONGEST EXISTING PREFIX through the OS symlink/junction
+    // layer, then re-append the non-existent tail verbatim. This keeps the
+    // "real" form of the path consistent with the real root so containment
+    // comparisons never produce a false escape, while a genuinely outside
+    // path still resolves to a real location outside the real root.
+    let dir = path.dirname(normalized);
+    let tail = path.basename(normalized);
+    while (dir && dir !== path.dirname(dir)) {
+      try {
+        const realDir = fs.realpathSync(dir);
+        return path.join(realDir, tail);
+      } catch {
+        // This ancestor does not exist either — climb one level up and fold
+        // its basename into the pending tail.
+        const parent = path.dirname(dir);
+        if (parent === dir) break; // reached the filesystem root
+        tail = path.join(path.basename(dir), tail);
+        dir = parent;
+      }
+    }
+    // No existing ancestor could be resolved (should be rare); fall back to
+    // the normalized literal. Never throw from a constructor.
+    return normalized;
+  }
 }
 
 export function getGooseExecutable() {

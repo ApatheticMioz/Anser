@@ -30,7 +30,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { IS_WINDOWS } from "../../config.js";
-import { isWslLocation, normalizeWorkspacePath, killProcessTreeSync } from "../../wsl_bridge.js";
+import { isWslLocation, normalizeWorkspacePath, killProcessTreeSync, canonicalizePath } from "../../wsl_bridge.js";
 import { toPosixWslPath, toWindowsPath, posixShell } from "../../platform.js";
 import {
   validateShellSafety,
@@ -43,7 +43,13 @@ export { validateShellSafety, assertDeadManFuse, CANARY_DISASTER_FUSE_TOKEN };
 
 export class ShellExecutorService {
   constructor(options = {}) {
-    this.defaultCwd = options.cwd ? normalizeWorkspacePath(options.cwd) : process.cwd();
+    // P4i: canonicalize the default cwd through the OS symlink/junction
+    // resolution layer so a junction/symlink cwd is stored as its real path.
+    // The CWD containment check in validateShellSafety then compares real
+    // against real, eliminating false PathEscapeError while still catching
+    // real escapes.
+    const rawCwd = options.cwd ? normalizeWorkspacePath(options.cwd) : process.cwd();
+    this.defaultCwd = canonicalizePath(rawCwd);
     this.defaultTimeoutMs = options.defaultTimeoutMs || 60_000;
     this.dryRun = Boolean(options.dryRun || process.env.QWEN_SHELL_DRY_RUN === "1");
   }
@@ -60,7 +66,14 @@ export class ShellExecutorService {
    */
   async execute({ command, cwd, timeout_ms, use_wsl = false }) {
     const t0 = Date.now();
-    const effectiveCwd = cwd ? normalizeWorkspacePath(cwd) : this.defaultCwd;
+    // P4i: canonicalize the effective cwd through the OS symlink/junction
+    // layer. this.defaultCwd is already canonical (from the constructor);
+    // canonicalize the per-call cwd the same way so the CWD containment
+    // check in validateShellSafety compares real-vs-real. This also closes a
+    // real escape vector: a symlink INSIDE the workspace that points OUTSIDE,
+    // used as a cwd, now resolves to its real (outside) location and is
+    // blocked, instead of passing a lexical in-root check.
+    const effectiveCwd = cwd ? canonicalizePath(normalizeWorkspacePath(cwd)) : this.defaultCwd;
     const timeout = timeout_ms || this.defaultTimeoutMs;
 
     // Layer 1: Strict path-aware and recursive wrapper validation

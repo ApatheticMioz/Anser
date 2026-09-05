@@ -18,7 +18,7 @@ import { eventLoggerPlugin } from "./services/event_logger.js";
 import { vllmProviderPlugin } from "./services/provider_vllm.js";
 import { avoPlugin } from "./avo/avo_operator.js";
 import { astPlugin } from "./services/ast_service.js";
-import { normalizeWorkspacePath } from "../wsl_bridge.js";
+import { normalizeWorkspacePath, canonicalizePath } from "../wsl_bridge.js";
 import { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } from "../config.js";
 
 const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the DeepSeek AVO harness.
@@ -63,7 +63,10 @@ export const REASONING_LANDING_DIRECTIVE =
 
 export class DeepSeekAvoRunner {
   constructor(options = {}) {
-    this.defaultCwd = options.cwd ? normalizeWorkspacePath(options.cwd) : process.cwd();
+    // P4i: canonicalize the default cwd through the OS symlink/junction layer
+    // so a junction/symlink cwd is stored as its real path before it is
+    // handed to any sandboxed service.
+    this.defaultCwd = canonicalizePath(options.cwd ? normalizeWorkspacePath(options.cwd) : process.cwd());
     this.defaultMaxTurns = options.maxTurns || 100;
     // Optional injection seams (used by offline tests to substitute a mock
     // LLM / logger without touching the network or the real vLLM provider).
@@ -103,7 +106,10 @@ export class DeepSeekAvoRunner {
     onToolCall,
   }) {
     const t0 = Date.now();
-    const effectiveCwd = cwd ? normalizeWorkspacePath(cwd) : this.defaultCwd;
+    // P4i: canonicalize the per-run cwd through the OS symlink/junction layer
+    // so every plugin mounted below (sandbox fs, shell, AVO, AST) receives a
+    // real path, not a junction literal.
+    const effectiveCwd = cwd ? canonicalizePath(normalizeWorkspacePath(cwd)) : this.defaultCwd;
 
     // Initialize Cordis microkernel context
     const ctx = new Context(null, `session_${sessionId}`);

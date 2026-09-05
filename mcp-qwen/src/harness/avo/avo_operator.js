@@ -17,11 +17,15 @@ import { LineageDag } from "./lineage_dag.js";
 import { ClosedLoopEvaluator } from "./evaluator.js";
 import { AvoWatchdog } from "./watchdog.js";
 import { IS_WINDOWS } from "../../config.js";
-import { toPosixWslPath, toWindowsPath } from "../../wsl_bridge.js";
+import { toPosixWslPath, toWindowsPath, canonicalizePath } from "../../wsl_bridge.js";
 
 export class AvoOperator {
   constructor(options = {}) {
-    this.workspaceRoot = options.workspaceRoot || process.cwd();
+    // P4i: canonicalize the AVO workspace root through the OS symlink/junction
+    // resolution layer so a junction/symlink cwd is stored as its real path.
+    // assertWithinWorkspace then compares realpath against a real root,
+    // eliminating false containment errors while still catching real escapes.
+    this.workspaceRoot = canonicalizePath(options.workspaceRoot || process.cwd());
     this.shell = options.shell;
     this.snapshotsDir = path.join(this.workspaceRoot, ".avo", "snapshots");
 
@@ -48,7 +52,15 @@ export class AvoOperator {
     }
     const normTarget = path.normalize(p);
     const normRoot = path.normalize(this.workspaceRoot);
-    const rel = path.relative(normRoot, normTarget);
+
+    // P4i: canonicalize BOTH sides of the containment comparison through the
+    // OS symlink/junction resolution layer so a junction-form target is
+    // compared against the real root in the same "real" path space. Real
+    // escapes (../outside, symlink-to-outside) still resolve outside the
+    // real root and are caught.
+    const realTarget = canonicalizePath(normTarget);
+    const realRoot = canonicalizePath(normRoot);
+    const rel = path.relative(realRoot, realTarget);
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
       throw new Error(`SecurityContainmentError: Refusing file operation outside workspace root: '${targetPath}'`);
     }

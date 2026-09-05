@@ -21,7 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { IS_WINDOWS } from "../../config.js";
-import { toWindowsPath, toPosixWslPath } from "../../wsl_bridge.js";
+import { toWindowsPath, toPosixWslPath, canonicalizePath } from "../../wsl_bridge.js";
 import { DEFAULT_IGNORED_DIRS } from "./sandbox_fs.js";
 
 const EXT_TO_LANG = {
@@ -103,7 +103,13 @@ function extractMetaVars(pattern) {
 
 export class AstService {
   constructor(options = {}) {
-    this.root = options.root || process.cwd();
+    // P4i: canonicalize the AST workspace root through the OS symlink/junction
+    // resolution layer so a junction/symlink cwd (e.g. D:\mnt\d -> D:\) is
+    // stored as its real path. Containment checks then compare realpath
+    // against a real root, eliminating false escape errors while still
+    // catching real escapes.
+    const rawRoot = options.root || process.cwd();
+    this.root = canonicalizePath(rawRoot);
   }
 
   detectLanguage(filePath, explicitLang) {
@@ -150,14 +156,28 @@ export class AstService {
     }
     const normalizedTarget = path.normalize(p);
     const normalizedRoot = path.normalize(this.root);
-    const rel = path.relative(normalizedRoot, normalizedTarget);
+
+    // P4i: canonicalize BOTH sides of the containment comparison through the
+    // OS symlink/junction resolution layer so a junction-form target is
+    // compared against the real root in the same "real" path space. This
+    // eliminates false PathEscapeError/SymlinkEscapeError from junction/symlink
+    // cwds while real escapes (../outside, symlink-to-outside) still resolve
+    // outside the real root and are caught.
+    const realTarget = canonicalizePath(normalizedTarget);
+    const realRoot = canonicalizePath(normalizedRoot);
+    const rel = path.relative(realRoot, realTarget);
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
       throw new Error(`PathEscapeError: Access denied. Path '${inputPath}' escapes sandbox root '${this.root}'`);
     }
 
-    // Symlink escape verification
-    this.verifySymlinkContainment(normalizedTarget, normalizedRoot);
+    // Symlink escape verification (both sides now in real-path space)
+    this.verifySymlinkContainment(realTarget, realRoot);
 
+    // Return the ORIGINAL normalized path (not the canonical one) so that
+    // downstream path labels (napi fileLabel, CLI m.file, path.relative in
+    // tests) stay consistent with the path the caller passed in. The
+    // containment decision above was made in canonical space, which is what
+    // matters for security; the returned label is only used for reporting.
     return normalizedTarget;
   }
 

@@ -7,10 +7,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { canonicalizePath } from "../../wsl_bridge.js";
 
 export class LineageDag {
   constructor(options = {}) {
-    this.workspaceRoot = options.workspaceRoot || process.cwd();
+    // P4i: canonicalize the workspace root through the OS symlink/junction
+    // layer so the .avo/ directory (lineage.json, snapshots) is anchored to
+    // the real path even when the process was launched through a junction.
+    this.workspaceRoot = canonicalizePath(options.workspaceRoot || process.cwd());
     this.avoDir = path.join(this.workspaceRoot, ".avo");
     this.dagFile = path.join(this.avoDir, "lineage.json");
     this.nodes = new Map();

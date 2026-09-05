@@ -21,6 +21,7 @@ import {
   toWindowsPath,
   getGooseExecutable,
   killProcessTree,
+  canonicalizePath,
 } from "./wsl_bridge.js";
 import { buildSpawnProfile, wslHome } from "./platform.js";
 import {
@@ -248,6 +249,18 @@ export function startGooseTask({
   higherIsBetter,
   engine = QWEN_ENGINE,
 }) {
+  // P4i: canonicalize the task cwd ONCE at the spawn boundary, through the OS
+  // symlink/junction resolution layer. This is the single point where the
+  // working directory is persisted to the task entry and handed to every
+  // downstream spawn (DeepSeekAvoRunner, legacy goose, the AVO test command).
+  // If the MCP server process was launched through a junction/symlink cwd,
+  // process.cwd() returns the junction literal; canonicalizing here makes the
+  // entire spawn pipeline operate on the real path, eliminating false
+  // SymlinkEscapeError/PathEscapeError in the child's sandboxed services.
+  // A requested real-path cwd is unaffected (realpath is a no-op on a
+  // non-junction path); a genuinely outside cwd is still caught by the
+  // per-service containment checks downstream.
+  cwd = canonicalizePath(cwd);
   const taskId = `task_${sessionId}_${Date.now()}`;
   const baseTimeoutMs = Math.max(timeoutMs ?? DEFAULT_TIMEOUT_MS, MIN_TIMEOUT_MS);
   const totalTimeoutMs =

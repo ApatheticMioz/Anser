@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { IS_WINDOWS } from "../../config.js";
-import { normalizeWorkspacePath, toWindowsPath, toPosixWslPath } from "../../wsl_bridge.js";
+import { normalizeWorkspacePath, toWindowsPath, toPosixWslPath, canonicalizePath } from "../../wsl_bridge.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -33,7 +33,13 @@ export const DEFAULT_IGNORED_DIRS = new Set([
 
 export class SandboxFsService {
   constructor(options = {}) {
-    this.root = options.root ? normalizeWorkspacePath(options.root) : process.cwd();
+    // P4i: canonicalize the sandbox root through the OS symlink/junction
+    // resolution layer so that a junction/symlink cwd (e.g. D:\mnt\d -> D:\)
+    // is stored as its real path. Containment checks then compare
+    // realpath(target) against a real root, eliminating false
+    // SymlinkEscapeError/PathEscapeError while still catching real escapes.
+    const rawRoot = options.root ? normalizeWorkspacePath(options.root) : process.cwd();
+    this.root = canonicalizePath(rawRoot);
     this.ignoredDirs = new Set([...DEFAULT_IGNORED_DIRS, ...(options.ignoredDirs || [])]);
   }
 
@@ -71,14 +77,29 @@ export class SandboxFsService {
     }
     const normalizedTarget = path.normalize(p);
     const normalizedRoot = path.normalize(this.root);
-    const rel = path.relative(normalizedRoot, normalizedTarget);
+
+    // P4i: canonicalize BOTH sides of the containment comparison through the
+    // OS symlink/junction resolution layer. This ensures that a junction-form
+    // target (e.g. D:\mnt\d\LLM_Ecosystem\...) is compared against the real
+    // root (D:\LLM_Ecosystem\...) in the same "real" path space, eliminating
+    // false PathEscapeError/SymlinkEscapeError. Real escapes (../outside,
+    // symlink-to-outside) are still caught because their realpath lands
+    // outside the real root.
+    const realTarget = canonicalizePath(normalizedTarget);
+    const realRoot = canonicalizePath(normalizedRoot);
+    const rel = path.relative(realRoot, realTarget);
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
       throw new Error(`PathEscapeError: Access denied. Path '${inputPath}' escapes sandbox root '${this.root}'`);
     }
 
-    // Symlink escape verification
-    this.verifySymlinkContainment(normalizedTarget, normalizedRoot);
+    // Symlink escape verification (both sides are now in real-path space)
+    this.verifySymlinkContainment(realTarget, realRoot);
 
+    // Return the ORIGINAL normalized path (not the canonical one) so that
+    // downstream path labels stay consistent with the path the caller passed
+    // in. The containment decision above was made in canonical space, which
+    // is what matters for security; the returned label is used for I/O and
+    // reporting (both the junction and real forms address the same file).
     return normalizedTarget;
   }
 
@@ -294,18 +315,33 @@ export class SandboxFsService {
           const full = path.join(cur, f.name);
           if (f.isDirectory()) {
             walkSearch(full);
-          } else if (f.isFile() && f.size < 500_000) {
-            try {
-              const text = fs.readFileSync(full, "utf8");
-              if (text.includes(query)) {
-                const lines = text.split("\n");
-                lines.forEach((l, idx) => {
-                  if (l.includes(query) && matches.length < max_results) {
-                    matches.push(`${path.relative(resolved, full)}:${idx + 1}: ${l.trim().slice(0, 200)}`);
-                  }
-                });
+          } else if (f.isFile()) {
+            // P4i: use statSync for the size check, NOT the dirent's f.size.
+            // Through a junction/reparse point the dirent's size is undefined
+            // (the reparse point's own size, not the target's), which made
+            // `f.size < 500_000` false and silently skipped the file.
+            // statSync follows the reparse point and returns the real size.
+            let size = f.size;
+            if (size === undefined) {
+              try {
+                size = fs.statSync(full).size;
+              } catch {
+                continue;
               }
-            } catch {}
+            }
+            if (size < 500_000) {
+              try {
+                const text = fs.readFileSync(full, "utf8");
+                if (text.includes(query)) {
+                  const lines = text.split("\n");
+                  lines.forEach((l, idx) => {
+                    if (l.includes(query) && matches.length < max_results) {
+                      matches.push(`${path.relative(resolved, full)}:${idx + 1}: ${l.trim().slice(0, 200)}`);
+                    }
+                  });
+                }
+              } catch {}
+            }
           }
         }
       };
