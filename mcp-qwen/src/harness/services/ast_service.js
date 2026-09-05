@@ -63,7 +63,13 @@ export class AstService {
         p = path.resolve(this.root, p);
       }
     }
-    return path.normalize(p);
+    const normalizedTarget = path.normalize(p);
+    const normalizedRoot = path.normalize(this.root);
+    const rel = path.relative(normalizedRoot, normalizedTarget);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new Error(`PathEscapeError: Access denied. Path '${inputPath}' escapes sandbox root '${this.root}'`);
+    }
+    return normalizedTarget;
   }
 
   getBinary() {
