@@ -1,22 +1,32 @@
 {
   "name": "mcp-qwen",
-  "version": "4.5.6",
-  "description": "Unified local Qwen3.8-27B MCP server: qwen_coworker / qwen_task / qwen_server (vLLM + DFlash2 + KVarN, Universal 245K context, zero-turn long-poll wait @18021, engine wedge detection + auto-heal, first-token timeout, global cross-process goose semaphore)",
+  "version": "5.0.0",
+  "description": "Unified local Qwen3.8-27B DeepSeek-AVO agent harness & MCP server: in-process Cordis microkernel, structural AST surgery (@ast-grep/napi), bounded traceback condenser, 90-vector zero-trust sandboxed filesystem, closed-loop evolutionary optimization (.avo/lineage.json), vLLM + DFlash2 + KVarN @ 245K context, zero-turn OS wait @18021, and engine wedge detection.",
   "main": "index.js",
   "scripts": {
-    "test": "node test_global_semaphore.js"
+    "test": "node tests/security.test.js && node tests/canary.test.js && node tests/avo.test.js && node tests/semaphore.test.js",
+    "test:all": "node tests/security.test.js && node tests/canary.test.js && node tests/avo.test.js && node tests/semaphore.test.js && node tests/stream_proxy.test.js && node tests/utf8_proxy.test.js",
+    "test:security": "node tests/security.test.js",
+    "test:canary": "node tests/canary.test.js",
+    "test:avo": "node tests/avo.test.js",
+    "test:semaphore": "node tests/semaphore.test.js",
+    "test:proxy": "node tests/stream_proxy.test.js && node tests/utf8_proxy.test.js",
+    "test:benchmark": "node tests/benchmark.test.js"
   },
   "keywords": [
     "mcp",
     "qwen3.8-27b",
     "vllm",
-    "goose",
+    "deepseek-avo",
+    "cordis",
+    "ast-grep",
+    "sandboxing",
     "dflash2",
     "kvarn",
     "avo"
   ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "@ast-grep/napi": "^0.45.3",

@@ -12,12 +12,12 @@ import path from "node:path";
 import assert from "node:assert";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { SandboxFsService } from "./src/harness/services/sandbox_fs.js";
-import { DeepSeekAvoRunner } from "./src/harness/runner.js";
-import { ShellExecutorService } from "./src/harness/services/shell_executor.js";
-import { AvoOperator } from "./src/harness/avo/avo_operator.js";
-import { getGooseExecutable } from "./src/wsl_bridge.js";
-import { IS_WINDOWS } from "./src/config.js";
+import { SandboxFsService } from "../src/harness/services/sandbox_fs.js";
+import { DeepSeekAvoRunner } from "../src/harness/runner.js";
+import { ShellExecutorService } from "../src/harness/services/shell_executor.js";
+import { AvoOperator } from "../src/harness/avo/avo_operator.js";
+import { getGooseExecutable } from "../src/wsl_bridge.js";
+import { IS_WINDOWS } from "../src/config.js";
 
 const execFileAsync = promisify(execFile);
 const BENCHMARK_TMP = path.resolve(process.cwd(), ".benchmark_tmp");

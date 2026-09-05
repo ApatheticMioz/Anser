@@ -9,6 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { IS_WINDOWS } from "../../config.js";
 import { isWslLocation, normalizeWorkspacePath, toPosixWslPath, killProcessTreeSync } from "../../wsl_bridge.js";
 

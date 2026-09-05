@@ -1,10 +1,14 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const scriptPath = path.resolve(__dirname, "..", "index.js");
 
 async function runTest() {
   console.log("=== Testing MCP FIFO Queue (MAX_CONCURRENT_GOOSE = 1) ===");
 
-  const scriptPath = process.platform === "win32" ? "D:\\LLM_Ecosystem\\mcp-qwen\\index.js" : "/mnt/d/LLM_Ecosystem/mcp-qwen/index.js";
   const transport = new StdioClientTransport({
     command: "node",
     args: [scriptPath],

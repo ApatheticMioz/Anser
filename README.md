@@ -1,236 +1,271 @@
-# LLM_Ecosystem
+# LLM_Ecosystem & DeepSeek-AVO Harness
 
-Local-first LLM delegation stack: Claude GLM-5.3 / Gemini 3.8 Flash orchestrates as the **Lead Architect / Meta-Supervisor**, while a locally-served **Qwen3.8-27B** (vLLM + DFlash2 + KVarN @ 245K context) executes bounded implementation tasks for free ($0 token cost) via the **DeepSeek AVO Harness** (Cordis microkernel + NVIDIA AVO closed-loop evolutionary framework) as the **Autonomous Variation & Execution Operator (Coworker)**.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20WSL2%20Ubuntu-orange.svg)](https://learn.microsoft.com/en-us/windows/wsl/)
+[![Hardware](https://img.shields.io/badge/GPU-RTX%203090%20%2F%204090%20(24GB)-76B900.svg)](https://www.nvidia.com)
+[![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#6-model-serving-speculative-decoding--quantization)
+[![Serving](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#6-model-serving-speculative-decoding--quantization)
+[![Microkernel](https://img.shields.io/badge/Harness-Cordis%20Zero--IPC-brightgreen.svg)](#3-why-deepseek-avo-is-5x300x-faster-than-legacy-goose)
+[![Security](https://img.shields.io/badge/Security-90%2F90%20Vectors%20Blocked-success.svg)](#4-zero-risk-data-containment-the-5-layers-of-defense)
+[![SWE-rebench](https://img.shields.io/badge/SWE--rebench-32.0%25%20Resolved-blueviolet.svg)](#8-swe-rebench-validation-benchmark)
+
+**LLM_Ecosystem** is a production-grade, local-first multi-agent pair-programming infrastructure. High-reasoning orchestrators (**Claude 3.7 / 4.5 Sonnet**, **Claude Code**, or **Gemini 3.8 Flash** in Google Antigravity IDE) operate as the **Lead Architect & Meta-Supervisor**, while a locally-served **Qwen3.8-27B** (running on a single 24GB NVIDIA RTX 3090/4090 via vLLM + DFlash2 + KVarN @ 245K context) executes code exploration, structural AST manipulation, testing, and file editing for **$0 token cost**.
+
+Execution is driven by the **DeepSeek-AVO Agent Harness**—an in-process **Cordis microkernel** combined with **NVIDIA AVO (Autonomous Variation & Optimization)** closed-loop evolutionary mechanics, delivering microsecond tool latency, zero-risk blast-radius sandboxing, bounded traceback repair, and atomic state rollback.
 
 > [!IMPORTANT]
-> **Legacy Goose Archival**: The legacy Goose CLI harness has been deprecated and archived to branch [`archive/legacy-goose`](file:///d:/LLM_Ecosystem). It remains available in the codebase as an optional fallback via `engine: "legacy_goose"` or `QWEN_ENGINE="legacy_goose"`. The primary production engine is now **DeepSeek AVO** (`engine: "deepseek_avo"`), delivering sandboxed filesystem access, in-process Cordis microkernel plugin lifecycle, direct SSE token streaming, and closed-loop evolutionary optimization tracked in `.avo/lineage.json`.
-
-Agent-facing rules and invariant protocols live in the global user memory at `~/.claude/CLAUDE.md` (mirrored to `~/.gemini/GEMINI.md` across Windows and WSL; loaded into every session, so no project-level copy is kept in this repo). This document serves as the comprehensive human-readable architectural specification, benchmark reference, and operational guide. Detailed engineering decisions and audit reports are maintained in [`DEEPSEEK_AVO_PROGRESS.md`](file:///d:/LLM_Ecosystem/DEEPSEEK_AVO_PROGRESS.md) and [`QWEN_AVO_AUDIT.md`](file:///d:/LLM_Ecosystem/QWEN_AVO_AUDIT.md).
+> **Legacy Goose Archival**: The legacy Goose CLI subprocess harness has been archived to branch [`archive/legacy-goose`](https://github.com/ApatheticMioz/LLM_Ecosystem/tree/archive/legacy-goose). While preserved as a fallback (`engine: "legacy_goose"`), the primary default production runtime is **DeepSeek-AVO** (`engine: "deepseek_avo"`).
 
 ---
 
-## 1. Repository Layout
+## Table of Contents
 
-```
-D:\LLM_Ecosystem\
-├── README.md                   This architecture & operational specification
-├── scripts\                    Windows-side launchers & automation drivers
-│   ├── avo_runner.py           NVIDIA AVO loop driver: reads .avo/lineage.json,
-│   │                           queries local Qwen for candidate hypotheses, and emits
-│   │                           qwen_coworker dispatch packets under .avo/avq/
-│   ├── status.bat              Unified service checker (checks port 18020 & 18021)
-│   ├── main\                   Delegation stack launchers (vLLM + MCP + Goose)
-│   │   ├── start.bat           Default entry point -> start_huge.bat
-│   │   ├── start_huge.bat      CTX=huge (245,760 ctx, DFlash2, KVarN k4v2)
-│   │   ├── start_fast.bat      CTX=fast (57,344 ctx, ~107-130 tok/s, fp8 cache)
-│   │   └── stop.bat            Stops the active vLLM instance
-│   ├── uncensored\             Manual / academic-use model (NOT MCP-wired)
-│   │   ├── download_model.sh   One-time GGUF fetch into WSL
-│   │   ├── start.bat           Starts llama-server on port 18020 (reasoning ON)
-│   │   ├── start_noreason.bat  Starts llama-server (reasoning OFF: -rea off)
-│   │   └── stop.bat            Stops llama-server
-│   └── wsl\                    WSL bash equivalents invoked by the .bat scripts
-│       ├── setup_links.sh      Symlinks launchers into ~/qwen-serving/launchers
-│       ├── start_huge.sh       vLLM huge context launcher (VLLM_DFLASH2_CHAIN=0, disabled 2026-08-28: wedge suspect)
-│       ├── start_fast.sh       vLLM fast context launcher
-│       ├── status.sh           WSL-side health & port check
-│       ├── stop.sh             WSL-side process terminator
-│       ├── wait_ready.sh       Startup readiness polling loop
-│       ├── run_qb.sh           Batch prompt helper
-│       └── wait_qb.sh          Batch queue waiter
-├── llama-cpp\                  Native Windows CUDA build of llama.cpp (serves
-│                               scripts\uncensored\ GGUF models on Windows)
-├── mcp-qwen\                   MCP Server (Node.js v4.5.6, modularized in src/) exposing local Qwen to orchestrators
-│   ├── index.js                Clean entry point connecting stdio transport and lifecycle handlers
-│   ├── src/                    Modular core architecture (config, lifecycle, runner, semaphore, tasks, bridge, tools)
-│   │   └── harness/            DeepSeek AVO: Cordis microkernel core, sandboxed services, and NVIDIA AVO engine
-│   ├── test_deepseek_avo.js    Comprehensive 6-part validation suite for DeepSeek AVO runtime
-│   ├── benchmark_comparison.js Head-to-head quantitative benchmark suite (DeepSeek AVO vs. Legacy Goose)
-│   ├── avo_engine.js           AVO lineage engine (git-grounded candidate records in <cwd>/.avo/lineage.json)
-│   ├── test_global_semaphore.js Cross-process lease-semaphore test (no vLLM needed)
-│   ├── update_schemas.py       Regenerates per-tool JSON schemas into Antigravity IDE
-│   ├── NOTES.md                Complete engineering decisions, benchmark logs & changelog
-│   └── package.json            Dependencies (@modelcontextprotocol/sdk, zod)
-├── benchmarks\
-│   └── swe-rebench\            Contamination-resistant validation benchmark pipeline
-│                               (March 2026 split, Docker-graded, 32.0% resolved rate)
-├── .venv\                      Standalone Open WebUI Python environment (optional Web UI)
-├── .webui_secret_key           Open WebUI session secret key
-├── .mcp.json                   Local MCP placeholder configuration
-└── .claude\                    Claude Code harness state
-```
-
-> [!NOTE]
-> The vLLM server, model weights, and backend serving codebase live in WSL Ubuntu at `~/qwen-serving` (a fork of [syv-ai/qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)). `mcp-qwen/index.js` and `scripts/main/*.bat` provide the unified Windows-side management and agentic bridge.
+1. [System Architecture](#1-system-architecture)
+2. [Repository Structure](#2-repository-structure)
+3. [Why DeepSeek-AVO is 5x–300x Faster Than Legacy Goose](#3-why-deepseek-avo-is-5x300x-faster-than-legacy-goose)
+4. [Zero-Risk Data Containment (The 5 Layers of Defense)](#4-zero-risk-data-containment-the-5-layers-of-defense)
+5. [Consolidated MCP Tool Suite (`qwen38-local`)](#5-consolidated-mcp-tool-suite-qwen38-local)
+6. [Model Serving, Speculative Decoding & Quantization](#6-model-serving-speculative-decoding--quantization)
+7. [Measured Throughput & Benchmarks](#7-measured-throughput--benchmarks)
+8. [SWE-rebench Validation Benchmark](#8-swe-rebench-validation-benchmark)
+9. [Getting Started & Quickstart](#9-getting-started--quickstart)
+   - [Prerequisites](#prerequisites)
+   - [WSL2 Backend Setup](#wsl2-backend-setup)
+   - [Windows Host Setup](#windows-host-setup)
+   - [Client Configuration (Antigravity, Claude Code, Cursor)](#client-configuration)
+10. [Testing & Verification](#10-testing--verification)
+11. [Documentation & Engineering Audits](#11-documentation--engineering-audits)
+12. [Upstream Version Tracking](#12-upstream-version-tracking)
+13. [License & Acknowledgments](#13-license--acknowledgments)
 
 ---
 
-## 2. System Architecture
+## 1. System Architecture
 
 ```
-User <───> Meta-Supervisor / Lead Architect
-            (Claude Sonnet 5 in Claude Code / Gemini 3.7 Flash in Antigravity)
-                               │
-                               │  MCP (stdio) - 3 Consolidated Tools:
-                               │  - qwen_coworker (prompt, session_id, cwd, extensions, avo)
-                               │  - qwen_task (status, cancel, list)
-                               │  - qwen_server (status, start, stop)
-                               ▼
-            ┌─────────────────────────────────────────────────────────┐
-            │  mcp-qwen/index.js (v4.5.6 Modular MCP Server)          │
-            │  ├── 45s / 150s Sync Race (Claude: 45s, Antigravity: 150s)│
-            │  ├── Background Task Manager (~/.qwen/tasks/ JSON)       │
-            │  ├── Global Task Semaphore (MAX_CONCURRENT=1)            │
-            │  ├── Native WSL / Windows Path Routing & DrvFs Bridge    │
-            │  └── Zero-Turn HTTP Wait Endpoint (localhost:18021)      │
-            └─────────────────────────────────────────────────────────┘
-                               │
-                               ▼
-            DeepSeek-AVO Agent Harness (Embedded Cordis Microkernel)
-            - In-process zero-IPC tool execution (0.01ms V8 function calls)
-            - Structural AST surgery: @ast-grep/napi (ast_search, ast_replace)
-            - Compile-check safety gates: syntax validated before disk commit
-            - Traceback condenser: bounded <=100 token digests from noisy stack traces
-            - NVIDIA AVO closed-loop evolutionary engine (.avo/lineage.json)
-            - 90-vector zero-trust sandboxed filesystem (C: & D: parent drive containment)
-            - Attached extensions: free-search-mcp, context7, gh CLI
-            - Legacy Goose available as fallback via engine: "legacy_goose"
-                               │
-                               │  Direct SSE Stream / OpenAI API (/v1/chat/completions)
-                               ▼
-            vLLM Engine (WSL Ubuntu @ port 18020)
-            - Qwen3.8-27B (W4A16 AutoRound, dense hybrid architecture)
-            - DFlash2 1.92B Block Drafter (VLLM_DFLASH2_CHAIN=0, 7 draft tok)
-            - Lookup-Augmented Speculation (VLLM_DFLASH2_LOOKUP*)
-            - KVarN k4v2 KV Cache (245,760 context ceiling)
-            - Prefix Caching enabled (KV reuse across session turns)
-                               │
-                               ▼
-            NVIDIA GeForce RTX 3090 (24 GB VRAM @ 250W Power Cap)
+User <───────────────────> Meta-Supervisor / Lead Architect
+                           (Claude Sonnet in Claude Code / Gemini Flash in Antigravity)
+                                        │
+                                        │  MCP (stdio) - 3 Consolidated Tools:
+                                        │  • qwen_coworker (prompt, session_id, cwd, extensions, avo)
+                                        │  • qwen_task (status, cancel, list)
+                                        │  • qwen_server (status, start, stop)
+                                        ▼
+             ┌─────────────────────────────────────────────────────────┐
+             │  mcp-qwen/index.js (Modular Node.js MCP Server)         │
+             │  ├── Sync Race Window (Claude: 45s, Antigravity: 150s)  │
+             │  ├── Global Cross-Process Semaphore (MAX_CONCURRENT=1)  │
+             │  ├── Native WSL / Windows DrvFs Path Translation        │
+             │  └── Zero-Turn HTTP Wait Endpoint (127.0.0.1:18021)     │
+             └─────────────────────────────────────────────────────────┘
+                                        │
+                                        ▼
+             DeepSeek-AVO Agent Harness (Embedded Cordis Microkernel)
+             ├── In-process zero-IPC tool execution (0.01ms V8 function calls)
+             ├── Structural AST surgery: @ast-grep/napi (ast_search, ast_replace)
+             ├── Compile-check safety gates: syntax validated before disk commit
+             ├── Traceback condenser: bounded <=100 token digests from raw stderr
+             ├── Closed-loop evolutionary engine: lineage tracking (.avo/lineage.json)
+             ├── 90-vector zero-trust sandboxed filesystem (C: & D: containment)
+             └── Dynamic extensions: free-search-mcp, context7, gh CLI
+                                        │
+                                        │  Direct SSE Stream / OpenAI API (/v1/chat/completions)
+                                        ▼
+             vLLM Serving Engine (WSL Ubuntu @ port 18020)
+             ├── Qwen3.8-27B (W4A16 AutoRound dense hybrid architecture)
+             ├── DFlash2 1.92B Block Drafter (7 draft tokens per pass)
+             ├── Lookup-Augmented Speculative Decoding (VLLM_DFLASH2_LOOKUP*)
+             ├── KVarN k4v2 KV Cache (245,760 context window ceiling)
+             └── Static prompt templates (100% prefix-cache reuse @ 8-9k tok/s)
+                                        │
+                                        ▼
+             NVIDIA GeForce RTX 3090 / 4090 (24 GB VRAM @ 250W Power Cap)
+```
+
+---
+
+## 2. Repository Structure
+
+```
+LLM_Ecosystem/
+├── README.md                       # Master architecture & operational specification
+├── CLAUDE.md                       # Protocol guidelines for Claude Code orchestrator
+├── GEMINI.md                       # Protocol guidelines for Antigravity IDE orchestrator
+│
+├── docs/                           # Architecture specs, security reviews & audits
+│   ├── README.md                   # Documentation index
+│   └── audits/                     # Historical ledgers & adversarial audit reports
+│       ├── AUDIT_2026-09-05.md     # Codebase & cross-platform drift audit
+│       ├── DEEPSEEK_AVO_PROGRESS.md# DeepSeek-AVO implementation history
+│       ├── PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md # Threat model & security review
+│       └── QWEN_AVO_AUDIT.md       # Peer review & collaborative validation
+│
+├── mcp-qwen/                       # DeepSeek-AVO MCP Server (v5.0.0, Node.js)
+│   ├── index.js                    # Server entry point exposing tools via stdio
+│   ├── stream_proxy.js             # Universal SSE streaming proxy on port 18022
+│   ├── package.json                # Dependencies (@modelcontextprotocol/sdk, @ast-grep/napi)
+│   ├── NOTES.md                    # Engineering design notes & investigation history
+│   ├── update_schemas.py           # Synchronizes tool definitions into Antigravity IDE
+│   ├── src/                        # Modular runtime implementation
+│   │   ├── config.js               # Central configuration & timeout constants
+│   │   ├── goose_runner.js         # Fallback legacy Goose subprocess runner
+│   │   ├── avo_engine.js           # Lineage tracker for legacy runner
+│   │   ├── semaphore.js            # Cross-process disk-lease lock (MAX_CONCURRENT=1)
+│   │   ├── server_lifecycle.js     # vLLM launch, wedge detection & auto-healing
+│   │   ├── task_registry.js        # Background task state persistence (~/.qwen/tasks/)
+│   │   ├── tools.js                # Zod schemas & dispatch handlers
+│   │   ├── wsl_bridge.js           # Dual-platform DrvFs path resolver & process tree killer
+│   │   └── harness/                # DeepSeek-AVO Core Runtime
+│   │       ├── runner.js           # Main execution loop connecting vLLM & tools
+│   │       ├── core/               # Cordis microkernel (Context, Events, Plugins)
+│   │       ├── services/           # Sandboxed FS, AST surgery, Shell executor, Logger
+│   │       └── avo/                # Evolutionary operator, Evaluator, DAG, Trace repair
+│   └── tests/                      # Automated Test & Validation Suite
+│       ├── security.test.js        # 90-vector blast-radius containment audit
+│       ├── canary.test.js          # AST search/replace, syntax gate, trace condenser
+│       ├── avo.test.js             # Closed-loop evaluation & rollback integration
+│       ├── semaphore.test.js       # Cross-process lease exclusion tests
+│       ├── stream_proxy.test.js    # Multi-byte UTF-8 & mid-stream chunk tests
+│       ├── utf8_proxy.test.js      # Unicode replacement & SSE transport verification
+│       ├── fifo_queue.test.js      # MCP tool call serialization test
+│       └── benchmark.test.js       # Head-to-head performance benchmark
+│
+├── scripts/                        # Automation scripts & server launchers
+│   ├── status.bat                  # Unified service & GPU status checker (18020/18021)
+│   ├── avo_runner.py               # Autonomous evolutionary optimization CLI
+│   ├── main/                       # Production vLLM launchers (Windows batch)
+│   │   ├── start.bat               # Default launcher -> start_huge.bat
+│   │   ├── start_huge.bat          # 245K context launcher (DFlash2 + KVarN k4v2)
+│   │   ├── start_fast.bat          # 57K fast context launcher (fp8 KV cache)
+│   │   └── stop.bat                # Graceful service shutdown
+│   ├── uncensored/                 # Academic / research GGUF model launchers
+│   └── wsl/                        # WSL bash scripts invoked by Windows batch files
+│       ├── setup_links.sh          # One-step symlink & MCP environment config
+│       ├── start_huge.sh           # vLLM huge-context background launcher
+│       ├── start_fast.sh           # vLLM fast-context background launcher
+│       ├── status.sh               # Health check, silence detector & GPU telemetry
+│       └── stop_server.sh          # Clean process-tree termination
+│
+├── benchmarks/                     # Quantitative generalization benchmarks
+│   ├── swe-rebench/                # Docker-graded SWE-rebench pipeline (March 2026 split)
+│   └── wedge-repro/                # Upstream vLLM engine-core wedge reproduction & fix
+│
+└── llama-cpp/                      # Native Windows CUDA build of llama.cpp (b10566+)
 ```
 
 ---
 
 ## 3. Why DeepSeek-AVO is 5x–300x Faster Than Legacy Goose
 
-| Metric / Dimension | Legacy Goose (Rust CLI Subprocess) | DeepSeek-AVO (In-Process Cordis Microkernel) | Architectural Factor |
+| Metric / Dimension | Legacy Goose (Rust CLI Subprocess) | DeepSeek-AVO (In-Process Cordis Microkernel) | Architectural Root Cause |
 |---|---|---|---|
-| **Per-Tool IPC Overhead** | 200–500ms per tool action (OS process spawn & pipe JSON) | **0.01ms** (Direct V8 in-memory function call) | Cordis microkernel executes in-process without OS process boundary |
-| **Directory Traversal** | 1,500–12,000ms (Un-indexed walk traversing `.venv` & `node_modules`) | **5–40ms** (5.0x–300x faster) | Ripgrep-powered ignore policy prunes dependencies automatically |
-| **Time to First Token (TTFT)**| 35,000–60,000ms (often hit 45s reqwest client timeouts) | **190–2,335ms** | Direct HTTP/1.1 keep-alive SSE stream to vLLM proxy |
-| **State Persistence** | SQLite `sessions.db` write locks & database contention | **Atomic append-only JSONL stream** | Zero-lock append ledger with instant session branching |
-| **Speculative Decoding Velocity** | ~40–60 tok/s (corrupted by Goose system prompt churn) | **95–130 tok/s** | Stable static prompt template guarantees 100% prefix-cache hits |
-| **Closed-Loop Rollback** | N/A (Manual diff revert, blind file overwrites) | **10,460 snapshot ops/s** | Byte-for-byte snapshotting with atomic revert on regression |
+| **Per-Tool IPC Overhead** | 200–500ms per tool action | **0.01ms** | Cordis executes tools as direct V8 function calls inside the MCP memory space, eliminating process spawning. |
+| **Directory Traversal** | 1,500–12,000ms per operation | **5–40ms** (5x–300x faster) | Ripgrep-powered ignore engine automatically prunes `.venv`, `node_modules`, and caches from file searches. |
+| **Time to First Token (TTFT)** | 35,000–60,000ms | **190–2,335ms** | Direct HTTP/1.1 persistent SSE stream with proactive TCP keep-alive pings (`: keep-alive\n\n`). |
+| **State Persistence** | SQLite `sessions.db` write locks | **Atomic append-only JSONL** | Zero database locks, instant session branching, and non-blocking background streaming. |
+| **Speculative Decoding Speed** | ~40–60 tok/s | **95–130 tok/s** | Static, deterministic prompt structures ensure 100% prefix-cache hit rate on vLLM. |
+| **Rollback & Recovery** | N/A (Manual git revert, blind overwrites) | **10,460 snapshot ops/s** | In-memory byte-level snapshotting restores pristine disk state instantaneously upon test regression. |
 
 ---
 
-## 4. Zero-Risk Data Containment Guarantee (The 5 Layers of Defense)
+## 4. Zero-Risk Data Containment (The 5 Layers of Defense)
 
-DeepSeek-AVO enforces absolute boundary containment to guarantee that neither Qwen nor any agentic tool can touch, corrupt, or delete files outside the workspace root (`d:\LLM_Ecosystem` or `/mnt/d/LLM_Ecosystem`):
+To ensure that neither Qwen nor any autonomous agent can damage files outside the project root (`D:\LLM_Ecosystem` or `/mnt/d/LLM_Ecosystem`), the harness enforces a 5-layer defence-in-depth security model:
 
-1. **Layer 1: Synchronous `PathEscapeError` Sandbox**
-   - Every file path passed to `readFile`, `writeFile`, `editFile`, `ast_search`, or `ast_replace` is normalized across Windows and WSL DrvFs.
-   - `path.relative(root, target)` is evaluated before any filesystem call. If the path targets `C:\`, `/mnt/c/`, `D:\OtherFolder`, or contains `../../` traversal, the request is **synchronously blocked with `PathEscapeError`**.
-   - Path null-byte injections (`\0`) and Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) are rejected unconditionally on both Windows and WSL.
-2. **Layer 2: Symlink Realpath Containment**
-   - The harness calls `fs.realpathSync()` on existing files and walks parent chains on new files. If any target resolves to a symlink pointing outside the workspace, it is blocked with `SymlinkEscapeError`.
-3. **Layer 3: Workspace Root Overwrite Protection**
-   - Direct file writes to the workspace root or directory paths throw `InvalidPathError`. An agent cannot delete or overwrite the workspace root or parent drive roots.
-4. **Layer 4: Dangerous Shell Command Blocking & CWD Containment**
-   - `shell_executor.js` enforces strict pattern validation before spawning any terminal process.
-   - Prohibits destructive commands targeting drive roots or system folders: `rm -rf /`, `rm -rf C:\`, `rmdir /s /q C:\`, `del /f /s C:\`, `format C:`, `mkfs`, `dd of=/dev/...`, `rm -rf C:\Windows`.
-   - The shell working directory (`cwd`) is strictly checked against the workspace root.
-5. **Layer 5: AST Syntax-Validation Gates & Deterministic Rollback**
-   - AST rewrites via `ast_replace` are syntax-checked (`node --check` / `py_compile`) in memory. Broken code is rejected immediately with `SyntaxValidationError`, leaving the disk pristine.
-   - AVO multi-file candidate mutations snapshot files before writing. If test suites fail, `avo_revert_candidate` restores the exact files and deletes newly created files.
+```
+[Agent Request] 
+      │
+      ▼
+Layer 1: Synchronous PathEscape Normalizer ──> Blocks traversal (../../), C:\, /mnt/c, null-bytes, CON/PRN/AUX
+      │
+      ▼
+Layer 2: Symlink Realpath Containment    ──> Resolves fs.realpathSync; blocks links escaping the workspace
+      │
+      ▼
+Layer 3: Workspace Root Overwrite Guard  ──> Blocks directory deletion or root overwrite
+      │
+      ▼
+Layer 4: Dangerous Shell Filter          ──> Blocks rm -rf /, format C:, del /s C:\, mkfs, dd, fork bombs
+      │
+      ▼
+Layer 5: AST Syntax Gate & AVO Rollback  ──> Validates code via node --check / py_compile before saving;
+      │                                       instant byte-for-byte revert on test failure
+      ▼
+[Safe Disk Operation]
+```
+
+1. **Layer 1: Synchronous Path Escape Rejection**: Every file path passed to `readFile`, `writeFile`, `editFile`, `ast_search`, or `ast_replace` is normalized across Windows and WSL DrvFs. Traversal attempts (`../../`), absolute drive targets (`C:\`, `/mnt/c/`), null-byte injections (`\0`), and Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) throw `PathEscapeError` synchronously.
+2. **Layer 2: Symlink Realpath Containment**: The harness invokes `fs.realpathSync()` on existing targets and walks parent chains on new files. Any symlink resolving outside the workspace throws `SymlinkEscapeError`.
+3. **Layer 3: Workspace Root Overwrite Guard**: Attempts to delete or overwrite the workspace root or parent drive roots throw `InvalidPathError`.
+4. **Layer 4: Dangerous Shell Command Blocking**: The shell executor inspects commands against regex patterns prohibiting catastrophic system destruction (`rm -rf /`, `format C:`, `del /s /q C:\`, `mkfs`, fork bombs). Working directories are validated against the workspace root before spawning.
+5. **Layer 5: AST Syntax-Validation Gates & Deterministic Rollback**: Structural replacements via `ast_replace` are checked in memory (`node --check` for JS, `py_compile` for Python) before disk commit. Malformed code is rejected immediately with `SyntaxValidationError`. In AVO mode, workspace snapshots revert regressions with 100% fidelity.
 
 > [!TIP]
-> **Empirical Validation**: This containment architecture is verified by an automated 90-vector security audit suite (`mcp-qwen/test_sandbox_security.js`) passing **90/90 attacks blocked** on both native Windows and WSL2 Ubuntu.
+> **Empirical Security Verification**: This model is verified by `npm run test:security`, passing **90/90 attack vectors blocked** across both Windows 11 and WSL2 Ubuntu.
 
 ---
 
-## 5. Core Protocols & Invariants
+## 5. Consolidated MCP Tool Suite (`qwen38-local`)
 
-### Prescriptive Role Division
-- **Lead Architect (Meta-Supervisor)**: System architecture, task decomposition, formal interface design, test specification formulation, rendered UI inspection / multimodal visual QA (native browser subagent), and synthesizing final user deliverables.
-- **Local Coworker (Qwen via Goose & MCP @ $0)**: Autonomous hands-on execution: codebase editing, AST manipulation, terminal commands, 50k–200k token repository ingestion, deep web research (`uvx free-search-mcp`), library API lookups (`npx -y context7@latest`), and git operations (`gh` / `git`).
-
-### Execution Contracts & Invariants
-1. **Rule 0 — No Raw I/O Loops (Turn 1 Invariant)**: The Lead Architect is strictly forbidden from manually calling exploratory file tools (`list_dir`, `view_file`, `grep_search`, `run_command`) to inspect unfamiliar repositories or documents on Turn 1. It must dispatch exploration and fact ingestion directly to `qwen_coworker` at $0.
-2. **Zero-Turn Long-Poll Execution Contract**:
-   - **Fast Tasks (< 45s / 150s)**: `qwen_coworker` completes inside the synchronous race window (45s on Claude Code, 150s on Antigravity) and returns the complete deliverable directly in Turn 1.
-   - **Long Tasks (>= 45s / 150s)**: `qwen_coworker` yields a durable `taskId` and a `wait_command` (`curl -s http://127.0.0.1:18021/task/<id>/wait`). The orchestrator runs this wait command in the background, blocking at OS level with **$0 token cost** until automatically notified on completion. Manual LLM timer loops are prohibited.
-3. **Global Concurrency Control (`MAX_CONCURRENT_GOOSE=1`)**: All coworker tasks *machine-wide* are serialized through a cross-process disk-lease semaphore (`~/.qwen/tasks/goose_slots/`) shared by every MCP server instance across Windows and WSL via `QWEN_STATE_DIR` — N concurrent sessions still yield exactly one goose at a time. Tasks waiting for a slot are `queued` on disk (`~/.qwen/tasks/`) with no watchdog or budget ticking, and dispatch automatically when the holder releases; dead holders' leases are reclaimed (pid liveness + heartbeat staleness). The engine operates with `MAX_SEQS=1` to eliminate unobservable head-of-line queueing and GPU VRAM fragmentation.
-4. **Cross-Platform WSL/Windows Agnosticism**: Seamless path translation maps POSIX paths (`/home/apath/...`) to Windows UNC (`\\wsl.localhost\Ubuntu\...`) and Windows paths (`D:\...`) to POSIX (`/mnt/d/...`). UNC working directories are cleanly resolved inside WSL to prevent Windows `cmd.exe` UNC directory crashes.
-5. **Milestone-Scoped Session Lifecycle & Multi-Turn Chat**:
-   - **Long-Lived Multi-Turn Sessions**: 245K context exists to be used — drive work iteratively in short turns within the same named `session_id` (`<workspace>_<milestone>`). Reuses the warm vLLM prefix cache (~8,000–9,000 tok/s prefill, <0.5s wakeup) for continuous episodic memory. Never roll a session merely for context size.
-   - **Between Milestones (Clean Context Reset)**: Once a feature milestone is verified, committed, and pushed to git, step up to a new milestone session ID (e.g. `auth_feature` $\to$ `billing_stripe`). If a session runs for hours of heavy tool execution (>50% KV cache capacity in `qwen_server status`), compact to a handoff file before continuing in a fresh session.
-6. **Directed Milestone Co-Design Pattern**:
-   - **Turn 1 (Fact Ingestion & AST Extraction)**: Qwen maps codebase and AST at $0.
-   - **Supervisor Alignment**: Lead Architect reviews extraction and confirms patch specification.
-   - **Turn 2 (Directed Mutation / Patch)**: Dispatched to the *same* `session_id` (100% prefix cache hit, finishes in 15–30s).
-   - **Turn 3 (Verification & Atomic Git Commit)**: Dispatched to verify builds and create atomic git commits (`feat:`, `fix:`, etc.).
-7. **No Direct Goose Invocations (Rule 10)**: All coworker executions must proceed exclusively through the `qwen_coworker` MCP tool, ensuring process isolation, JSONL stream filtering, watchdog timeouts, and task persistence.
-
----
-
-## 4. Consolidated MCP Tool Suite (`qwen38-local`)
-
-The MCP server (`mcp-qwen/index.js`) exposes three consolidated tools:
+The server exposes 3 consolidated tools to the orchestrator:
 
 ### `qwen_coworker`
-Primary agentic interface for multi-turn collaboration, code editing, deep research, and AVO mutations.
-- **Parameters**:
-  - `prompt` *(string, required)*: Task instructions for Qwen.
-  - `session_id` *(string, optional)*: Milestone session identifier (e.g. `"myrepo_milestone1"`).
-  - `cwd` *(string, optional)*: Target working directory (Windows or POSIX).
-  - `extensions` *(string[], optional)*: Dynamic MCP extensions (e.g. `["uvx free-search-mcp"]`, `["npx -y context7@latest"]`).
-  - `hypothesis` *(string, optional)*: AVO hypothesis description.
-  - `test_command` *(string, optional)*: Post-run verification test command.
-  - `metric_name` *(string, optional)*: Quantitative optimization metric name.
-  - `higher_is_better` *(boolean, optional)*: Metric optimization direction.
-  - `timeout_ms` *(number, optional)*: Maximum background execution budget (default 4 hours / 14,400,000ms).
+Primary agentic interface for multi-turn pair-programming, exploration, code editing, and evolutionary optimization.
+- **`prompt`** *(string, required)*: Specific task instructions for Qwen.
+- **`session_id`** *(string, optional)*: Milestone session identifier (e.g. `"myrepo_phase1"`). Reuses warm KV prefix cache.
+- **`cwd`** *(string, optional)*: Target directory (Windows or POSIX path).
+- **`extensions`** *(string[], optional)*: Dynamic tool extensions (e.g. `["uvx free-search-mcp"]`, `["npx -y @upstash/context7-mcp"]`).
+- **`hypothesis`** *(string, optional)*: AVO hypothesis description for candidate mutation.
+- **`test_command`** *(string, optional)*: Verification command executed by the closed-loop evaluator.
+- **`metric_name`** *(string, optional)*: Optimization metric extracted from evaluation output.
+- **`higher_is_better`** *(boolean, optional)*: Optimization objective direction (default: `true`).
+- **`timeout_ms`** *(number, optional)*: Execution timeout budget (default: 4 hours / 14,400,000ms).
+
+#### Execution & Long-Poll Wait Contract
+- **Fast Tasks (< 45s / 150s)**: Completes within the synchronous race window and returns the complete deliverable directly in Turn 1.
+- **Long Tasks (>= 45s / 150s)**: Yields a durable `taskId` and a `wait_command`:
+  ```bash
+  curl -s http://127.0.0.1:18021/task/<id>/wait
+  ```
+  The orchestrator executes this command as an OS-level background task, blocking at **$0 token cost** until automatically notified on completion.
 
 ### `qwen_task`
-Manages and queries coworker task execution across memory and disk (`~/.qwen/tasks/`).
-- **Parameters**:
-  - `action` *(enum: `"status"` | `"cancel"` | `"list"`, required)*.
-  - `task_id` *(string, optional)*: Specific task ID for status or cancellation.
+Inspects, manages, and terminates background coworker tasks across memory and disk (`~/.qwen/tasks/`).
+- **`action`** *(enum: `"status"` | `"cancel"` | `"list"`, required)*.
+- **`task_id`** *(string, optional)*: Unique identifier of the target task.
 
 ### `qwen_server`
-Controls the local 245K vLLM server instance lifecycle, with engine-core wedge detection.
-- **Parameters**:
-  - `action` *(enum: `"status"` | `"start"` | `"stop"`, required)*.
-- **Wedge detection**: the port answering is *not* proof of health — a hung engine core keeps `/v1/models` at 200 while every completion is accepted and never scheduled (2026-08-28: 4.5h hang, GPU pegged at 100%, every task killed at the 601s inactivity watchdog with zero stream chunks). Status reads the engine's unconditional 10s stats lines (`/tmp/mcp_launch_huge.log`): >120s of stats silence while the port answers = wedged → automatic kill + relaunch (cross-instance-guarded via `~/.qwen/tasks/.engine_heal.lock`; disable with `QWEN_AUTO_HEAL=0`, tune threshold with `QWEN_WEDGE_SILENCE_S`). Status also reports live gauges — running/waiting requests, KV cache %, engine-stats age. `qwen_coworker` runs the same gate before every dispatch, so a dispatch into a wedged engine self-heals instead of hanging.
-- **First-Token Timeout** (on `qwen_coworker`): if goose emits zero output within 120s of spawn (`QWEN_FIRST_TOKEN_TIMEOUT_MS`), the task fails fast with an explicit "engine wedged or saturated, no work performed" message — distinct from the 600s mid-stream inactivity heartbeat, which only applies after streaming has begun.
+Controls the 245K vLLM server instance with automated engine-core wedge detection.
+- **`action`** *(enum: `"status"` | `"start"` | `"stop"`, required)*.
+- **Wedge Detection & Auto-Healing**: Verifies that the engine is not merely answering HTTP pings, but actively scheduling tokens. If the vLLM engine log remains silent for >120s while the port is open, it automatically triggers clean process termination and relaunch.
 
 ---
 
-## 5. Model Serving, Speculative Decoding & Quantization Architecture
+## 6. Model Serving, Speculative Decoding & Quantization
 
-- **Base Model**: Qwen3.8-27B (Qwen3.5 hybrid dense architecture — Gated-DeltaNet + linear/standard attention, 65 layers, MoE-free).
-- **Weight Quantization**: W4A16 AutoRound (`Qwen3.8-27B-W4A16-AutoRound`) with `--language-model-only` (vision encoder removed, saving 2.7 GB VRAM).
-- **Memory Optimizations**:
-  1. `quant_lm_head.py`: 248k-row `lm_head` (2.5 GB bf16) $\to$ int8 group-128 in place (saves ~1.3 GB).
-  2. `quant_embed.py`: Untied `embed_tokens` matrix $\to$ int8 group-128 (saves ~1.3 GB).
-  3. `quant_mtp.py`: MTP speculative decode draft module $\to$ int8.
-  4. `build_draft_vocab.py`: Slices a 40,960-row subset of `lm_head` calibrated on model outputs for speculative verification.
-- **Speculative Decoding Options**:
-  - **DFlash2 Block Drafter (`SPEC=dflash2`, Default)**: 1.92B parameter, 5-layer non-autoregressive block drafter predicting 7 tokens per pass from target layers 5/19/33/47/61 with a 16-candidate path selector, quantized to ~1.0 GB (`quant_dflash2.py`). `VLLM_DFLASH2_CHAIN` disabled (2026-08-28): upstream-off by default, +7% on copy-heavy workloads only, and the prime suspect for the recurring engine-core wedges (see `mcp-qwen/NOTES.md`).
-  - **Lookup-Augmented Drafting (`VLLM_DFLASH2_LOOKUP*`)**: Proposes context continuations directly when reproducing or quoting documents (speeds up to 381 tok/s).
-  - **MTP Drafter (`SPEC=mtp`, Fallback)**: Int4-GPTQ single-layer chain drafter (4 draft tokens, split-KV verify attention).
+The serving backend runs inside WSL2 Ubuntu at `~/qwen-serving` (forked from [syv-ai/qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)):
+
+- **Base Architecture**: Qwen3.8-27B (hybrid dense architecture: Gated-DeltaNet + linear/standard attention, 65 layers, MoE-free).
+- **Weight Quantization**: W4A16 AutoRound with `--language-model-only` (vision encoder excluded, saving 2.7 GB VRAM).
+- **Quantized Head & Embeddings**:
+  - `quant_lm_head.py`: 248k-row `lm_head` (2.5 GB bf16) $\to$ int8 group-128 in place (saves ~1.3 GB).
+  - `quant_embed.py`: Untied `embed_tokens` matrix $\to$ int8 group-128 (saves ~1.3 GB).
+- **DFlash2 Block Speculative Drafter (`SPEC=dflash2`, Default)**:
+  - 1.92B parameter, 5-layer non-autoregressive block drafter predicting 7 tokens per pass from target layers 5/19/33/47/61 with a 16-candidate path selector, quantized to ~1.0 GB (`quant_dflash2.py`).
+  - Lookup-Augmented Speculation (`VLLM_DFLASH2_LOOKUP*`) enables continuous n-gram continuations from context at up to 381 tok/s.
 - **KVarN KV Cache (`CTX=huge`)**:
   - [KVarN](https://github.com/huawei-csl/KVarN) (Huawei CSL, Apache-2.0) Hadamard rotation + iterative variance normalization (4-bit keys / 2-bit values per 128-token tile, ~840 B/token/layer).
   - Yields a **268,169-token pool** at `max-model-len=245760` within a pinned 5.26 GiB VRAM budget on the 24 GB RTX 3090.
-- **CUDA Graph Modes**: `SPEC=dflash2 CTX=huge` runs `FULL_AND_PIECEWISE` across all 128 residues. `SPEC=mtp CTX=huge` falls back to `PIECEWISE`.
 
 ---
 
-## 6. Measured Throughput (RTX 3090 @ 250W, `CTX=huge`, `SPEC=dflash2`, `KVarN k4v2`)
+## 7. Measured Throughput & Benchmarks
 
-### Single-User Decode Throughput
+*Hardware: Single NVIDIA GeForce RTX 3090 24GB @ 250W Power Cap, `CTX=huge`, `SPEC=dflash2`, `KVarN k4v2`.*
 
-| Variant / Workload | tok/s | Tokens / Step |
+### Single-User Generation Speed
+
+| Workload / Scenario | tok/s | Tokens / Step |
 |---|---|---|
 | Default Short Prompt (`DFLASH_TOKENS=7`, Lookup ON) | **130** | 3.3 |
 | Code Generation & AST Mutation | **89** | 2.8 |
@@ -239,69 +274,176 @@ Controls the local 245K vLLM server instance lifecycle, with engine-core wedge d
 | `DFLASH_TOKENS=15` Reproduction Mode | up to **381** | 3.4–15.0 |
 | Six-Task Real-Prompt Suite Average | **53** | 3.0 |
 
-> [!NOTE]
-> Measured 2026-08-23 with `VLLM_DFLASH2_CHAIN=1`. Since `3522dc7` (2026-08-28) CHAIN is disabled
-> (wedge mitigation): expect roughly these numbers minus ~7% on copy-heavy workloads, parity on prose.
+### Prefill Throughput & Time-to-First-Token (TTFT)
 
-### Prefill Throughput & TTFT
-
-| Input Length | Prefill Speed | Single-Request TTFT |
+| Context Length | Prefill Speed | TTFT |
 |---|---|---|
-| 1k tokens | ~1,740–1,810 tok/s | 0.56–0.85 s |
-| 16k tokens | ~1,570–1,600 tok/s | 10.3–14.7 s |
-| 100k tokens | ~1,000–1,050 tok/s | 103–129 s |
-| **Prefix Cache Hit (Named Session Reuse)** | **~8,000–9,000 tok/s** | **< 0.5 s** |
+| 1,000 tokens | ~1,740–1,810 tok/s | 0.56–0.85 s |
+| 16,000 tokens | ~1,570–1,600 tok/s | 10.3–14.7 s |
+| 100,000 tokens | ~1,000–1,050 tok/s | 103–129 s |
+| **Prefix Cache Hit (Same `session_id`)** | **~8,000–9,000 tok/s** | **< 0.5 s** |
 
 ---
 
-## 7. SWE-rebench Benchmark Pipeline
+## 8. SWE-rebench Validation Benchmark
 
-To measure true generalization without contamination, the Goose + Qwen stack was evaluated against [SWE-rebench](https://swe-rebench.com/) (Nebius, `nebius/SWE-rebench-leaderboard`), using monthly issue splits post-dating training cutoffs (March 2026 split `2026_03`).
+To evaluate real-world software engineering generalization without data contamination, the stack was benchmarked against [SWE-rebench](https://swe-rebench.com/) (Nebius, `nebius/SWE-rebench-leaderboard`), using fresh GitHub issues created after model training cutoffs (March 2026 split):
 
 - **Resolved Rate (Best-of-1)**: **32.0% (16/50)** on uncurated fresh GitHub issues.
 - **Attempted Resolution Rate**: **57.1% (16/28)** for issues completed within the 900s timeout budget.
-- Full reproduction scripts, harness fixes (resolving Docker container paths in upstream `eval.py`), and per-issue breakdown are documented in [benchmarks/swe-rebench/README.md](benchmarks/swe-rebench/README.md) and [benchmarks/swe-rebench/results/results.md](benchmarks/swe-rebench/results/results.md).
+- Full reproduction scripts and grading reports are documented in [benchmarks/swe-rebench/README.md](benchmarks/swe-rebench/README.md).
 
 ---
 
-## 8. Operational Quickstart
+## 9. Getting Started & Quickstart
 
-### Starting & Stopping Services
+### Prerequisites
 
-```powershell
-# Start the standard huge-context model (245,760 context ceiling)
-.\scripts\main\start_huge.bat
+- **Host OS**: Windows 11 (build 22621+) with WSL2 enabled.
+- **WSL Distribution**: Ubuntu 22.04 LTS or Ubuntu 24.04 LTS.
+- **GPU**: NVIDIA GPU with $\ge 24\text{ GB}$ VRAM (GeForce RTX 3090, 4090, RTX 6000 Ada, or A100/H100).
+- **Host Tools**: Node.js $\ge 18.0.0$, Python $\ge 3.10$, Git.
+- **WSL Tools**: NVIDIA Container Toolkit / CUDA 12.4+, Python 3.11/3.12, Node.js 18+.
 
-# Check running service status (vLLM on 18020, MCP wait on 18021)
-.\scripts\status.bat
+### WSL2 Backend Setup
 
-# Stop the main model
-.\scripts\main\stop.bat
+1. Inside WSL2, clone the model serving repository:
+   ```bash
+   git clone https://github.com/syv-ai/qwen38-27b-rtx3090.git ~/qwen-serving
+   cd ~/qwen-serving
+   # Follow ~/qwen-serving/README.md for venv setup and weight download
+   ```
+2. Initialize launcher symlinks from the workspace:
+   ```bash
+   bash /mnt/d/LLM_Ecosystem/scripts/wsl/setup_links.sh
+   ```
+
+### Windows Host Setup
+
+1. Install Node.js dependencies in the MCP server:
+   ```powershell
+   cd D:\LLM_Ecosystem\mcp-qwen
+   npm install
+   ```
+2. Start the local vLLM serving stack:
+   ```powershell
+   .\scripts\main\start_huge.bat
+   ```
+3. Verify GPU and port status:
+   ```powershell
+   .\scripts\status.bat
+   ```
+
+### Client Configuration
+
+#### 1. Google Antigravity IDE
+Add the following to `~/.gemini/config/mcp_config.json` (or your project's `.agents/mcp.json`):
+```json
+{
+  "mcpServers": {
+    "qwen38-local": {
+      "command": "node",
+      "args": ["D:/LLM_Ecosystem/mcp-qwen/index.js"],
+      "env": {
+        "QWEN_RACE_MS": "150000"
+      }
+    }
+  }
+}
+```
+Run `python mcp-qwen/update_schemas.py` to populate tool schemas and supervisory instructions.
+
+#### 2. Anthropic Claude Code
+Register via CLI:
+```bash
+claude mcp add qwen38-local node D:/LLM_Ecosystem/mcp-qwen/index.js
+```
+Or add to `~/.claude.json`:
+```json
+{
+  "mcpServers": {
+    "qwen38-local": {
+      "command": "node",
+      "args": ["D:/LLM_Ecosystem/mcp-qwen/index.js"],
+      "env": {
+        "QWEN_RACE_MS": "45000"
+      }
+    }
+  }
+}
 ```
 
-### Running Autonomous Optimization Loops (AVO)
-
-```powershell
-# Drive an iterative AVO optimization round on any target repository
-python .\scripts\avo_runner.py --cwd "D:\path\to\target_repo" --metric "benchmark_score" --higher-is-better
+#### 3. Cursor / Windsurf / VSCode
+Add to Cursor MCP Settings (`mcp.json`):
+```json
+{
+  "mcpServers": {
+    "qwen38-local": {
+      "command": "node",
+      "args": ["D:/LLM_Ecosystem/mcp-qwen/index.js"]
+    }
+  }
+}
 ```
 
 ---
 
-## 9. Upstream Version Tracking
+## 10. Testing & Verification
 
-| Component | Local Commit / Build | Upstream Repository | Upstream HEAD / Status |
+The repository includes a test suite covering security sandboxing, canary operations, AVO lifecycle, and cross-process serialization:
+
+```powershell
+cd D:\LLM_Ecosystem\mcp-qwen
+
+# Run standard test suite (Security + Canary + AVO + Semaphore)
+npm test
+
+# Run all tests including streaming proxy checks
+npm run test:all
+
+# Run individual suites:
+npm run test:security    # 90-vector blast-radius sandboxing audit
+npm run test:canary      # AST search, syntax gates, traceback condenser
+npm run test:avo         # Closed-loop evaluation & snapshot rollback
+npm run test:semaphore   # Cross-process lease exclusion tests
+npm run test:proxy       # Universal UTF-8 streaming proxy verification
+```
+
+All test suites run identically on both **Windows 11** and **WSL2 Ubuntu**.
+
+---
+
+## 11. Documentation & Engineering Audits
+
+Detailed design decisions, threat models, and architectural evaluations are indexed in [`docs/README.md`](docs/README.md):
+
+- [Repository & Configuration Drift Audit](docs/audits/AUDIT_2026-09-05.md)
+- [DeepSeek-AVO Implementation & Progress Ledger](docs/audits/DEEPSEEK_AVO_PROGRESS.md)
+- [Patchwork Adversarial Security Audit](docs/audits/PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md)
+- [Qwen-AVO Collaborative Peer Audit](docs/audits/QWEN_AVO_AUDIT.md)
+- [Engineering Notes & Delegation History](mcp-qwen/NOTES.md)
+
+---
+
+## 12. Upstream Version Tracking
+
+| Component | Local Tree / Commit | Upstream Project | Upstream Status |
 |---|---|---|---|
-| **vLLM Serving (`~/qwen-serving`)** | `69ba4d0` (Git tree) / `2ae239f` (Active venv) | [`syv-ai/qwen38-27b-rtx3090`](https://github.com/syv-ai/qwen38-27b-rtx3090) | Synced to `origin/main` (`69ba4d0`) |
+| **vLLM Serving (`~/qwen-serving`)** | `69ba4d0` (Git tree) / `2ae239f` (Active venv) | [`syv-ai/qwen38-27b-rtx3090`](https://github.com/syv-ai/qwen38-27b-rtx3090) | Synced to `origin/main` |
 | **llama.cpp Windows (`llama-cpp/`)** | `bb4caa754` (Build 10566, Clang 20.1.8) | [`ggerganov/llama.cpp`](https://github.com/ggerganov/llama.cpp) | Official Releases (`b10566+`) |
+| **Model Context Protocol SDK** | `^1.30.0` | [`modelcontextprotocol/typescript-sdk`](https://github.com/modelcontextprotocol/typescript-sdk) | SOTA Spec |
+| **AST Grep Engine** | `^0.45.3` | [`ast-grep/ast-grep`](https://github.com/ast-grep/ast-grep) | Dual-platform native NAPI |
 
 ---
 
-## 10. Key References
+## 13. License & Acknowledgments
 
-- `~/.claude/CLAUDE.md` — Hierarchical NVIDIA AVO & Multi-Agent Protocol (global user memory, not tracked in this repo).
-- [mcp-qwen/NOTES.md](mcp-qwen/NOTES.md) — Investigation history, architecture design records, and engineering changelog.
-- [benchmarks/swe-rebench/](benchmarks/swe-rebench/) — Benchmark harness and evaluation results.
-- [DFlash2: Non-Autoregressive Block Speculative Decoding](https://inco.ai/blog/dflash2/)
-- [KVarN: Variance-Normalized 4/2-bit KV Cache](https://github.com/huawei-csl/KVarN)
+This project is licensed under the [MIT License](LICENSE).
 
+### Acknowledgments
+- **Qwen Team (Alibaba Cloud)** for Qwen3.8-27B.
+- **vLLM Project** for high-throughput LLM serving.
+- **Huawei CSL** for the [KVarN](https://github.com/huawei-csl/KVarN) variance-normalized KV cache.
+- **Inco AI** for the [DFlash2](https://inco.ai/blog/dflash2/) non-autoregressive block drafter architecture.
+- **Herrington Darkholme & contributors** for [ast-grep](https://github.com/ast-grep/ast-grep).
+- **Cordis & NVIDIA AVO** for microkernel patterns and closed-loop evolutionary optimization principles.

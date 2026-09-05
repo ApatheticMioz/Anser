@@ -12,8 +12,8 @@ import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import os from "os";
-import { acquireGooseSlot, releaseGooseSlot, listGooseSlots } from "./index.js";
-import { SLOTS_DIR } from "./src/config.js";
+import { acquireGooseSlot, releaseGooseSlot, listGooseSlots } from "../index.js";
+import { SLOTS_DIR } from "../src/config.js";
 
 const SLOT_DIR = SLOTS_DIR;
 

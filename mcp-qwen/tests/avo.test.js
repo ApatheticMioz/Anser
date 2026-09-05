@@ -13,16 +13,16 @@
 import assert from "node:assert";
 import fs from "node:fs";
 import path from "node:path";
-import { EventBus } from "./src/harness/core/events.js";
-import { Context } from "./src/harness/core/kernel.js";
-import { SandboxFsService, sandboxFsPlugin } from "./src/harness/services/sandbox_fs.js";
-import { ShellExecutorService } from "./src/harness/services/shell_executor.js";
-import { EventLoggerService } from "./src/harness/services/event_logger.js";
-import { LineageDag } from "./src/harness/avo/lineage_dag.js";
-import { ClosedLoopEvaluator } from "./src/harness/avo/evaluator.js";
-import { AvoWatchdog } from "./src/harness/avo/watchdog.js";
-import { AvoOperator } from "./src/harness/avo/avo_operator.js";
-import { DeepSeekAvoRunner } from "./src/harness/runner.js";
+import { EventBus } from "../src/harness/core/events.js";
+import { Context } from "../src/harness/core/kernel.js";
+import { SandboxFsService, sandboxFsPlugin } from "../src/harness/services/sandbox_fs.js";
+import { ShellExecutorService } from "../src/harness/services/shell_executor.js";
+import { EventLoggerService } from "../src/harness/services/event_logger.js";
+import { LineageDag } from "../src/harness/avo/lineage_dag.js";
+import { ClosedLoopEvaluator } from "../src/harness/avo/evaluator.js";
+import { AvoWatchdog } from "../src/harness/avo/watchdog.js";
+import { AvoOperator } from "../src/harness/avo/avo_operator.js";
+import { DeepSeekAvoRunner } from "../src/harness/runner.js";
 
 const TEST_DIR = path.resolve(process.cwd(), ".test_avo_tmp");
 

@@ -56,3 +56,5 @@ benchmarks/swe-rebench/__pycache__/
 .avo/
 .test_avo_tmp/
 .benchmark_tmp/
+.canary_tmp/
+mcp-qwen/.canary_tmp/

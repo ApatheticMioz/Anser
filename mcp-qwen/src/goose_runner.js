@@ -35,7 +35,7 @@ import {
   readTaskFromDisk,
   notifyWaiters,
 } from "./task_registry.js";
-import { AvoLineageEngine } from "../avo_engine.js";
+import { AvoLineageEngine } from "./avo_engine.js";
 import { DeepSeekAvoRunner } from "./harness/runner.js";
 
 const execFileAsync = promisify(execFile);

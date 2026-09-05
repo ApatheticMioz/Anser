@@ -11,15 +11,17 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { AstService } from "./src/harness/services/ast_service.js";
-import { condenseTraceback } from "./src/harness/avo/trace_repair.js";
-import { Context } from "./src/harness/core/kernel.js";
-import { astPlugin } from "./src/harness/services/ast_service.js";
-import { avoPlugin } from "./src/harness/avo/avo_operator.js";
-import { shellExecutorPlugin } from "./src/harness/services/shell_executor.js";
-import { sandboxFsPlugin } from "./src/harness/services/sandbox_fs.js";
+import { fileURLToPath } from "node:url";
+import { AstService } from "../src/harness/services/ast_service.js";
+import { condenseTraceback } from "../src/harness/avo/trace_repair.js";
+import { Context } from "../src/harness/core/kernel.js";
+import { astPlugin } from "../src/harness/services/ast_service.js";
+import { avoPlugin } from "../src/harness/avo/avo_operator.js";
+import { shellExecutorPlugin } from "../src/harness/services/shell_executor.js";
+import { sandboxFsPlugin } from "../src/harness/services/sandbox_fs.js";
 
-const TEST_DIR = path.join(process.cwd(), "mcp-qwen", ".canary_tmp");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TEST_DIR = path.resolve(__dirname, "..", ".canary_tmp");
 fs.mkdirSync(TEST_DIR, { recursive: true });
 
 async function runCanary() {
