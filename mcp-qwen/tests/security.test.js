@@ -142,6 +142,17 @@ async function verifySecurity() {
     recordBlocked("rootOverwrite", err);
   }
 
+  // ============================================================================
+  // ⚠️ DANGER DANGER DANGER — ADVERSARIAL TESTING DISCIPLINE — READ THIS ⚠️
+  // ============================================================================
+  // ATTENTION ALL FUTURE AGENTS & DEVELOPERS:
+  // 1. NEVER PASS THESE DANGEROUS STRINGS TO ANY LIVE EXECUTOR OR SPAWN METHOD.
+  //    DO NOT CALL shellService.execute({ command: cmd }) WITH THESE STRINGS.
+  // 2. ALL DESTRUCTIVE ATTACK VECTORS BELOW MUST STRICTLY BE EVALUATED ONLY VIA
+  //    `validateShellSafety(cmd)` IN `shell_validator.js` (PURE IN-MEMORY PARSER).
+  // 3. TO VERIFY EXECUTOR/SPAWN BEHAVIOR, USE ONLY `{ dryRun: true }` OR HARMLESS
+  //    CANARY PAYLOADS (e.g. `echo test`). DO NOT GAMBLE HOST SYSTEM INTEGRITY.
+  // ============================================================================
   // --- Category 5: Dangerous Shell Command Blocking (path-aware protected-roots) ---
   //
   // TRUE-destructive vectors: these must still block under the new

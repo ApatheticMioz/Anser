@@ -1,4 +1,19 @@
 /**
+ * ============================================================================
+ * ⚠️ DANGER DANGER DANGER — STRICT ISOLATION ENCLAVE — READ BEFORE EDITING ⚠️
+ * ============================================================================
+ *
+ * ATTENTION ALL FUTURE AGENTS & DEVELOPERS:
+ * 1. NEVER IMPORT `node:child_process` IN THIS FILE.
+ * 2. NEVER ADD ANY PROCESS SPAWNING, EXECUTION, OR SYSTEM-CALL PRIMITIVES HERE.
+ * 3. THIS FILE MUST REMAIN A PURE, ZERO-DEPENDENCY IN-MEMORY STRING PARSER.
+ * 4. ALL ADVERSARIAL AND DESTRUCTIVE TEST VECTORS (rm, del, format, etc.)
+ *    MUST ONLY BE EVALUATED THROUGH THIS MODULE'S VALIDATOR FUNCTIONS.
+ *
+ * VIOLATION OF THIS INVARIANT CREATES A HOST ESCAPE & DESTRUCTION HAZARD.
+ * AUTOMATED AUDIT IN `tests/security.test.js` CATEGORY 5e ENFORCES THIS RULE.
+ * ============================================================================
+ *
  * Pure In-Memory Shell Security Validator & Policy Enforcement Service
  *
  * ARCHITECTURAL SAFETY GUARANTEE:

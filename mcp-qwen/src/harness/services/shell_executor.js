@@ -1,4 +1,21 @@
 /**
+ * ============================================================================
+ * ⚠️ DANGER DANGER DANGER — LIVE HOST PROCESS SPAWNING BOUNDARY — READ THIS ⚠️
+ * ============================================================================
+ *
+ * ATTENTION ALL FUTURE AGENTS & DEVELOPERS:
+ * 1. THIS MODULE SPAWNS LIVE OPERATING SYSTEM PROCESSES (cmd.exe, wsl.exe, bash).
+ * 2. NEVER, UNDER ANY CIRCUMSTANCES, PASS REAL DESTRUCTIVE OR SYSTEM-NUKE
+ *    COMMANDS (e.g. `rm -rf /`, `del C:\*`, `format C:`) TO `execute()` FOR "TESTING".
+ * 3. ALL DESTRUCTIVE COMMAND TESTS MUST BE PASSED EXCLUSIVELY TO
+ *    `validateShellSafety` IN `shell_validator.js` (ZERO-EXECUTION ENCLAVE).
+ * 4. TO TEST THIS EXECUTOR SERVICE, YOU MUST:
+ *    - USE ONLY HARMLESS CANARY COMMANDS (e.g. `echo "test"`), OR
+ *    - CONSTRUCT WITH `{ dryRun: true }` OR SET `QWEN_SHELL_DRY_RUN=1`.
+ * 5. A LOW-LEVEL DEAD-MAN FUSE GUARDS THE PRE-SPAWN LINE, BUT YOU MUST NEVER
+ *    RELY ON RUNTIME INTERCEPTION FOR SYSTEM SAFETY.
+ * ============================================================================
+ *
  * Sandboxed Shell Executor Service (DeepSeek AVO Subprocess Runner)
  *
  * Provides:
