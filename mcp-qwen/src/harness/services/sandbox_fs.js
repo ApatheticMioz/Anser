@@ -166,8 +166,15 @@ export class SandboxFsService {
 
   /**
    * Performs an exact text replacement in a file.
+   *
+   * Guard rules:
+   * - 0 occurrences: explicit "target not found" error (no write).
+   * - 1 occurrence: proceed with replacement.
+   * - >1 occurrences without replace_all: refuse with count (no write).
+   * - >1 occurrences with replace_all: replace all.
+   * - 0 exact but CRLF-normalized match: explicit line-ending mismatch error (no write).
    */
-  async editFile({ path: filePath, target_content, replacement_content, allow_multiple = false }) {
+  async editFile({ path: filePath, target_content, replacement_content, replace_all = false }) {
     if (!target_content || typeof target_content !== "string" || target_content.length === 0) {
       throw new Error("target_content cannot be empty");
     }
@@ -179,22 +186,39 @@ export class SandboxFsService {
     const occurrences = original.split(target_content).length - 1;
 
     if (occurrences === 0) {
-      throw new Error(`Target content not found in file: ${filePath}`);
+      // CRLF honesty: check if a match exists when normalizing line endings
+      const normalizedOriginal = original.replace(/\r\n/g, "\n");
+      const normalizedTarget = target_content.replace(/\r\n/g, "\n");
+      if (normalizedOriginal.includes(normalizedTarget)) {
+        // Determine which line-ending style the file uses
+        const fileUsesCRLF = original.includes("\r\n");
+        const targetUsesCRLF = target_content.includes("\r\n");
+        const fileStyle = fileUsesCRLF ? "CRLF (\\r\\n)" : "LF (\\n)";
+        const targetStyle = targetUsesCRLF ? "CRLF (\\r\\n)" : "LF (\\n)";
+        throw new Error(
+          `LineEndingMismatchError: target_content not found with exact match. ` +
+          `The file uses ${fileStyle} line endings but the target uses ${targetStyle}. ` +
+          `No write performed. Provide a target that matches the file's actual line endings.`
+        );
+      }
+      throw new Error(`Target content not found in file: ${filePath}. No write performed.`);
     }
-    if (occurrences > 1 && !allow_multiple) {
+
+    if (occurrences > 1 && !replace_all) {
       throw new Error(
-        `Target content found ${occurrences} times in file: ${filePath}. Specify allow_multiple: true or provide more surrounding context.`
+        `AmbiguousTargetError: target_content found ${occurrences} times in file: ${filePath}. ` +
+        `Provide a longer unique target (include surrounding lines) or pass replace_all: true. No write performed.`
       );
     }
 
-    const updated = allow_multiple
+    const updated = replace_all
       ? original.replaceAll(target_content, replacement_content)
       : original.replace(target_content, replacement_content);
 
     fs.writeFileSync(resolved, updated, "utf8");
     return {
       path: resolved,
-      occurrences_replaced: occurrences,
+      occurrences_replaced: replace_all ? occurrences : 1,
       success: true,
     };
   }
@@ -327,14 +351,16 @@ export function sandboxFsPlugin(ctx, options = {}) {
   });
 
   ctx.registerTool("edit_file", {
-    description: "Perform exact text search-and-replace in a file",
+    description:
+      "Perform exact text search-and-replace in a file. " +
+      "target_content must occur exactly once unless replace_all is true; ambiguous edits are refused.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "File path" },
-        target_content: { type: "string", description: "Exact character sequence to replace" },
+        target_content: { type: "string", description: "Exact character sequence to replace (must be unique unless replace_all is true)" },
         replacement_content: { type: "string", description: "Replacement content" },
-        allow_multiple: { type: "boolean", description: "Whether to replace multiple occurrences", default: false },
+        replace_all: { type: "boolean", description: "If true, replace every occurrence of target_content. If false (default), target must occur exactly once.", default: false },
       },
       required: ["path", "target_content", "replacement_content"],
     },
