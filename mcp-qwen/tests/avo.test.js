@@ -218,22 +218,35 @@ async function runTests() {
   // -------------------------------------------------------------
   console.log("[Test 6] Live vLLM Streaming & Direct Microkernel Execution...");
   {
-    const runner = new DeepSeekAvoRunner({ cwd: TEST_DIR });
-    let streamedTokens = "";
+    // Check if vLLM endpoint is reachable
+    let vllmOnline = false;
+    try {
+      const probe = await fetch("http://127.0.0.1:18020/v1/models", { signal: AbortSignal.timeout(1000) });
+      if (probe.ok) vllmOnline = true;
+    } catch {
+      vllmOnline = false;
+    }
 
-    const runRes = await runner.run({
-      prompt: "Reply with exactly the word 'CONFIRMED' and nothing else.",
-      cwd: TEST_DIR,
-      maxTurns: 2,
-      onToken: (t) => {
-        streamedTokens += t;
-      },
-    });
+    if (!vllmOnline) {
+      console.log("  -> [SKIP] vLLM endpoint offline at :18020 (skipping live inference test)");
+    } else {
+      const runner = new DeepSeekAvoRunner({ cwd: TEST_DIR });
+      let streamedTokens = "";
 
-    console.log(`  -> Model Response: ${JSON.stringify(runRes.finalText.trim())}`);
-    console.log(`  -> Duration: ${runRes.durationMs}ms, Tokens: ${runRes.totalCompletionTokens}`);
-    assert.ok(runRes.finalText.toUpperCase().includes("CONFIRMED"), "Expected model confirmation");
-    console.log("  -> Passed!");
+      const runRes = await runner.run({
+        prompt: "Reply with exactly the word 'CONFIRMED' and nothing else.",
+        cwd: TEST_DIR,
+        maxTurns: 2,
+        onToken: (t) => {
+          streamedTokens += t;
+        },
+      });
+
+      console.log(`  -> Model Response: ${JSON.stringify(runRes.finalText.trim())}`);
+      console.log(`  -> Duration: ${runRes.durationMs}ms, Tokens: ${runRes.totalCompletionTokens}`);
+      assert.ok(runRes.finalText.toUpperCase().includes("CONFIRMED"), "Expected model confirmation");
+      console.log("  -> Passed!");
+    }
   }
 
   await cleanup();
