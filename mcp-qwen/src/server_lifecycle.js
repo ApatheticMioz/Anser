@@ -17,6 +17,24 @@ import {
 } from "./config.js";
 import { getApiKeySync, runWslCommand } from "./wsl_bridge.js";
 
+// Indirection for the WSL command runner so tests can run fully offline
+// (no real wsl.exe / bash subprocesses). Defaults to the real runner.
+let wslRun = runWslCommand;
+export function setWslRunner(fn) {
+  wslRun = typeof fn === "function" ? fn : runWslCommand;
+}
+
+// HEAL GATEKEEPER (injection hook): a function that returns true when live
+// work is in flight and the engine must NOT be stopped/rebooted. Wired at
+// registration time (index.js / tools.js) to the task registry so this module
+// stays free of a hard dependency on task_registry.js (which has side effects
+// at import: it starts the status HTTP server + a retention interval).
+// Default: no gate (heal allowed) — safe for the pure lifecycle module.
+let healGatekeeper = null;
+export function setHealGatekeeper(fn) {
+  healGatekeeper = typeof fn === "function" ? fn : null;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -74,7 +92,7 @@ export async function canaryProbe(force = false) {
         max_tokens: 8,
         messages: [{ role: "user", content: "Reply with: ok" }],
       }),
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(15_000),
     });
     const dt = Date.now() - t0;
     if (!res.ok) {
@@ -88,7 +106,7 @@ export async function canaryProbe(force = false) {
     result = {
       ok: false,
       latency_ms: Date.now() - t0,
-      error: err.name === "TimeoutError" ? "timeout (45s)" : err.message,
+      error: err.name === "TimeoutError" ? "timeout (15s)" : err.message,
     };
   }
   canaryCache = { at: Date.now(), result };
@@ -97,7 +115,7 @@ export async function canaryProbe(force = false) {
 
 export async function readLastEngineStatsLine() {
   try {
-    const { stdout } = await runWslCommand(
+    const { stdout } = await wslRun(
       `grep -a 'Engine 000:.*Running:' ${ENGINE_LOG_PATH} 2>/dev/null | tail -1`
     );
     return stdout.trim() || null;
@@ -146,16 +164,42 @@ export function bumpWedgeCounter(reason) {
 }
 
 export async function engineWedgeState() {
-  const canary = await canaryProbe();
+  // BUSY-GATE: read the engine gauges FIRST. The engine runs MAX_SEQS=1 (one
+  // generation at a time), so while any coworker task is synthesizing (prefill
+  // TTFTs of 100-286s are NORMAL) a canary generation would queue behind it and
+  // time out at the abort deadline — measuring queue depth, NOT health. Firing
+  // the canary unconditionally misfired twice in production (killed a 17-minute
+  // task). So: when the engine is busy, do NOT fire the canary; the only wedge
+  // signal is stats silence. When idle, the canary is authoritative.
+  const metrics = await readEngineMetrics();
+  const runningReqs = metrics?.["vllm:num_requests_running"] ?? 0;
+  const waitingReqs = metrics?.["vllm:num_requests_waiting"] ?? 0;
+  const engineBusy = runningReqs > 0 || waitingReqs > 0;
+
   const line = await readLastEngineStatsLine();
   const stats = line ? parseEngineStats(line) : null;
-  const metrics = await readEngineMetrics();
 
   // Stats silence while requests are supposedly running indicates a stalled engine core.
-  // When idle, the canary probe is the authoritative health decider.
-  const isSilenceWedged = stats && stats.runningReqs > 0 && stats.ageSec > WEDGE_STATS_SILENCE_S;
-  const isCanaryWedged = !canary.ok;
-  const wedged = isCanaryWedged || isSilenceWedged;
+  const isSilenceWedged = Boolean(
+    stats && stats.runningReqs > 0 && stats.ageSec > WEDGE_STATS_SILENCE_S
+  );
+
+  let canary;
+  let isCanaryWedged;
+  if (engineBusy) {
+    // Neutral sentinel: a canary queued behind an active generation is meaningless.
+    canary = { ok: true, skipped: "engine_busy", latency_ms: 0 };
+    isCanaryWedged = false;
+  } else {
+    canary = await canaryProbe();
+    isCanaryWedged = !canary.ok;
+  }
+
+  // When busy, the canary is ignored — only stats silence can declare a wedge.
+  // When idle, the canary remains authoritative.
+  const wedged = engineBusy
+    ? isSilenceWedged
+    : Boolean(isCanaryWedged || isSilenceWedged);
 
   return {
     wedged,
@@ -163,6 +207,7 @@ export async function engineWedgeState() {
     stats,
     isSilenceWedged,
     isCanaryWedged,
+    engineBusy,
     gauges: metrics
       ? {
           running_requests: metrics["vllm:num_requests_running"] ?? null,
@@ -187,6 +232,21 @@ export async function healWedgedEngine(statsAgeSec) {
       healed: false,
       note: `heal already started ${Math.round((Date.now() - lock.at) / 1000)}s ago by pid ${lock.pid}; boot in progress`,
     };
+  }
+  // HEAL BACKSTOP: refuse to stop/reboot the engine while live work is in
+  // flight (in-memory running/queued tasks, or a disk task whose owner pid is
+  // alive with a recent heartbeat). A reboot here would kill the in-flight
+  // task's socket (undici "terminated"). Deliberately does NOT bump the wedge
+  // counter — this is a healthy-but-busy engine, not a wedge.
+  if (healGatekeeper) {
+    try {
+      if (healGatekeeper()) {
+        return { healed: false, note: "tasks in flight; heal refused" };
+      }
+    } catch {
+      // Gatekeeper error: fail safe — do not reboot a possibly-busy engine.
+      return { healed: false, note: "tasks in flight; heal refused" };
+    }
   }
   try {
     fs.mkdirSync(TASK_DIR, { recursive: true });
@@ -271,7 +331,7 @@ export async function ensureServerRunning() {
     }
     return { switched: false, status: "already_running" };
   }
-  await runWslCommand(
+  await wslRun(
     `cd ~/qwen-serving && nohup bash launchers/start_huge.sh > ${ENGINE_LOG_PATH} 2>&1 < /dev/null & disown; sleep 1; true`
   );
   const deadline = Date.now() + BOOT_TIMEOUT_MS;
@@ -289,7 +349,7 @@ export async function ensureServerRunning() {
 }
 
 export async function stopServer() {
-  await runWslCommand(`cd ~/qwen-serving && bash launchers/stop_server.sh 2>/dev/null || true`);
+  await wslRun(`cd ~/qwen-serving && bash launchers/stop_server.sh 2>/dev/null || true`);
   for (let i = 0; i < 10; i++) {
     await new Promise((r) => setTimeout(r, 500));
     const mode = await currentMode();

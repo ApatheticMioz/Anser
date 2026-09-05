@@ -21,6 +21,7 @@ import {
   engineWedgeState,
   healWedgedEngine,
   readWedgeCounter,
+  setHealGatekeeper,
 } from "./server_lifecycle.js";
 import { listGooseSlots } from "./semaphore.js";
 import {
@@ -31,10 +32,16 @@ import {
   notifyWaiters,
   cancelAllTasks,
   statusServerOwned,
+  hasLiveWork,
 } from "./task_registry.js";
 import { startGooseTask, resolveSessionId } from "./goose_runner.js";
 
 export function registerTools(server) {
+  // Wire the heal backstop: refuse to stop/reboot the engine while live work
+  // is in flight. Uses the injection hook so server_lifecycle.js stays free of
+  // a hard dependency on task_registry.js (which has import-time side effects).
+  setHealGatekeeper(hasLiveWork);
+
   // Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
   server.registerTool(
     "qwen_coworker",
@@ -440,6 +447,13 @@ export function registerTools(server) {
                         kv_cache_pct: wedge.gauges?.kv_cache_pct ?? null,
                         prefix_cache_hit_ratio: wedge.gauges?.prefix_cache_hit_ratio ?? null,
                         spec_decode_acceptance: wedge.gauges?.spec_decode_acceptance ?? null,
+                        // BUSY-GATE: when the engine is busy (MAX_SEQS=1), the canary
+                        // is intentionally NOT fired (it would queue behind the active
+                        // generation and time out, measuring queue depth not health).
+                        // Surface that honestly; wedge is then derived from stats
+                        // silence only.
+                        engine_busy: wedge.engineBusy ?? null,
+                        canary_skipped: wedge.canary?.skipped ?? null,
                         canary: wedge.canary,
                         engine_stats_age_seconds: wedge.stats?.ageSec ?? null,
                         wedge_detected: wedge.wedged,

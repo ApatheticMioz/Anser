@@ -7,6 +7,7 @@ import {
   STATUS_PORT,
   TASK_RETENTION_MS,
   DEFAULT_TIMEOUT_MS,
+  INACTIVITY_TIMEOUT_MS,
   IS_WINDOWS,
 } from "./config.js";
 import { pidAlive, listGooseSlots, clearAllGooseSlots } from "./semaphore.js";
@@ -110,6 +111,27 @@ export function listTasksFromDisk() {
     }
   } catch {}
   return result;
+}
+
+/**
+ * Returns true when live work is in flight and the engine must NOT be
+ * stopped/rebooted. Used as the heal gatekeeper:
+ *  - any in-memory task with status "running"/"queued" (not done), OR
+ *  - any disk task that is not done, whose owner pid is alive, and whose
+ *    last heartbeat is within INACTIVITY_TIMEOUT_MS.
+ */
+export function hasLiveWork() {
+  for (const t of tasks.values()) {
+    if (!t.done && (t.status === "running" || t.status === "queued")) return true;
+  }
+  const now = Date.now();
+  for (const dt of listTasksFromDisk()) {
+    if (dt.done) continue;
+    if (!dt.ownerPid || !pidAlive(dt.ownerPid)) continue;
+    const lastActive = dt.lastHeartbeatAt || dt.startedAt || dt.createdAt;
+    if (lastActive && now - lastActive <= INACTIVITY_TIMEOUT_MS) return true;
+  }
+  return false;
 }
 
 export function cleanOldTasks() {
