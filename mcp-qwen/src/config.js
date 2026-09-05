@@ -77,3 +77,11 @@ export const MAX_TURNS = process.env.QWEN_MAX_TURNS
   ? parseInt(process.env.QWEN_MAX_TURNS, 10)
   : null; // null = unbounded, let orchestrator govern
 
+// Continuation budget: max times we re-prompt the model after a
+// finish_reason: "length" (token-ceiling) cutoff before giving up.
+export const DEFAULT_MAX_CONTINUATION_TURNS = 8;
+export const MAX_CONTINUATION_TURNS = (() => {
+  const parsed = parseInt(process.env.QWEN_MAX_CONTINUATION_TURNS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CONTINUATION_TURNS;
+})();
+
