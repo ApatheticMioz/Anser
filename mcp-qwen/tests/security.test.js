@@ -7,7 +7,7 @@
 
 import { SandboxFsService } from "../src/harness/services/sandbox_fs.js";
 import { AstService } from "../src/harness/services/ast_service.js";
-import { ShellExecutorService } from "../src/harness/services/shell_executor.js";
+import { ShellExecutorService, validateShellSafety } from "../src/harness/services/shell_executor.js";
 import { AvoOperator } from "../src/harness/avo/avo_operator.js";
 
 async function verifySecurity() {
@@ -22,6 +22,8 @@ async function verifySecurity() {
 
   let totalTests = 0;
   let blockedCount = 0;
+  let allowTests = 0;
+  let allowPassed = 0;
 
   function recordBlocked(name, err) {
     blockedCount++;
@@ -30,6 +32,15 @@ async function verifySecurity() {
 
   function recordBreach(name) {
     console.error(`[CRITICAL SECURITY BREACH] ${name} was NOT blocked!`);
+  }
+
+  function recordAllowPass(name) {
+    allowPassed++;
+    // console.log(`[ALLOWED] ${name}`);
+  }
+
+  function recordAllowFail(name, err) {
+    console.error(`[CRITICAL SECURITY BREACH] ${name} was incorrectly blocked: ${err.message}`);
   }
 
   // --- Category 1: File Path Escapes (C:, D:\.., /mnt/c, traversal) ---
@@ -125,21 +136,55 @@ async function verifySecurity() {
     recordBlocked("rootOverwrite", err);
   }
 
-  // --- Category 5: Dangerous Shell Command Blocking ---
+  // --- Category 5: Dangerous Shell Command Blocking (path-aware protected-roots) ---
+  //
+  // TRUE-destructive vectors: these must still block under the new
+  // path-aware protected-roots analysis.
   const dangerousCommands = [
+    // Filesystem root and its direct wildcard
     "rm -rf /",
     "rm -rf /*",
+    // rm -rf / variant with --no-preserve-root flag
+    "rm -rf --no-preserve-root /",
+    // Home directory
     "rm -rf ~",
+    // Drive roots
     "rm -rf C:\\",
     "rm -rf D:\\",
+    // C:\Windows (POSIX form) — equivalence vector
     "rm -rf /mnt/c/Windows",
+    // C:\Windows (Windows form) — equivalence vector: must block identically
+    "rm -rf C:\\Windows",
+    // Windows drive-root wipes via rmdir/del/rd
     "rmdir /s /q C:\\",
     "del /f /s /q C:\\*",
+    "del /s /q C:\\Windows",
+    "rd /s /q C:\\Users",
+    // Protected-root direct wildcards
+    "rm -rf C:\\Users\\*",
+    "rm -rf /mnt/c/Users/*",
+    // Pattern-level blocks (verbatim, not path-aware)
     "format C:",
     "mkfs.ext4 /dev/sda1",
     "dd if=/dev/zero of=/dev/sda bs=1M",
-    "rm -rf C:\\Windows\\System32",
-    "rm -rf /mnt/c/Users/Apath",
+    // Fork bomb
+    ":(){ :|:& };:",
+    // GAP 1: wrapper-command evasion — transparent prefixes (sudo) and
+    // shell wrappers (bash/sh -c, cmd /c, powershell -Command) must be
+    // unwrapped before the destructive-command check.
+    "sudo rm -rf /",
+    "sudo rm -rf --no-preserve-root /",
+    'bash -c "rm -rf /"',
+    'sh -c "rm -rf /"',
+    "cmd /c del /s /q C:\\Windows",
+    'powershell -Command "Remove-Item C:\\Users -Recurse -Force"',
+    // Bounded-recursion nested wrapper (depth 2) must still block.
+    'bash -c "bash -c \'rm -rf /\'"',
+    // GAP 2: unexpanded shell references fail closed ($HOME -> protected root).
+    "rm -rf $HOME",
+    "rm -rf $HOME/projects",
+    // GAP 3: PowerShell destructive alias (remove-item) analyzed as destructive.
+    'powershell -Command "Remove-Item C:\\Users\\* -Recurse -Force"',
   ];
 
   for (const cmd of dangerousCommands) {
@@ -149,6 +194,55 @@ async function verifySecurity() {
       recordBreach(`shellExecute(${cmd})`);
     } catch (err) {
       recordBlocked(`shellExecute(${cmd})`, err);
+    }
+  }
+
+  // --- Category 5b: Shell Allow Vectors (false-positive regression guard) ---
+  //
+  // These commands must NOT be blocked. They prove the old over-broad
+  // denylist false positives are gone and that flags never match as paths.
+  //
+  // Re-scoped vectors (old over-broad behavior -> new path-aware expectation):
+  //   "rm -rf C:\\Windows\\System32"  — OLD: blocked by C:\Windows substring match.
+  //     NEW: allowed (deeper subpath, not a protected root or its direct wildcard).
+  //   "rm -rf /mnt/c/Users/Apath"       — OLD: blocked by /mnt/c/Users substring match.
+  //     NEW: allowed (deeper subpath, not a protected root or its direct wildcard).
+  const allowCommands = [
+    // Legitimate WSL temp/workspace cleanup (old: blocked by any abs-path rm)
+    "rm -rf /tmp/build",
+    // Legitimate Windows user project cleanup (old: blocked by C:\Users substring)
+    "rm -rf /mnt/c/Users/testuser/proj/dist",
+    // Re-scoped: was blocked by old C:\Windows substring match
+    "rm -rf C:\\Windows\\System32",
+    // Re-scoped: was blocked by old /mnt/c/Users substring match.
+    // Uses a neutral user (not the real WSL user) with a deeper subpath.
+    "rm -rf /mnt/c/Users/otheruser/build",
+    // Non-destructive commands with scary substrings must never match
+    "git push --force",
+    "npm ci",
+    "cargo build --release",
+    // Workspace-relative operand
+    "rm -rf ./node_modules",
+    // Quoted operand with spaces
+    'rm -rf "/mnt/d/some project/build"',
+    // GAP 1: unwrapped legitimate forms must STILL pass (prefixes/wrappers
+    // are transparent, not destructive).
+    "sudo rm -rf /tmp/build",
+    'bash -c "rm -rf /tmp/build"',
+    "env TMP=/tmp rm -rf /tmp/build",
+    // xargs with a stdin redirect: no analyzable path operand -> allowed.
+    "xargs rm -rf < /tmp/list",
+    // GAP 3: PowerShell destructive alias on a deeper subpath must pass.
+    'powershell -Command "Remove-Item C:\\Users\\testuser\\proj\\dist -Recurse -Force"',
+  ];
+
+  for (const cmd of allowCommands) {
+    allowTests++;
+    try {
+      validateShellSafety(cmd, workspaceRoot, workspaceRoot);
+      recordAllowPass(`shellAllow(${cmd})`);
+    } catch (err) {
+      recordAllowFail(`shellAllow(${cmd})`, err);
     }
   }
 
@@ -188,11 +282,12 @@ async function verifySecurity() {
 
   console.log("\n==========================================================================");
   console.log(`Hardening Audit Complete: ${blockedCount} / ${totalTests} Attack Vectors Intercepted & Blocked`);
+  console.log(`Allow Vectors: ${allowPassed} / ${allowTests} Legitimate Commands Correctly Permitted`);
   console.log("Verdict: ZERO-RISK CONTAINMENT VERIFIED.");
   console.log("Filesystem, AST surgery, AVO rollback, and Shell execution cannot escape the project root.");
   console.log("==========================================================================");
 
-  if (blockedCount !== totalTests) {
+  if (blockedCount !== totalTests || allowPassed !== allowTests) {
     process.exit(1);
   }
 }
