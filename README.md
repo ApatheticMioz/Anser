@@ -356,7 +356,7 @@ Run `python mcp-qwen/update_schemas.py` to populate tool schemas and supervisory
 #### 2. Anthropic Claude Code
 Register via CLI:
 ```bash
-claude mcp add qwen38-local node D:/LLM_Ecosystem/mcp-qwen/index.js
+claude mcp add --scope user qwen-avo node D:/LLM_Ecosystem/mcp-qwen/index.js
 ```
 Or add to `~/.claude.json`:
 ```json
@@ -387,6 +387,28 @@ Add to Cursor MCP Settings (`mcp.json`):
 ```
 
 ---
+
+
+### Environment Variables
+
+The MCP server exposes the following environment-variable knobs (all defined in `mcp-qwen/src/config.js`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `QWEN_ENGINE` | `deepseek_avo` | Execution engine: `deepseek_avo` (Cordis microkernel + AVO) or `legacy_goose` (CLI wrapper). |
+| `QWEN_RACE_MS` | `45000` | Synchronous race window (ms) before yielding to the zero-turn long-poll wait. |
+| `QWEN_MAX_CONCURRENT` | `1` | Maximum concurrent Goose/AVO execution slots (cross-process semaphore). |
+| `QWEN_STATE_DIR` | `~/.qwen` (or `/mnt/c/Users/Apath/.qwen` on WSL) | Root directory for task state, slot leases, and AVO lineage. |
+| `QWEN_MIN_TIMEOUT_MS` | `600000` (10 min) | Minimum per-task timeout budget (ms). |
+| `QWEN_INACTIVITY_TIMEOUT_MS` | `1800000` (30 min) | Inactivity timeout: kill task if no tool activity for this duration. |
+| `QWEN_FIRST_TOKEN_TIMEOUT_MS` | `240000` (4 min) | Timeout for first token from vLLM after request dispatch. |
+| `QWEN_MAX_TURNS` | *(unset / unbounded)* | Hard cap on agent turns per task (null = orchestrator-governed). |
+| `QWEN_WEDGE_SILENCE_S` | `120` | Seconds of engine-log silence before wedge detection triggers auto-heal. |
+| `QWEN_AUTO_HEAL` | `true` (disable with `0`) | Enable automatic vLLM process kill & relaunch on detected engine wedge. |
+| `QWEN_ENGINE_LOG` | `/tmp/mcp_launch_huge.log` | Path to the vLLM engine log used for wedge silence monitoring. |
+| `VLLM_PORT` | `18020` | Port for the vLLM OpenAI-compatible API endpoint. |
+| `STATUS_PORT` | `18021` | Port for the zero-turn long-poll HTTP status/wait server. |
+| `STREAM_PROXY_PORT` | `18022` | Port for the universal SSE streaming proxy. |
 
 ## 10. Testing & Verification
 

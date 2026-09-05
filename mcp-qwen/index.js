@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v4.5.6)
+ * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA - v5.1.0)
  *
  * Architecture:
  * - Lead Architect: Claude 5 Sonnet in Claude Code / Gemini 3.8 Flash in Antigravity
@@ -13,6 +13,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +36,8 @@ import {
 } from "./src/task_registry.js";
 import { registerTools } from "./src/tools.js";
 
+const require = createRequire(import.meta.url);
+const { name: pkgName, version: pkgVersion } = require("./package.json");
 const __filename = fileURLToPath(import.meta.url);
 const isMain = Boolean(
   process.argv[1] &&
@@ -103,8 +106,8 @@ async function main() {
   initStatusServer();
 
   const server = new McpServer({
-    name: "qwen38-local",
-    version: "4.5.6",
+    name: pkgName ?? "qwen38-local",
+    version: pkgVersion,
   });
 
   registerTools(server);
