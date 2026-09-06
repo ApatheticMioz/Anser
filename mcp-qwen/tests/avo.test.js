@@ -225,22 +225,28 @@ async function runTests() {
     if (!vllmOnline) {
       console.log("  -> [SKIP] vLLM endpoint offline at :18020 (skipping live inference test)");
     } else {
-      const runner = new DeepSeekAvoRunner({ cwd: TEST_DIR });
-      let streamedTokens = "";
+      const liveDir = path.resolve(process.cwd(), ".test_live_tmp");
+      fs.mkdirSync(liveDir, { recursive: true });
+      try {
+        const runner = new DeepSeekAvoRunner({ cwd: liveDir });
+        let streamedTokens = "";
 
-      const runRes = await runner.run({
-        prompt: "Reply with exactly the word 'CONFIRMED' and nothing else.",
-        cwd: TEST_DIR,
-        maxTurns: 2,
-        onToken: (t) => {
-          streamedTokens += t;
-        },
-      });
+        const runRes = await runner.run({
+          prompt: "Reply with exactly the word 'CONFIRMED' and nothing else.",
+          cwd: liveDir,
+          maxTurns: 2,
+          onToken: (t) => {
+            streamedTokens += t;
+          },
+        });
 
-      console.log(`  -> Model Response: ${JSON.stringify(runRes.finalText.trim())}`);
-      console.log(`  -> Duration: ${runRes.durationMs}ms, Tokens: ${runRes.totalCompletionTokens}`);
-      assert.ok(runRes.finalText.toUpperCase().includes("CONFIRMED"), "Expected model confirmation");
-      console.log("  -> Passed!");
+        console.log(`  -> Model Response: ${JSON.stringify(runRes.finalText.trim())}`);
+        console.log(`  -> Duration: ${runRes.durationMs}ms, Tokens: ${runRes.totalCompletionTokens}`);
+        assert.ok(runRes.finalText.toUpperCase().includes("CONFIRMED"), "Expected model confirmation");
+        console.log("  -> Passed!");
+      } finally {
+        fs.rmSync(liveDir, { recursive: true, force: true });
+      }
     }
   }
 

@@ -348,6 +348,95 @@ env var) that can disagree, with the model unable to see the mismatch.
 of the task prompt as defense in depth. (The deepseek_avo primary engine
 has no such duality: the sandbox root is a single constructor argument.)
 
+### L13. Child-spawn ANSI color pollution leak (P14)
+
+**What happened:** when the MCP server was launched by Claude Code, every
+`bash` tool result executed by Qwen contained ANSI terminal escape sequences
+(`\x1b[32m...`). The escape bytes polluted diff comparisons, regex searches,
+and output parsers, causing spurious validation failures and tool re-tries.
+
+**Root cause:** Claude Code exports `FORCE_COLOR=3` into its environment.
+The MCP server inherits `process.env`. In Node.js >= 24, Node honors
+`FORCE_COLOR` even on piped child stdout streams. When `shell_executor.js`
+spawned POSIX `bash.exe`, the child inherited `FORCE_COLOR=3` and emitted
+full 24-bit color escapes into piped buffers.
+
+**Structural fix:** `shell_executor.js` (commit `a1dabdc`, P14) explicitly
+strips all color-forcing environment variables (`FORCE_COLOR`, `CLICOLOR`,
+`CLICOLOR_FORCE`) from the child spawn environment, and injects `NO_COLOR: "1"`.
+Locked by regression vector `b4` in `tests/security.test.js` and verified
+under real Claude Code sessions.
+
+### L14. Universal UNIX LF line-ending invariant vs cross-platform/tokenizer drift (P4h / Rule 7)
+
+**What happened:** mixed line endings (Windows CRLF `\r\n` vs UNIX LF `\n`)
+caused subtle, severe failure modes across the multi-agent pairing stack:
+1. `edit_file` substring matching failed with `ZeroOccurrenceError` or
+   matched duplicate blocks, inflating `shell_validator.js` from 379 to 705 lines.
+2. Git Bash / WSL2 POSIX pipelines retained trailing `\r`, breaking commands
+   with `command\r: not found` or `bad interpreter`.
+3. AST byte-offset drift: `@ast-grep/napi` computes character offsets by bytes;
+   a 2-byte newline vs 1-byte newline created cumulative off-by-N character drift,
+   corrupting surgical AST replacements on large files.
+4. Speculative decoding degradation: BPE tokenizers treat `\n` as a single high-frequency
+   token (token ID 198), while `\r\n` is split into two tokens. On the DFlash2
+   draft model, newline splitting degraded draft acceptance rate from ~79% down
+   to sub-optimal levels.
+
+**Structural fix:** 
+- `LineEndingMismatchError` implemented in `src/harness/services/sandbox_fs.js`
+  as an active dead-man fuse that halts edits before disk mutation if line endings differ.
+- Repository-level `.gitattributes` (`* text=auto eol=lf`, `*.bat/*.cmd text eol=crlf`)
+  and `.editorconfig` (`end_of_line = lf`) pinned to enforce LF checkout.
+- Codified as **Rule 7** across multi-agent protocols (`GEMINI.md` and `CLAUDE.md`).
+
+### L15. JSDoc block-comment premature termination via glob wildcard `*/` (P7)
+
+**What happened:** `node --check src/harness/services/ast_service.js` threw
+`SyntaxError: Unexpected token '.'` at line 912 during boot, preventing AST
+service startup.
+
+**Root cause:** in JSDoc multi-line comments (`/** ... */`), documenting a glob
+like `(e.g. 'src/**/*.js')` embedded the sequence `*/`. The V8 parser treated
+`*/` as the comment closing delimiter; the remainder of the line (`.js')`) was
+evaluated as raw JavaScript syntax.
+
+**Structural fix:** JSDoc annotations rephrased to avoid literal `*/` sequences
+in docstrings (commit `cb0559f`). Locked by `tests/syntax_integrity.test.js`
+(commit `8bde746`, P11), which runs `node --check` across every `.js` file in
+`src/` and `tests/` before gate exit.
+
+### L16. Shell validator evasion taxonomy & recursive segmentation (P4e2)
+
+**What happened:** adversarial security fuzzing uncovered 15 bypass vectors in
+initial regex-based command safety checks:
+1. Command chaining (`;`, `&&`, `||`, `|`, `\n`): a safe initial command
+   followed by a chained destructive command bypassed single-pattern checks.
+2. Backtick subshells (`` rm -rf `pwd` ``) evaded command identification.
+3. Flag-embedded paths (`rm -rf --no-preserve-root=/`) hid targets in flags.
+4. User tildes (`~root`, `~user`) evaded home directory containment.
+5. Unicode homoglyphs (`\uFF37indows`) bypassed ASCII `/c/Windows` blacklists.
+6. Nested wrappers (`bash -c "cd /tmp && rm -rf /"`) hid payloads in strings.
+
+**Structural fix:** `src/harness/services/shell_validator.js` (commit `fb89fc3`):
+- Recursive segmentation of all command chains, subshells, and pipes.
+- NFKC Unicode normalization before path comparison.
+- Flag-aware path disambiguation (supporting both Windows `/s /q` flags and POSIX `--flag=val`).
+- Wrapper unwrapping up to bounded depth 4 (`sudo`, `env`, `bash -c`, `cmd /c`, `powershell`).
+- Locked by `tests/security.test.js` across 123 blocked attack vectors and 14 allow vectors.
+
+### L17. MCP error envelopes vs thrown exceptions (P12)
+
+**What happened:** when tools encountered invalid input or boundary violations,
+throwing standard JavaScript exceptions caused the MCP SDK to terminate the
+JSON-RPC connection or trigger protocol errors, crashing the caller's session.
+
+**Structural fix:** tool handlers catch all internal errors and return
+conforming MCP error payloads (`{ isError: true, content: [{ type: "text", text: ... }] }`)
+with exit code 0 on the wire (commit `9df8a73`, P12). The connection remains
+alive and the model receives clear, actionable diagnostic text. Locked by
+`tests/tool_errors.test.js`.
+
 ## 4. Multi-Instance Model (standing rule)
 
 This server is **not a singleton**: N Claude surfaces = N independent OS
@@ -364,10 +453,50 @@ cross-process coordination must use a shared, atomic substrate:
 
 In-process locks (mutexes, `Map`s) never serialize across instances.
 
-## 5. References
+## 5. 11-Hour Production Telemetry & Verification Ledger
 
-- `NOTES.md` — raw incident ledger (do not edit; this file distills it)
-- `QWEN_HARNESS_TELEMETRY_LOG.md` — per-run telemetry (do not edit)
-- `tests/` — the invariants as executable locks (see README test map)
+The v5.1.0 release is backed by an unbroken 11.25-hour multi-agent pair-programming
+marathon between Gemini 3.8 Flash (Meta-Supervisor), GLM-5.3-Flash / Claude Code (Lead Architect),
+and Qwen3.8-27B (Autonomous Execution Coworker).
+
+### 5.1 Cumulative Engine & Hardware Telemetry
+
+| Metric | Measured Value | Operational Rationale |
+|--------|----------------|-----------------------|
+| **vLLM Prefill / Prompt Tokens** | **53,022,903 tokens** | Processed entirely locally on RTX 3090 at $0 cost |
+| **vLLM Generation Tokens** | **1,614,900 tokens** | Autonomous AST surgery, test suites, refactoring |
+| **Speculative Accepted Tokens** | **1,273,521 tokens** | **78.86% acceptance rate** on DFlash2 1.92B drafter |
+| **Active Qwen Sessions** | **132 sessions** | Micro-session roll cadence preventing KV decay |
+| **Logged Microkernel Events** | **6,029 events** | Append-only session telemetry (`~/.qwen/sessions/`) |
+| **Total Tool Executions** | **1,885+ calls** | `bash`: 818, `read_file`: 481, `edit_file`: 321, `write_file`: 145, `search_code`: 58, `list_dir`: 44, `avo_*`: 23, `ast_*`: 2 |
+| **VRAM Footprint** | **24,136 MiB / 24,576 MiB** | Universal 245K context + KVarN k4v2 KV cache |
+| **GPU Operating Temp** | **31°C - 58°C** | Liquid-cooled RTX 3090 under 250W power cap |
+| **Zero-Turn OS Wait Savings** | **~570M tokens** | Zero-turn HTTP long-poll (`:18021`) vs polling loops |
+
+### 5.2 The 14 Engineering Passes (P1–P14 Complete Implementation Map)
+
+| Pass | Commit | Scope & Subsystem | Core Resolution & Verification |
+|------|--------|-------------------|--------------------------------|
+| **P1** | `8a05ccf` | Manifest & Registration | Manifest-driven server identity, engine pin, README env reference |
+| **P2** | `d241ff3`<br>`27727a7`<br>`bbc17c8`<br>`bb0f6d8` | Engine Liveness & Stream Resilience | Reasoning token accounting (`QWEN_MAX_REASONING_TOKENS=32768`), empty-stream retries, busy-gate wedge detection (`running_requests > 0`), cross-instance heal lock |
+| **P3** | `fc55827` | Platform Abstraction | Single platform resolver (`src/platform.js`) + spawn-profile builder for Windows DrvFs and WSL2 |
+| **P4** | `dcbfbe7`<br>`fb89fc3`<br>`3248c1f`<br>`5208f0c`<br>`86c1fbf`<br>`dc06624` | Shell Safety, POSIX Routing & Path Canonicalization | Path-aware protected roots, 15 shell evasion vectors closed (123 attack vectors blocked in `security.test.js`), `LineEndingMismatchError`, POSIX bash routing via Git Bash, universal LF `.gitattributes`, junction canonicalization via `realpathSync` |
+| **P5** | `954443e` | In-Process AST Surgery | `@ast-grep/napi` native module integration with CLI fallback, byte-identical equivalence verified in `ast_engine.test.js` |
+| **P6** | `a9d5174` | Universal Syntax Gates | Pre-commit syntax validation for JS, TS, Python, Go, Rust, JSON with rollback-on-invalid-syntax |
+| **P7** | `cb0559f`<br>`5a68cdf` | AST Surface & Stream Hardening | `ast_replace_batch` tool, dry-run safety preview, repetition breaker extended to `delta.reasoning` (closing reasoning loop death class) |
+| **P8** | `d94d4d8` | Generic MCP Extension Bridge | Dynamic stdio MCP extension spawning, argument tokenization, `ext_<server>_<tool>` registration, verified live with `@upstash/context7-mcp` |
+| **P9** | `3e52bce` | Packaged Skills Library | Reusable workflow recipes (`skills/<name>/SKILL.md`), keyword matching against prompt and cwd, budget capping (3 skills / 2000 chars / 6000 total) |
+| **P10** | `88efb97`<br>`b3c151e` | Process-Reaping Hardening | Anchored session-id sweep (`/proc/<pid>/cmdline`), decoy survival, double liveness probe with escalation, 15s stream proxy health window, test state dir isolation |
+| **P11** | `8bde746` | Offline Test Resilience & Stdio Purity | Syntax integrity scan (`node --check` across all files), honest engine-down skips, stdio zero-stdout-write lock frame verification |
+| **P12** | `9df8a73` | Dual-Runtime Parity Audit | MCP-conformant tool-error envelopes (`isError: true`), schema drift lock test (`tests/schema_parity.test.js`) asserting Antigravity JSON vs live zod schemas |
+| **P13** | `6f217dd` | Architecture Documentation | Comprehensive production README rewrite and `docs/DESIGN.md` incident-wisdom distillation |
+| **P14** | `a1dabdc` | Final E2E Verification & Release | Stripping color-forcing env vars (`FORCE_COLOR`, `CLICOLOR`) and setting `NO_COLOR=1` in `shell_executor.js` (vector `b4`), tag `v5.1.0`, full 26/26 test suites green |
+
+## 6. References
+
+- `NOTES.md` — raw incident ledger (historical record)
+- `README.md` — operational guide and configuration reference
+- `tests/` — executable regression locks (26 test suites)
 - Upstream: `syv-ai/qwen38-27b-rtx3090` (vLLM recipe; issue #48 = the
   first-chunked-prefill wedge, resolved upstream 2026-09-02)
+

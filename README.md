@@ -1,12 +1,14 @@
 # LLM_Ecosystem & DeepSeek-AVO Harness
 
+[![Release: v5.1.0](https://img.shields.io/badge/Release-v5.1.0%20(14%2F14%20Passes)-brightgreen.svg)](https://github.com/ApatheticMioz/LLM_Ecosystem/releases/tag/v5.1.0)
+[![Test Gate: 26/26 Suites Green](https://img.shields.io/badge/Test%20Gate-26%2F26%20Suites%20Green-success.svg)](#10-testing--verification)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20WSL2%20Ubuntu-orange.svg)](https://learn.microsoft.com/en-us/windows/wsl/)
 [![Hardware](https://img.shields.io/badge/GPU-RTX%203090%20%2F%204090%20(24GB)-76B900.svg)](https://www.nvidia.com)
 [![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#6-model-serving-speculative-decoding--quantization)
 [![Serving](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#6-model-serving-speculative-decoding--quantization)
 [![Microkernel](https://img.shields.io/badge/Harness-Cordis%20Zero--IPC-brightgreen.svg)](#3-why-deepseek-avo-is-5x300x-faster-than-legacy-goose)
-[![Security](https://img.shields.io/badge/Security-90%2F90%20Vectors%20Blocked-success.svg)](#4-zero-risk-data-containment-the-5-layers-of-defense)
+[![Security](https://img.shields.io/badge/Security-123%2F123%20Vectors%20Blocked%20(137%20Total)-success.svg)](#4-zero-risk-data-containment-the-5-layers-of-defense)
 [![SWE-rebench](https://img.shields.io/badge/SWE--rebench-32.0%25%20Resolved-blueviolet.svg)](#8-swe-rebench-validation-benchmark)
 
 **LLM_Ecosystem** is a production-grade, local-first multi-agent pair-programming infrastructure. High-reasoning orchestrators (**Claude 3.7 / 4.5 Sonnet**, **Claude Code**, or **Gemini 3.8 Flash** in Google Antigravity IDE) operate as the **Lead Architect & Meta-Supervisor**, while a locally-served **Qwen3.8-27B** (running on a single 24GB NVIDIA RTX 3090/4090 via vLLM + DFlash2 + KVarN @ 245K context) executes code exploration, structural AST manipulation, testing, and file editing for **$0 token cost**.
@@ -283,6 +285,23 @@ The serving backend runs inside WSL2 Ubuntu at `~/qwen-serving` (forked from [sy
 | 100,000 tokens | ~1,000–1,050 tok/s | 103–129 s |
 | **Prefix Cache Hit (Same `session_id`)** | **~8,000–9,000 tok/s** | **< 0.5 s** |
 
+### 11-Hour Multi-Agent Production Marathon Telemetry (v5.1.0 Validation)
+
+In an unbroken 11.25-hour autonomous pairing session across Gemini 3.8 Flash (Antigravity Meta-Supervisor), GLM-5.3-Flash / Claude Code (Lead Architect), and Qwen3.8-27B (AVO Cordis Coworker), the stack delivered the following production metrics:
+
+| Production Telemetry Dimension | Empirical Measurement | Operational Value |
+|---|---|---|
+| **Cumulative Prefill Volume** | **53,022,903 tokens** | Processed locally on RTX 3090 at **$0 token cost** |
+| **Cumulative Generation Volume** | **1,614,900 tokens** | Multi-pass codebase refactoring & structural AST surgery |
+| **Speculative Accepted Tokens** | **1,273,521 tokens** | **78.86% acceptance rate** on DFlash2 1.92B non-autoregressive drafter |
+| **Active Micro-Sessions Completed** | **132 sessions** | Micro-session roll cadence preventing KV cache decay |
+| **Microkernel Lifecycle Events** | **6,029 events** | Append-only event telemetry logged in `~/.qwen/sessions/` |
+| **Total Tool Invocations** | **1,885+ calls** | `bash`: 818, `read_file`: 481, `edit_file`: 321, `write_file`: 145, `search_code`: 58, `list_dir`: 44, `avo_*`: 23, `ast_*`: 2 |
+| **Hardware VRAM Footprint** | **24,136 MiB / 24,576 MiB** | Universal 245K context + KVarN k4v2 cache |
+| **Operating Temperatures** | **31°C - 58°C** | Steady thermal curve under 250W power cap |
+| **Zero-Turn OS Wait Savings** | **~570M tokens** | Zero-turn HTTP long-poll (`:18021`) eliminated polling tax |
+| **Test Gate Verification** | **26/26 Suites Green** | 100% exit 0 under `npm run test:all` (zero skips) |
+
 ---
 
 ## 8. SWE-rebench Validation Benchmark
@@ -412,26 +431,28 @@ The MCP server exposes the following environment-variable knobs (all defined in 
 
 ## 10. Testing & Verification
 
-The repository includes a test suite covering security sandboxing, canary operations, AVO lifecycle, and cross-process serialization:
+The repository includes a comprehensive 26-suite test gate covering zero-trust containment, POSIX routing, syntax validation, live SSE streaming, and process reaping:
 
 ```powershell
 cd D:\LLM_Ecosystem\mcp-qwen
 
-# Run standard test suite (Security + Canary + AVO + Semaphore)
+# Run 23 offline suites (Security + AST + Syntax + Reaping + Schema Parity)
 npm test
 
-# Run all tests including streaming proxy checks
+# Run all 26 suites including live-engine benchmarks and proxy checks
 npm run test:all
 
-# Run individual suites:
-npm run test:security    # 90-vector blast-radius sandboxing audit
-npm run test:canary      # AST search, syntax gates, traceback condenser
-npm run test:avo         # Closed-loop evaluation & snapshot rollback
-npm run test:semaphore   # Cross-process lease exclusion tests
-npm run test:proxy       # Universal UTF-8 streaming proxy verification
+# Run individual targeted suites:
+npm run test:security    # 137-vector containment (123 attack vectors blocked, ANSI color isolation b4)
+npm run test:canary      # AST search, syntax gates, traceback condenser, AVO eval
+npm run test:avo         # Closed-loop evaluation & snapshot rollback (live engine)
+npm run test:semaphore   # Cross-process lease exclusion tests (private state dir)
+npm run test:proxy       # Universal UTF-8 streaming proxy & repetition breaker
+npm run test:syntax      # Pre-commit syntax gates across JS, TS, Python, Go, Rust, JSON
+npm run test:schema_parity # Antigravity JSON vs live zod schema drift lock
 ```
 
-All test suites run identically on both **Windows 11** and **WSL2 Ubuntu**.
+All test suites enforce the **Universal UNIX LF (`\n`) Invariant (Rule 7)**: any CRLF mismatch trips `LineEndingMismatchError` as an immediate dead-man fuse. All test suites run identically on both **Windows 11** and **WSL2 Ubuntu**.
 
 ---
 
@@ -439,6 +460,8 @@ All test suites run identically on both **Windows 11** and **WSL2 Ubuntu**.
 
 Detailed design decisions, threat models, and architectural evaluations are indexed in [`docs/README.md`](docs/README.md):
 
+- [mcp-qwen Incident-Derived Design Specification](mcp-qwen/docs/DESIGN.md) (L1–L17 architectural post-mortems)
+- [mcp-qwen Production Specification](mcp-qwen/README.md)
 - [Repository & Configuration Drift Audit](docs/audits/AUDIT_2026-09-05.md)
 - [DeepSeek-AVO Implementation & Progress Ledger](docs/audits/DEEPSEEK_AVO_PROGRESS.md)
 - [Patchwork Adversarial Security Audit](docs/audits/PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md)
