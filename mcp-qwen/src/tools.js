@@ -125,6 +125,8 @@ export function registerTools(server) {
       timeout_ms,
       engine,
     }) => {
+      let raceHandle;
+      try {
       // P4i: canonicalize the working directory ONCE at the single task-entry
       // point, through the OS symlink/junction resolution layer. This is the
       // provenance fix: if the MCP server process was launched with a
@@ -154,7 +156,6 @@ export function registerTools(server) {
         engine,
       });
 
-      let raceHandle;
       const raceTimer = new Promise((resolve) => {
         raceHandle = setTimeout(() => resolve({ timedOutOnClientRace: true }), RACE_MS);
       });
@@ -191,6 +192,16 @@ export function registerTools(server) {
         content: [{ type: "text", text: responseText.join("\n") }],
         isError: false,
       };
+      } catch (err) {
+        // P12: MCP-conformant tool-execution failure — a normal result with
+        // isError:true, never a thrown exception or protocol-level error.
+        // The original message is preserved verbatim; stack traces are never
+        // leaked into content.
+        return {
+          content: [{ type: "text", text: `qwen_coworker: ${err && err.message ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
     }
   );
 
@@ -213,6 +224,7 @@ export function registerTools(server) {
       },
     },
     async ({ action, task_id }) => {
+      try {
       if (action === "list") {
         const merged = new Map();
         for (const dt of listTasksFromDisk()) {
@@ -416,6 +428,16 @@ export function registerTools(server) {
           content: [{ type: "text", text: `Task \`${task_id}\` was already finished.` }],
         };
       }
+      } catch (err) {
+        // P12: MCP-conformant tool-execution failure — a normal result with
+        // isError:true, never a thrown exception or protocol-level error.
+        // The original message is preserved verbatim; stack traces are never
+        // leaked into content.
+        return {
+          content: [{ type: "text", text: `qwen_task: ${err && err.message ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
     }
   );
 
@@ -437,6 +459,7 @@ export function registerTools(server) {
       },
     },
     async ({ action, force }) => {
+      try {
       if (action === "status") {
         const info = await serverInfo();
         const running = !!info;
@@ -555,6 +578,16 @@ export function registerTools(server) {
               ),
             },
           ],
+        };
+      }
+      } catch (err) {
+        // P12: MCP-conformant tool-execution failure — a normal result with
+        // isError:true, never a thrown exception or protocol-level error.
+        // The original message is preserved verbatim; stack traces are never
+        // leaked into content.
+        return {
+          content: [{ type: "text", text: `qwen_server: ${err && err.message ? err.message : String(err)}` }],
+          isError: true,
         };
       }
     }

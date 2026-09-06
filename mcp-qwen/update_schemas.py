@@ -35,6 +35,12 @@ for mcp_dir in unique_dirs:
         except Exception:
             pass
 
+# P12: This dict is the single source of truth for the Antigravity-side
+# tool schemas. It MUST stay in lockstep with the zod schemas in
+# src/tools.js (the live server). The schema_parity test compares the
+# LIVE-served inputSchema against the JSON files this script generates.
+# If you change a zod schema in src/tools.js, update the matching entry
+# here and re-run `python update_schemas.py`.
 tools = {
     'qwen_coworker': {
         'name': 'qwen_coworker',
@@ -67,15 +73,16 @@ tools = {
             '$schema': 'http://json-schema.org/draft-07/schema#',
             'type': 'object',
             'properties': {
-                'prompt': {'type': 'string', 'description': 'Task, inquiry, or architectural instruction for Qwen'},
-                'session_id': {'type': 'string', 'description': 'Named persistent session ID (maintains KV-cache across turns)'},
-                'cwd': {'type': 'string', 'description': 'Working directory for filesystem and shell tools'},
-                'extensions': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Optional stdio extensions (e.g. uvx free-search-mcp)'},
+                'prompt': {'type': 'string', 'description': 'Task, inquiry, or architectural instruction for Qwen (pure text-only; images must be inspected natively by Lead Architect and summarized into text)'},
+                'session_id': {'type': 'string', 'description': 'Named persistent session ID (maintains KV-cache and conversation context across turns)'},
+                'cwd': {'type': 'string', 'description': 'Working directory for filesystem and shell tools (defaults to current workspace)'},
+                'extensions': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Optional stdio extensions (e.g. [\'uvx free-search-mcp\'], [\'npx -y @upstash/context7-mcp\'])'},
                 'hypothesis': {'type': 'string', 'description': 'Optional NVIDIA AVO hypothesis being tested'},
-                'test_command': {'type': 'string', 'description': 'Optional verification test command'},
-                'metric_name': {'type': 'string', 'description': 'Target metric name in benchmark output'},
-                'higher_is_better': {'type': 'boolean', 'description': 'Whether higher metric values represent improvement'},
-                'timeout_ms': {'type': 'integer', 'description': 'Task timeout in ms (default 3,600,000ms / 1 hour with stream heartbeat)'}
+                'test_command': {'type': 'string', 'description': 'Optional verification test/benchmark command (e.g. \'pytest tests/test_core.py\')'},
+                'metric_name': {'type': 'string', 'description': 'Target metric name in benchmark output (e.g. \'throughput\', \'accuracy\')'},
+                'higher_is_better': {'type': 'boolean', 'description': 'Whether higher metric values represent improvement (default true)'},
+                'timeout_ms': {'type': 'integer', 'exclusiveMinimum': 0, 'maximum': 9007199254740991, 'description': 'Task timeout in ms (default 14,400,000ms (4 hours), minimum 600,000ms (10 min) - budgets are floored because a 27B model on consumer silicon routinely needs tens of minutes)'},
+                'engine': {'type': 'string', 'enum': ['deepseek_avo', 'legacy_goose'], 'description': 'Execution harness engine: \'deepseek_avo\' (default: Cordis microkernel, sandboxed filesystem, SSE direct streaming, NVIDIA AVO) or \'legacy_goose\' (Goose CLI subprocess)'}
             },
             'required': ['prompt']
         }
@@ -88,7 +95,7 @@ tools = {
             'type': 'object',
             'properties': {
                 'action': {'type': 'string', 'enum': ['status', 'cancel', 'cancel_all', 'list'], 'description': 'Action to perform on background tasks'},
-                'task_id': {'type': 'string', 'description': 'Task ID (required for status, optional for cancel/cancel_all to cancel all tasks)'}
+                'task_id': {'type': 'string', 'description': 'Task ID (required for \'status\', optional for \'cancel\'/\'cancel_all\' to cancel all tasks)'}
             },
             'required': ['action']
         }
@@ -100,7 +107,8 @@ tools = {
             '$schema': 'http://json-schema.org/draft-07/schema#',
             'type': 'object',
             'properties': {
-                'action': {'type': 'string', 'enum': ['status', 'start', 'stop'], 'description': 'Lifecycle action to perform'}
+                'action': {'type': 'string', 'enum': ['status', 'start', 'stop'], 'description': 'Lifecycle action to perform'},
+                'force': {'type': 'boolean', 'description': 'Force stop even if a task is actively executing. ONLY permitted if the human USER explicitly requested stopping/rebooting the server or cancelling all tasks. Prohibited for autonomous agent decisions.'}
             },
             'required': ['action']
         }
@@ -188,5 +196,3 @@ try:
         print(f'Verified WSL MCP config: {wsl_cfg_path}')
 except Exception as e:
     print(f'Could not write WSL config: {e}')
-
-
