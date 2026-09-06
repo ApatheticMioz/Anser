@@ -147,9 +147,20 @@ export class ShellExecutorService {
       let timedOut = false;
       let settled = false;
 
+      // Deterministic plain-text tool output: the orchestrator's terminal
+      // env must not leak into command results. Node >= 24 honors
+      // FORCE_COLOR even on piped stdout (colorizing e.g. console.log) and
+      // ignores NO_COLOR while FORCE_COLOR is set — so strip the
+      // color-forcing vars and set NO_COLOR instead.
+      const childEnv = { ...process.env, PAGER: "cat", CI: "1", EXEC_TAG: execTag };
+      delete childEnv.FORCE_COLOR;
+      delete childEnv.CLICOLOR_FORCE;
+      delete childEnv.CLICOLOR;
+      childEnv.NO_COLOR = "1";
+
       const child = spawn(executable, args, {
         cwd: spawnCwd,
-        env: { ...process.env, PAGER: "cat", CI: "1", EXEC_TAG: execTag },
+        env: childEnv,
         stdio: ["ignore", "pipe", "pipe"],
         detached: !IS_WINDOWS,
         windowsHide: true,

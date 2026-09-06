@@ -9,7 +9,8 @@
  *       `echo hello | tr a-z A-Z` → stdout `HELLO`, exit 0 (Bug 1.1 repro
  *       class); `node -e "console.log('quotes-survive')"` → exact stdout, no
  *       mangling (Bug 1.2 repro class); a multi-line quoted node -e script
- *       works.
+ *       works; a color-forcing parent env (FORCE_COLOR) cannot leak ANSI
+ *       escapes into tool output (P14, b4).
  *   (c) Fallback: QWEN_SHELL_MODE=cmd still executes a simple command
  *       (regression lock); with mode=cmd the POSIX shell is never spawned.
  *   (d) Security ordering: a dry-run request returns the simulated result
@@ -180,6 +181,31 @@ async function main() {
           assertOk(
             res.exitCode === 0 && res.stdout.trim() === "3",
             `Multi-line node -e → ${JSON.stringify(res.stdout.trim())} (exit ${res.exitCode})`
+          );
+        }
+      );
+
+      // (b4) P14: a color-forcing parent env must not leak ANSI escapes
+      // into tool output (Node >= 24 honors FORCE_COLOR even on piped
+      // stdout; the executor strips it before spawning).
+      await withEnv(
+        {
+          QWEN_SHELL_MODE: null,
+          QWEN_POSIX_SHELL: null,
+          FORCE_COLOR: "3",
+          NO_COLOR: null,
+        },
+        async () => {
+          const res = await executor.execute({
+            command: 'node -e "console.log(\'plain-text\')"',
+          });
+          assertOk(
+            res.exitCode === 0 &&
+              res.stdout.trim() === "plain-text" &&
+              !res.stdout.includes("\u001b"),
+            `P14: FORCE_COLOR=3 parent env → ANSI-free output (got ${JSON.stringify(
+              res.stdout.trim()
+            )}, exit ${res.exitCode})`
           );
         }
       );
