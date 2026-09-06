@@ -59,6 +59,14 @@ const MAX_MATCHES = 50;
 // Files larger than this are skipped during directory scans (implausible for AST).
 const MAX_FILE_BYTES = 1_000_000;
 
+// P7 — A target string is treated as a glob when it contains any of the
+// standard glob metacharacters. Plain relative/absolute paths (no metachars)
+// are treated as literal file or directory paths.
+const GLOB_META_RE = /[*?[\]{}!+()]/;
+function isGlobPattern(p) {
+  return typeof p === "string" && GLOB_META_RE.test(p);
+}
+
 // ---------------------------------------------------------------------------
 // Lazy napi engine loader (module-level cache, shared across all AstService
 // instances). On ANY load failure we log a single stderr note and return null,
@@ -399,9 +407,30 @@ export class AstService {
   }
 
   /**
+   * P7 — Additive match enrichment. Adds two derived fields to an existing
+   * match object WITHOUT altering any pre-existing field (live agents consume
+   * the original shape):
+   *   - location: `${file}:${line}:${col}` (0-indexed line/col, matching the
+   *     existing `line`/`column` contract) for quick grep-able referencing.
+   *   - snippet:  the match text collapsed to a single trimmed line (all
+   *     whitespace runs -> one space) so multi-line matches render compactly.
+   * The original `file`, `line`, `column`, `text`, `metavariables` fields are
+   * preserved verbatim.
+   */
+  _enrichMatch(m) {
+    const snippet = (m.text || "").replace(/\s+/g, " ").trim();
+    return {
+      ...m,
+      location: `${m.file}:${m.line}:${m.column}`,
+      snippet,
+    };
+  }
+
+  /**
    * In-process napi search. Produces the exact same match shape as the CLI path:
-   * { file, line, column, text, metavariables }. Both engines report 0-indexed
-   * line / 0-indexed column, so the values pass through unchanged.
+   * { file, line, column, text, metavariables } plus the additive P7
+   * { location, snippet } fields. Both engines report 0-indexed line /
+   * 0-indexed column, so the values pass through unchanged.
    */
   napiSearch(engine, content, lang, pattern, fileLabel) {
     const root = engine.parse(lang, content);
@@ -417,7 +446,7 @@ export class AstService {
         const node = m.getMatch(name);
         if (node) mv[name] = node.text();
       }
-      return {
+      return this._enrichMatch({
         file: fileLabel,
         // Both the CLI --json=compact and napi report 0-indexed line / 0-indexed
         // column. Pass through raw so the napi path is byte-identical to the CLI
@@ -426,7 +455,7 @@ export class AstService {
         column: range.start.column,
         text: m.text(),
         metavariables: mv,
-      };
+      });
     });
   }
 
@@ -463,13 +492,13 @@ export class AstService {
         for (const [k, v] of Object.entries(rawMv)) {
           mv[k] = typeof v === "object" && v !== null && "text" in v ? v.text : v;
         }
-        return {
+        return this._enrichMatch({
           file: m.file,
           line: m.range?.start?.line ?? 1,
           column: m.range?.start?.column ?? 1,
           text: m.text,
           metavariables: mv,
-        };
+        });
       });
     } catch (err) {
       // Exit code 1 with empty stdout means 0 matches found in ast-grep
@@ -552,7 +581,7 @@ export class AstService {
    * @param {string} [params.lang] Optional language identifier
    * @returns {Promise<{ path: string, modified: boolean, message: string }>}
    */
-  async replace({ path: targetPath, pattern, rewrite, lang }) {
+  async replace({ path: targetPath, pattern, rewrite, lang, dry_run }) {
     if (!pattern || typeof pattern !== "string") {
       throw new Error("AST replace requires a pattern parameter");
     }
@@ -573,27 +602,33 @@ export class AstService {
 
     const engine = await loadNapiEngine();
     if (engine && NAPI_LANGS.has(detectedLang)) {
-      return this.napiReplace(engine, resolved, originalContent, detectedLang, pattern, rewrite);
+      return this.napiReplace(engine, resolved, originalContent, detectedLang, pattern, rewrite, dry_run);
     }
-    return this.cliReplace(resolved, originalContent, detectedLang, pattern, rewrite);
+    return this.cliReplace(resolved, originalContent, detectedLang, pattern, rewrite, dry_run);
   }
 
   /**
-   * In-process napi replace. Performs the same template-substitution rewrite the
-   * CLI `--rewrite` does, then reuses the exact same validateSyntax gate and
-   * pristine-rollback behavior as the CLI path.
+   * P7 — Pure in-memory napi rewrite. Computes the new file content from the
+   * original WITHOUT touching disk, so it can be reused by both the single-file
+   * path, the batch path, and dry-run previews. Returns
+   *   { newContent, replacements }
+   * where `replacements` is the number of matched AST nodes rewritten (0 when
+   * the pattern matched nothing, in which case newContent === originalContent).
    */
-  napiReplace(engine, resolved, originalContent, lang, pattern, rewrite) {
+  _napiComputeNewContent(engine, originalContent, lang, pattern, rewrite) {
     const root = engine.parse(lang, originalContent);
     const rootNode = root.root();
     const config = engine.pattern(lang, pattern);
     const matches = rootNode.findAll(config);
+    if (matches.length === 0) {
+      return { newContent: originalContent, replacements: 0 };
+    }
     const { single, multi } = extractMetaVars(pattern);
 
     const edits = [];
     for (const m of matches) {
       // Build substitution table; longer tokens first so a single-var name that
-      // is a substring of a multi-var token (e.g. $A vs $$$AB) is not corrupted.
+      // is a substring of a multi-var token (e.g. $A vs $$AB) is not corrupted.
       const table = [];
       for (const name of single) {
         table.push({ token: `$${name}`, value: () => {
@@ -616,7 +651,108 @@ export class AstService {
       edits.push(m.replace(substituted));
     }
 
-    const newContent = rootNode.commitEdits(edits);
+    return { newContent: rootNode.commitEdits(edits), replacements: matches.length };
+  }
+
+  /**
+   * P7 — In-memory CLI compute. Copies the file to a throwaway temp file, runs
+   * the CLI --update-all against the COPY (never the real file), reads the
+   * result back, and cleans up. This guarantees a dry_run preview never touches
+   * the real file on disk during the compute phase. Returns
+   *   { newContent, replacements }
+   * where replacements is 0 when the pattern matched nothing (newContent ===
+   * originalContent) and 1 otherwise (the CLI does not report a per-node count).
+   */
+  _cliComputeNewContent(file, originalContent, lang, pattern, rewrite) {
+    const tmp = _writeTemp(originalContent, path.extname(file) || ".js");
+    try {
+      const bin = this.getBinary();
+      const args = [
+        "run",
+        "--pattern", pattern,
+        "--rewrite", rewrite,
+        "--lang", lang,
+        "--update-all",
+        tmp,
+      ];
+      try {
+        execFileSync(bin, args, {
+          cwd: this.root,
+          encoding: "utf8",
+          timeout: 30_000,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+      } catch (err) {
+        // Exit 1 / empty stderr = no matches (benign) -> content unchanged.
+        if (err.status === 1 && !err.stderr) {
+          return { newContent: originalContent, replacements: 0 };
+        }
+        throw err;
+      }
+      const newContent = fs.readFileSync(tmp, "utf8");
+      return { newContent, replacements: newContent === originalContent ? 0 : 1 };
+    } finally {
+      _removeTemp(tmp);
+    }
+  }
+
+  /**
+   * P7 — Unified compute + gate for a single file. Computes the rewrite FULLY
+   * IN MEMORY (napi, or CLI against a temp copy — never the real file), then
+   * either:
+   *   - dry_run: validates the would-be content in memory and writes NOTHING, or
+   *   - real: commits through the shared _commitReplace gate
+   *     (write -> validateSyntax -> pristine rollback on verified-invalid).
+   * Returns { changed, replacements, syntaxVerified, error }:
+   *   - changed:false, error:null        -> no match (content identical)
+   *   - changed:false, error:<msg>       -> verified invalid (rolled back / would be)
+   *   - changed:true,  syntaxVerified    -> committed / would change
+   *                                         (true=validated, false=honest-degrade)
+   */
+  async _computeAndGate(file, originalContent, lang, pattern, rewrite, dry_run) {
+    const engine = await loadNapiEngine();
+    let newContent;
+    let replacements;
+    if (engine && NAPI_LANGS.has(lang)) {
+      const r = this._napiComputeNewContent(engine, originalContent, lang, pattern, rewrite);
+      newContent = r.newContent;
+      replacements = r.replacements;
+    } else {
+      const r = this._cliComputeNewContent(file, originalContent, lang, pattern, rewrite);
+      newContent = r.newContent;
+      replacements = r.replacements;
+    }
+    if (newContent === originalContent) {
+      return { changed: false, replacements: 0, syntaxVerified: null, error: null };
+    }
+    if (dry_run) {
+      // Preview only: validate the would-be content in memory, write nothing.
+      const validation = this.validateSyntax(file, newContent, lang);
+      if (validation.checked && !validation.valid) {
+        return {
+          changed: false,
+          replacements: 0,
+          syntaxVerified: false,
+          error: `SyntaxValidationError: AST replacement would result in malformed syntax (${validation.error}).`,
+        };
+      }
+      return { changed: true, replacements, syntaxVerified: validation.checked, error: null };
+    }
+    return this._commitReplace(file, originalContent, newContent, replacements, lang);
+  }
+
+  /**
+   * In-process napi replace. Computes the rewrite in memory (shared
+   * _napiComputeNewContent), then commits through the shared _commitReplace gate
+   * (write -> validateSyntax -> pristine rollback on verified-invalid).
+   * Honors dry_run: when true, validates the would-be content in memory and
+   * writes nothing to disk.
+   */
+  napiReplace(engine, resolved, originalContent, lang, pattern, rewrite, dry_run) {
+    const { newContent, replacements } = this._napiComputeNewContent(
+      engine, originalContent, lang, pattern, rewrite
+    );
     if (newContent === originalContent) {
       return {
         path: resolved,
@@ -625,28 +761,41 @@ export class AstService {
       };
     }
 
-    fs.writeFileSync(resolved, newContent, "utf8");
-
-    // Mandatory compile/parse check on the newly written file (shared gate).
-    const validation = this.validateSyntax(resolved, newContent, lang);
-    if (validation.checked && !validation.valid) {
-      // Verified INVALID -> rollback immediately to original pristine content.
-      fs.writeFileSync(resolved, originalContent, "utf8");
-      throw new Error(
-        `SyntaxValidationError: AST replacement resulted in malformed syntax (${validation.error}). Disk rolled back.`
-      );
+    if (dry_run) {
+      // Preview only: validate the would-be content in memory, write nothing.
+      const validation = this.validateSyntax(resolved, newContent, lang);
+      if (validation.checked && !validation.valid) {
+        throw new Error(
+          `SyntaxValidationError: AST replacement would result in malformed syntax (${validation.error}).`
+        );
+      }
+      const verifiedNote = validation.checked
+        ? "Syntax validated."
+        : `Syntax NOT verified (no checker available for '${lang}').`;
+      return {
+        path: resolved,
+        modified: true,
+        dry_run: true,
+        syntax_verified: validation.checked,
+        bytes_before: Buffer.byteLength(originalContent, "utf8"),
+        bytes_after: Buffer.byteLength(newContent, "utf8"),
+        message: `AST pattern '${pattern}' would replace in ${path.basename(resolved)} (dry run, no write). ${verifiedNote}`,
+      };
     }
+
+    const r = this._commitReplace(resolved, originalContent, newContent, replacements, lang);
+    if (r.error) throw new Error(r.error);
 
     // Honest degradation: the rewrite is committed, but the tool result must
     // state it was NOT syntax-verified (no checker available for this lang).
-    const verifiedNote = validation.checked
+    const verifiedNote = r.syntaxVerified
       ? "Syntax validated."
       : `Syntax NOT verified (no checker available for '${lang}').`;
 
     return {
       path: resolved,
       modified: true,
-      syntax_verified: validation.checked,
+      syntax_verified: r.syntaxVerified,
       bytes_before: Buffer.byteLength(originalContent, "utf8"),
       bytes_after: Buffer.byteLength(newContent, "utf8"),
       message: `AST pattern '${pattern}' successfully replaced in ${path.basename(resolved)}. ${verifiedNote}`,
@@ -654,69 +803,55 @@ export class AstService {
   }
 
   /**
-   * CLI replace (fallback). Preserves the original behavior exactly, including
-   * the exit-1/empty-stdout "no matches" handling and the syntax gate/rollback.
+   * P7 — Shared commit gate for a single file. Writes `newContent` to disk,
+   * runs the SAME validateSyntax gate, and rolls the file back to
+   * `originalContent` (pristine) when the rewrite is verified INVALID. Returns a
+   * structured result so both the single-file and batch paths can share it:
+   *   { changed, replacements, syntaxVerified, error }
+   *   - changed:false, error:null        -> no-op (content identical)
+   *   - changed:false, error:<msg>       -> verified invalid, rolled back
+   *   - changed:true,  syntaxVerified    -> committed (true=validated,
+   *                                         false=honest-degrade, no checker)
    */
-  cliReplace(resolved, originalContent, lang, pattern, rewrite) {
-    const bin = this.getBinary();
-    const args = [
-      "run",
-      "--pattern",
-      pattern,
-      "--rewrite",
-      rewrite,
-      "--lang",
-      lang,
-      "--update-all",
-      resolved,
-    ];
-
-    try {
-      execFileSync(bin, args, {
-        cwd: this.root,
-        encoding: "utf8",
-        timeout: 30_000,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
-
-      const updatedContent = fs.readFileSync(resolved, "utf8");
-      if (updatedContent === originalContent) {
-        return {
-          path: resolved,
-          modified: false,
-          message: `Pattern '${pattern}' did not match any AST nodes in ${path.basename(resolved)}. File unchanged.`,
-        };
-      }
-
-      // Mandatory compile/parse check on the newly written file
-      const validation = this.validateSyntax(resolved, updatedContent, lang);
-      if (validation.checked && !validation.valid) {
-        // Verified INVALID -> rollback immediately to original pristine content.
-        fs.writeFileSync(resolved, originalContent, "utf8");
-        throw new Error(
-          `SyntaxValidationError: AST replacement resulted in malformed syntax (${validation.error}). Disk rolled back.`
-        );
-      }
-
-      // Honest degradation: committed, but the result states it was NOT
-      // syntax-verified when no checker was available for this language.
-      const verifiedNote = validation.checked
-        ? "Syntax validated."
-        : `Syntax NOT verified (no checker available for '${lang}').`;
-
+  _commitReplace(file, originalContent, newContent, replacements, lang) {
+    if (newContent === originalContent) {
+      return { changed: false, replacements: 0, syntaxVerified: null, error: null };
+    }
+    fs.writeFileSync(file, newContent, "utf8");
+    const validation = this.validateSyntax(file, newContent, lang);
+    if (validation.checked && !validation.valid) {
+      // Verified INVALID -> rollback immediately to original pristine content.
+      fs.writeFileSync(file, originalContent, "utf8");
       return {
-        path: resolved,
-        modified: true,
-        syntax_verified: validation.checked,
-        bytes_before: Buffer.byteLength(originalContent, "utf8"),
-        bytes_after: Buffer.byteLength(updatedContent, "utf8"),
-        message: `AST pattern '${pattern}' successfully replaced in ${path.basename(resolved)}. ${verifiedNote}`,
+        changed: false,
+        replacements: 0,
+        syntaxVerified: false,
+        error: `SyntaxValidationError: AST replacement resulted in malformed syntax (${validation.error}). Disk rolled back.`,
       };
+    }
+    return {
+      changed: true,
+      replacements,
+      syntaxVerified: validation.checked,
+      error: null,
+    };
+  }
+
+  /**
+   * CLI replace (fallback). P7: the rewrite is now computed IN MEMORY against a
+   * throwaway temp copy (never the real file), so a dry_run preview is
+   * byte-safe on this path too. The result is then committed through the SAME
+   * shared _commitReplace gate (write -> validateSyntax -> pristine rollback),
+   * giving byte-identical behavior to the napi path.
+   */
+  cliReplace(resolved, originalContent, lang, pattern, rewrite, dry_run) {
+    let newContent;
+    let replacements;
+    try {
+      const r = this._cliComputeNewContent(resolved, originalContent, lang, pattern, rewrite);
+      newContent = r.newContent;
+      replacements = r.replacements;
     } catch (err) {
-      if (err.message.startsWith("SyntaxValidationError")) {
-        throw err;
-      }
       if (err.status === 1 && !err.stderr) {
         return {
           path: resolved,
@@ -726,6 +861,280 @@ export class AstService {
       }
       throw new Error(`AST replace error: ${err.stderr || err.message}`);
     }
+
+    if (newContent === originalContent) {
+      return {
+        path: resolved,
+        modified: false,
+        message: `Pattern '${pattern}' did not match any AST nodes in ${path.basename(resolved)}. File unchanged.`,
+      };
+    }
+
+    if (dry_run) {
+      // Preview only: validate the would-be content in memory, write nothing.
+      const validation = this.validateSyntax(resolved, newContent, lang);
+      if (validation.checked && !validation.valid) {
+        throw new Error(
+          `SyntaxValidationError: AST replacement would result in malformed syntax (${validation.error}).`
+        );
+      }
+      const verifiedNote = validation.checked
+        ? "Syntax validated."
+        : `Syntax NOT verified (no checker available for '${lang}').`;
+      return {
+        path: resolved,
+        modified: true,
+        dry_run: true,
+        syntax_verified: validation.checked,
+        bytes_before: Buffer.byteLength(originalContent, "utf8"),
+        bytes_after: Buffer.byteLength(newContent, "utf8"),
+        message: `AST pattern '${pattern}' would replace in ${path.basename(resolved)} (dry run, no write). ${verifiedNote}`,
+      };
+    }
+
+    const r = this._commitReplace(resolved, originalContent, newContent, replacements, lang);
+    if (r.error) throw new Error(r.error);
+
+    // Honest degradation: committed, but the result states it was NOT
+    // syntax-verified when no checker was available for this language.
+    const verifiedNote = r.syntaxVerified
+      ? "Syntax validated."
+      : `Syntax NOT verified (no checker available for '${lang}').`;
+
+    return {
+      path: resolved,
+      modified: true,
+      syntax_verified: r.syntaxVerified,
+      bytes_before: Buffer.byteLength(originalContent, "utf8"),
+      bytes_after: Buffer.byteLength(newContent, "utf8"),
+      message: `AST pattern '${pattern}' successfully replaced in ${path.basename(resolved)}. ${verifiedNote}`,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // P7 — Batch replace (directory / glob target) with dry_run preview.
+  //
+  // `replace` is single-file only. `replaceBatch` applies the SAME pattern/
+  // rewrite across every matching file in a directory or glob, running the
+  // SAME validateSyntax gate per file, rolling back ONLY the file that is
+  // verified invalid, and continuing to the next file (never aborting the
+  // batch). It respects DEFAULT_IGNORED_DIRS and the 1 MB per-file guard.
+  //
+  // dry_run computes everything (matches, rewrites, per-file validation) but
+  // writes NOTHING to disk, so a preview is byte-safe.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolves a batch target (directory or glob) to a deterministic, sorted list
+   * of candidate file paths. Returns null when the target is a single file
+   * (caller should use the single-file path) or does not exist.
+   *
+   * @param {string} resolved Resolved (absolute) target path.
+   * @returns {string[]|null}
+   */
+  _resolveBatchFiles(resolved) {
+    if (isGlobPattern(resolved)) {
+      // Glob: expand relative to the sandbox root, then filter to regular files
+      // that are inside the root and not in an ignored directory.
+      const base = path.dirname(resolved);
+      const pattern = path.basename(resolved);
+      let hits;
+      try {
+        hits = fs.globSync(pattern, {
+          cwd: base,
+          absolute: true,
+          withFileTypes: true,
+          dot: false,
+        });
+      } catch {
+        return [];
+      }
+      const out = [];
+      for (const h of hits) {
+        const p = h.path;
+        if (!this._isWithinRoot(p)) continue;
+        if (this._isIgnoredPath(p)) continue;
+        let st;
+        try {
+          st = fs.statSync(p);
+        } catch {
+          continue;
+        }
+        if (!st.isFile()) continue;
+        if (st.size > MAX_FILE_BYTES) continue;
+        if (!this.inferLanguageByExtension(p)) continue;
+        out.push(p);
+      }
+      out.sort();
+      return out;
+    }
+
+    // Directory: recursive walk (same discipline as searchDirectory).
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+      const out = [];
+      const walk = (dir) => {
+        let entries;
+        try {
+          entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const entry of entries) {
+          if (DEFAULT_IGNORED_DIRS.has(entry.name)) continue;
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walk(full);
+          } else if (entry.isFile()) {
+            if (!this.inferLanguageByExtension(full)) continue;
+            let st;
+            try {
+              st = fs.statSync(full);
+            } catch {
+              continue;
+            }
+            if (st.size > MAX_FILE_BYTES) continue;
+            out.push(full);
+          }
+        }
+      };
+      walk(resolved);
+      out.sort();
+      return out;
+    }
+
+    // Single file or nonexistent -> not a batch target.
+    return null;
+  }
+
+  /** True when `p` is inside the sandbox root (canonical space). */
+  _isWithinRoot(p) {
+    const realTarget = canonicalizePath(path.normalize(p));
+    const realRoot = canonicalizePath(path.normalize(this.root));
+    const rel = path.relative(realRoot, realTarget);
+    return !(rel.startsWith("..") || path.isAbsolute(rel));
+  }
+
+  /** True when any path segment of `p` is in DEFAULT_IGNORED_DIRS. */
+  _isIgnoredPath(p) {
+    const parts = path.normalize(p).split(path.sep);
+    return parts.some((seg) => DEFAULT_IGNORED_DIRS.has(seg));
+  }
+
+  /**
+   * Batch AST replace across a directory or glob target.
+   *
+   * @param {object} params
+   * @param {string} params.path Target directory or glob (a directory path,
+   *   or a glob pattern using standard recursive wildcards)
+   * @param {string} params.pattern Search pattern with metavariables
+   * @param {string} params.rewrite Replacement pattern
+   * @param {string} [params.lang] Optional language (only used for single-file
+   *   inference; batch infers per-file by extension)
+   * @param {boolean} [params.dry_run] When true, compute everything but write
+   *   nothing to disk.
+   * @returns {Promise<object>} Batch summary:
+   *   { dry_run, files_scanned, files_matched, files_changed,
+   *     files_would_change, replacements,
+   *     failures: [{file, error}], syntax_unverified: [file, ...] }
+   */
+  async replaceBatch({ path: targetPath, pattern, rewrite, lang, dry_run }) {
+    if (!pattern || typeof pattern !== "string") {
+      throw new Error("AST replace requires a pattern parameter");
+    }
+    if (typeof rewrite !== "string") {
+      throw new Error("AST replace requires a rewrite parameter");
+    }
+
+    const resolved = this.resolvePath(targetPath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Path does not exist: ${targetPath}`);
+    }
+
+    const files = this._resolveBatchFiles(resolved);
+    if (files === null) {
+      // Not a directory/glob: a single file. Delegate to the single-file path
+      // (which honors dry_run via the shared gate) and shape the result as a
+      // one-file batch summary so callers get a uniform contract. A per-file
+      // gate failure is recorded in failures[] (not thrown), matching the
+      // directory path.
+      let single;
+      let gateError = null;
+      try {
+        single = await this.replace({ path: targetPath, pattern, rewrite, lang, dry_run });
+      } catch (err) {
+        if (err.message.startsWith("SyntaxValidationError")) {
+          gateError = err.message;
+        } else {
+          throw err;
+        }
+      }
+      const changed = single && single.modified === true;
+      return {
+        dry_run: !!dry_run,
+        files_scanned: 1,
+        files_matched: changed || gateError ? 1 : 0,
+        files_changed: changed && !dry_run ? 1 : 0,
+        files_would_change: changed ? 1 : 0,
+        replacements: changed ? 1 : 0,
+        failures: gateError ? [{ file: resolved, error: gateError }] : [],
+        syntax_unverified: changed && single.syntax_verified === false ? [resolved] : [],
+      };
+    }
+
+    const summary = {
+      dry_run: !!dry_run,
+      files_scanned: files.length,
+      files_matched: 0,
+      files_changed: 0,
+      files_would_change: 0,
+      replacements: 0,
+      failures: [],
+      syntax_unverified: [],
+    };
+
+    for (const file of files) {
+      const fileLang = this.inferLanguageByExtension(file);
+      let originalContent;
+      try {
+        originalContent = fs.readFileSync(file, "utf8");
+      } catch {
+        continue; // unreadable -> skip, do not abort the batch
+      }
+
+      // Compute the rewrite FULLY IN MEMORY (napi, or CLI against a temp copy —
+      // the real file is never touched during compute), then gate per file.
+      let r;
+      try {
+        r = await this._computeAndGate(file, originalContent, fileLang, pattern, rewrite, dry_run);
+      } catch {
+        // Parse failure on this file -> skip it, continue the batch.
+        continue;
+      }
+
+      if (r.error) {
+        // Verified invalid (rolled back on a real run; would-be on a dry run).
+        summary.files_matched += 1;
+        summary.failures.push({ file, error: r.error });
+        continue;
+      }
+
+      if (!r.changed) {
+        // No match in this file -> not counted as matched.
+        continue;
+      }
+
+      summary.files_matched += 1;
+      summary.replacements += r.replacements;
+      if (dry_run) {
+        summary.files_would_change += 1;
+        if (!r.syntaxVerified) summary.syntax_unverified.push(file);
+      } else {
+        summary.files_changed += 1;
+        if (!r.syntaxVerified) summary.syntax_unverified.push(file);
+      }
+    }
+
+    return summary;
   }
 
   // -------------------------------------------------------------------------
@@ -1048,7 +1457,10 @@ export function astPlugin(ctx, options = {}) {
     description:
       "Searches code by syntactic AST pattern across 20+ languages (JS, TS, Python, Go, Rust, C++). " +
       "Use metavariables ($VAR, $$$BODY) to capture elements regardless of whitespace or formatting differences. " +
-      "Example pattern: 'function $NAME($ARGS) { $$$BODY }' or 'def $NAME($$$ARGS): $$$BODY'.",
+      "Example pattern: 'function $NAME($$$ARGS) { $$$BODY }' or 'def $NAME($$$ARGS): $$$BODY'. " +
+      "Each match reports file, line, column, the matched text, a compact single-line snippet, a " +
+      "grep-able 'file:line:column' location, and a metavariables map of every $VAR/$$$BODY binding. " +
+      "Directory targets are scanned recursively (sandbox ignore-set and size caps applied).",
     parameters: {
       type: "object",
       properties: {
@@ -1075,6 +1487,7 @@ export function astPlugin(ctx, options = {}) {
       "Performs AST-verified syntactic code replacement with mandatory syntax validation before commit. " +
       "Rewrites matching code patterns while preserving formatting and comments. " +
       "If the rewrite introduces invalid syntax, it is automatically rejected and the file is kept pristine. " +
+      "Pass dry_run=true to preview the rewrite (validates syntax, writes nothing). " +
       "Example: pattern='function $NAME($ARGS) { $$$BODY }', rewrite='async function $NAME($ARGS) { $$$BODY }'.",
     parameters: {
       type: "object",
@@ -1095,9 +1508,51 @@ export function astPlugin(ctx, options = {}) {
           type: "string",
           description: "Optional language ('js', 'ts', 'python', 'go', 'rust')",
         },
+        dry_run: {
+          type: "boolean",
+          description: "When true, compute and syntax-validate the rewrite but write nothing to disk.",
+        },
       },
       required: ["path", "pattern", "rewrite"],
     },
     execute: async (args) => ast.replace(args),
+  });
+
+  ctx.registerTool("ast_replace_batch", {
+    description:
+      "Applies the SAME AST pattern/rewrite across every matching file in a directory or glob target. " +
+      "Each file is computed in memory, syntax-gated, and committed independently: a file whose rewrite " +
+      "is verified invalid is rolled back to pristine and recorded in failures, while the batch continues. " +
+      "Respects the sandbox ignore-set and per-file size caps. " +
+      "Pass dry_run=true to preview: everything is computed and validated but NOTHING is written. " +
+      "Returns a summary: { dry_run, files_scanned, files_matched, files_changed, files_would_change, " +
+      "replacements, failures: [{file, error}], syntax_unverified: [file, ...] }.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Target directory or glob pattern (standard recursive wildcards)",
+        },
+        pattern: {
+          type: "string",
+          description: "Target AST code pattern with metavariables",
+        },
+        rewrite: {
+          type: "string",
+          description: "Replacement AST code pattern referencing captured metavariables",
+        },
+        lang: {
+          type: "string",
+          description: "Optional language (only used for single-file inference; batch infers per-file by extension)",
+        },
+        dry_run: {
+          type: "boolean",
+          description: "When true, compute and validate everything but write nothing to disk.",
+        },
+      },
+      required: ["path", "pattern", "rewrite"],
+    },
+    execute: async (args) => ast.replaceBatch(args),
   });
 }
