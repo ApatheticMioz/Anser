@@ -55,6 +55,7 @@ benchmarks/swe-rebench/__pycache__/
 # AVO candidate lineage & runtime scratch
 .avo/
 .test_avo_tmp/
+.test_live_tmp/
 .benchmark_tmp/
 .canary_tmp/
 mcp-qwen/.canary_tmp/

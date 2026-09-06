@@ -364,8 +364,8 @@ full 24-bit color escapes into piped buffers.
 **Structural fix:** `shell_executor.js` (commit `a1dabdc`, P14) explicitly
 strips all color-forcing environment variables (`FORCE_COLOR`, `CLICOLOR`,
 `CLICOLOR_FORCE`) from the child spawn environment, and injects `NO_COLOR: "1"`.
-Locked by regression vector `b4` in `tests/security.test.js` and verified
-under real Claude Code sessions.
+Locked by regression vector `b4` in `tests/posix_routing.test.js` and
+verified under a live `FORCE_COLOR=3` parent environment.
 
 ### L14. Universal UNIX LF line-ending invariant vs cross-platform/tokenizer drift (P4h / Rule 7)
 
