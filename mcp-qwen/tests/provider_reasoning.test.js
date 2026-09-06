@@ -13,6 +13,18 @@
  *       (child process: config reads env at import time).
  *   (e) QWEN_REASONING_EFFORT=low -> payload.chat_template_kwargs.
  *       reasoning_effort==="low"; env unset -> no chat_template_kwargs key.
+ *   (f) P7b reasoning ceiling: QWEN_MAX_REASONING_TOKENS=4 + a reasoning
+ *       stream -> turn ends locally with finish "length" AND
+ *       metrics.reasoningCeilingHit=true (the P2d continuation directive
+ *       lands instead of an 18-minute engine-hogging loop).
+ *   (g) P7b honest finish: stream ends with NO finish_reason frame and no
+ *       output -> finishReason null (dead stream reported as dead, never
+ *       synthesized as "stop").
+ *   (h) P7b stream-idle watchdog: comment-only stream that never closes ->
+ *       rejects with "stream idle timeout" (proxy keep-alive comments do
+ *       NOT count as engine activity).
+ *   (i) P7b watchdog reset: meaningful frames spaced past the idle window
+ *       keep the stream alive (watchdog resets on real SSE data).
  *
  * No vLLM, no network. globalThis.fetch is monkey-patched to return a real
  * Response wrapping a ReadableStream of SSE bytes.
@@ -207,6 +219,167 @@ async function vectorE() {
 }
 
 // ---------------------------------------------------------------------------
+// P7b vectors (f)-(i): stream-death hardening.
+//
+// runProbeChild(env, fetchMockBody): child process with a FULLY custom fetch
+// mock. The child prints exactly one JSON line:
+//   { rejected: bool, message?, result? }
+// config.js reads env at import time, so every env-driven knob is probed in
+// a child (the parent already imported it with default values).
+// ---------------------------------------------------------------------------
+function runProbeChild(env, fetchMockBody) {
+  const providerUrl = pathToFileURL(
+    path.join(__dirname, "..", "src", "harness", "services", "provider_vllm.js")
+  ).href;
+  const childCode = `
+    const providerUrl = process.argv.find((a) => a && a.endsWith("provider_vllm.js"));
+    ${fetchMockBody}
+    const { VllmProviderService } = await import(providerUrl);
+    const svc = new VllmProviderService();
+    try {
+      const res = await svc.streamChat({ messages: [{ role: "user", content: "hi" }] });
+      console.log(JSON.stringify({
+        rejected: false,
+        result: {
+          content: res.content,
+          finishReason: res.finishReason,
+          hadReasoning: res.hadReasoning,
+          reasoningTokens: res.reasoningTokens,
+          ceilingHit: res.metrics.reasoningCeilingHit ?? null,
+        },
+      }));
+    } catch (err) {
+      console.log(JSON.stringify({ rejected: true, message: String(err && err.message) }));
+    }
+    process.exit(0);
+  `;
+  const res = spawnSync(process.execPath, ["--input-type=module", "-e", childCode, providerUrl], {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+    timeout: 30_000,
+  });
+  if (res.status !== 0) {
+    throw new Error(`probe child failed: ${res.stderr || res.stdout}`);
+  }
+  const line = res.stdout.trim().split("\n").filter(Boolean).pop();
+  return JSON.parse(line);
+}
+
+// Closed-stream mock (static SSE text).
+const STATIC_SSE_MOCK = (sseText) => `
+    globalThis.fetch = async (url, opts) => {
+      const stream = new ReadableStream({
+        start(c) { c.enqueue(new TextEncoder().encode(${JSON.stringify(sseText)})); c.close(); },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+`;
+
+// Vector (f): reasoning ceiling — QWEN_MAX_REASONING_TOKENS=4, a reasoning
+// stream must end LOCALLY as length + reasoningCeilingHit (before any engine
+// frame could supply its own reason).
+async function vectorF() {
+  const frames =
+    'data: {"choices":[{"delta":{"reasoning":"A short thought."},"finish_reason":null}]}\n\n' + // ~4 est. tokens
+    'data: {"choices":[{"delta":{"reasoning":"More thought."},"finish_reason":null}]}\n\n' +
+    'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n' +
+    'data: [DONE]\n\n';
+  const out = runProbeChild({ QWEN_MAX_REASONING_TOKENS: "4" }, STATIC_SSE_MOCK(frames));
+  assert.strictEqual(out.rejected, false, "f: ceiling cut must not reject");
+  assert.strictEqual(out.result.finishReason, "length", "f: ceiling surfaces as length cutoff");
+  assert.strictEqual(out.result.ceilingHit, true, "f: metrics.reasoningCeilingHit true");
+  assert.strictEqual(out.result.hadReasoning, true, "f: hadReasoning true (P2d continuation routes)");
+  assert.strictEqual(out.result.content, "", "f: reasoning never leaks into content");
+  console.log("  [PASS] (f) reasoning ceiling -> local length cutoff + ceilingHit flag");
+}
+
+// Vector (g): honest finish — a stream that ends with no finish_reason and
+// produced nothing reports finishReason null (never synthesized "stop").
+async function vectorG() {
+  // Parent-process vector: env-independent, so the plain sseFetchMock works.
+  sseFetchMock(": keep-alive\n\n: keep-alive\n\n");
+  const svc = new VllmProviderService();
+  const res = await svc.streamChat({ messages: [{ role: "user", content: "q" }] });
+  assert.strictEqual(res.finishReason, null, "g: dead/empty stream reports null finishReason");
+  assert.strictEqual(res.content, "", "g: no content");
+  assert.strictEqual(res.toolCalls.length, 0, "g: no tool calls");
+  console.log("  [PASS] (g) stream w/o finish_reason + no output -> honest null");
+}
+
+// Vector (h): stream-idle watchdog — comment-only stream that never closes
+// must reject with "stream idle timeout" (keep-alive comments are NOT engine
+// activity). QWEN_STREAM_IDLE_TIMEOUT_MS=400 keeps the probe fast.
+async function vectorH() {
+  const mock = `
+    let controllerRef = null;
+    let timer = null;
+    globalThis.fetch = async (url, opts) => {
+      const stream = new ReadableStream({
+        start(c) {
+          controllerRef = c;
+          timer = setInterval(() => {
+            try { c.enqueue(new TextEncoder().encode(": keep-alive\\n\\n")); } catch {}
+          }, 100);
+        },
+        cancel() { if (timer) clearInterval(timer); },
+      });
+      if (opts && opts.signal) {
+        opts.signal.addEventListener("abort", () => {
+          if (timer) clearInterval(timer);
+          try { controllerRef.error(new Error("aborted")); } catch {}
+        }, { once: true });
+      }
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  `;
+  const out = runProbeChild({ QWEN_STREAM_IDLE_TIMEOUT_MS: "400" }, mock);
+  assert.strictEqual(out.rejected, true, "h: comment-only silent stream must reject");
+  assert.ok(
+    /idle timeout/i.test(out.message || ""),
+    `h: rejection names the idle timeout (got: ${out.message})`
+  );
+  console.log("  [PASS] (h) idle watchdog fires on comment-only silence (400ms window)");
+}
+
+// Vector (i): watchdog reset — meaningful frames spaced PAST the idle window
+// keep the stream alive; the watchdog must reset on real SSE data. Window
+// 800ms; meaningful frames at ~500ms and ~1200ms; DONE at ~1400ms.
+async function vectorI() {
+  const mock = `
+    let controllerRef = null;
+    const schedule = (ms, fn) => setTimeout(fn, ms);
+    globalThis.fetch = async (url, opts) => {
+      const stream = new ReadableStream({
+        start(c) {
+          controllerRef = c;
+          const send = (obj) => c.enqueue(new TextEncoder().encode(obj));
+          schedule(0, () => send(": keep-alive\\n\\n"));
+          schedule(500, () => send('data: {"choices":[{"delta":{"content":"a"},"finish_reason":null}]}\\n\\n'));
+          schedule(1200, () => send('data: {"choices":[{"delta":{"content":"b"},"finish_reason":null}]}\\n\\n'));
+          schedule(1400, () => {
+            send('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\\n\\n');
+            send("data: [DONE]\\n\\n");
+            c.close();
+          });
+        },
+        cancel() {},
+      });
+      if (opts && opts.signal) {
+        opts.signal.addEventListener("abort", () => {
+          try { controllerRef.error(new Error("aborted")); } catch {}
+        }, { once: true });
+      }
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  `;
+  const out = runProbeChild({ QWEN_STREAM_IDLE_TIMEOUT_MS: "800" }, mock);
+  assert.strictEqual(out.rejected, false, `i: spaced meaningful frames keep stream alive (got: ${out.message})`);
+  assert.strictEqual(out.result.finishReason, "stop", "i: completes cleanly");
+  assert.strictEqual(out.result.content, "ab", "i: content assembled across spaced frames");
+  console.log("  [PASS] (i) meaningful frames reset the idle watchdog (spaced past window)");
+}
+
+// ---------------------------------------------------------------------------
 // Run all vectors.
 // ---------------------------------------------------------------------------
 async function main() {
@@ -219,6 +392,10 @@ async function main() {
     ["(c)", vectorC],
     ["(d)", vectorD],
     ["(e)", vectorE],
+    ["(f)", vectorF],
+    ["(g)", vectorG],
+    ["(h)", vectorH],
+    ["(i)", vectorI],
   ];
   for (const [label, fn] of vectors) {
     try {

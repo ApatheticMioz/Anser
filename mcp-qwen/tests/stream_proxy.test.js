@@ -1,9 +1,18 @@
 import http from "http";
 import assert from "assert";
+import { spawn } from "child_process";
+import path from "path";
+import { fileURLToPath } from "url";
 import { RepetitionDetector } from "../src/repetition_detector.js";
 
 const MOCK_VLLM_PORT = 18995;
 const PROXY_PORT = 18996;
+
+// Ports for the REAL stream_proxy.js regression (P7b): kept distinct from the
+// inline mini-proxy ports above so both can coexist during the suite run.
+const REAL_PROXY_PORT = 18997;
+const REAL_UPSTREAM_PORT = 18998;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------
 // Repetition-detector tiering (P2b): code/diff-significant chars (e.g. a
@@ -145,6 +154,112 @@ function createProxy(upstreamPort, listenPort) {
   return server;
 }
 
+// ---------------------------------------------------------------------------
+// P7b: real-proxy wiring regression. Spawns stream_proxy.js (env-tunable
+// ports) against a mock upstream that streams a literal loop as
+// delta.reasoning and asserts the circuit breaker cuts it.
+// ---------------------------------------------------------------------------
+async function testRealProxyReasoningBreaker() {
+  const UNIT = "I must check the file. "; // 23 chars, letters -> block-detector territory
+  const REPEATS = 60;                     // ~1380 chars >> the 18x23=414 needed to trip
+
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write('data: {"choices":[{"delta":{"reasoning":"Start. "},"finish_reason":null}]}\n\n');
+    let i = 0;
+    const timer = setInterval(() => {
+      if (req.destroyed) { clearInterval(timer); try { res.end(); } catch {} return; }
+      if (i >= REPEATS) {
+        clearInterval(timer);
+        res.write('data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n');
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning: UNIT }, finish_reason: null }] })}\n\n`);
+      i++;
+    }, 5);
+    req.on("close", () => clearInterval(timer));
+  });
+  await new Promise((r) => upstream.listen(REAL_UPSTREAM_PORT, "127.0.0.1", r));
+
+  const proxyChild = spawn(
+    process.execPath,
+    [path.join(__dirname, "..", "stream_proxy.js")],
+    {
+      env: {
+        ...process.env,
+        VLLM_PORT: String(REAL_UPSTREAM_PORT),
+        VLLM_PROXY_PORT: String(REAL_PROXY_PORT),
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    }
+  );
+  let proxyStderr = "";
+  proxyChild.stderr.on("data", (c) => (proxyStderr += c.toString("utf8")));
+
+  try {
+    // Wait for the real proxy to accept connections (bounded).
+    let up = false;
+    for (let attempt = 0; attempt < 50 && !up; attempt++) {
+      up = await new Promise((resolve) => {
+        const probe = http.get(`http://127.0.0.1:${REAL_PROXY_PORT}/v1/models`, (res) => {
+          res.resume();
+          resolve(res.statusCode > 0);
+        });
+        probe.on("error", () => resolve(false));
+        probe.setTimeout(300, () => { probe.destroy(); resolve(false); });
+      });
+      if (!up) await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(up, "real stream_proxy.js child came up on the test port");
+
+    const output = await new Promise((resolve, reject) => {
+      let buf = "";
+      const req = http.request(
+        `http://127.0.0.1:${REAL_PROXY_PORT}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        },
+        (res) => {
+          res.on("data", (c) => (buf += c.toString("utf8")));
+          res.on("end", () => resolve(buf));
+          res.on("error", reject);
+        }
+      );
+      req.on("error", reject);
+      req.end(
+        JSON.stringify({
+          model: "qwen3.8-27b",
+          stream: true,
+          messages: [{ role: "user", content: "q" }],
+        })
+      );
+      // Hard bound: a non-tripping proxy still finishes (upstream ends at 60
+      // units), so this resolves either way; the asserts below discriminate.
+    });
+
+    assert.ok(
+      output.includes("chatcmpl-repetition-breaker"),
+      `real proxy trips the breaker on a delta.reasoning loop. stderr: ${proxyStderr}`
+    );
+    assert.ok(output.includes("[StreamProxy Guard:"), "guard marker present in stream");
+    assert.ok(output.includes("data: [DONE]"), "broken stream still closes cleanly with [DONE]");
+    const unitCount = output.split(UNIT).length - 1;
+    assert.ok(
+      unitCount < REPEATS,
+      `loop truncated before upstream completion (${unitCount}/${REPEATS} units passed through)`
+    );
+    console.log(
+      `[PASS] Real-proxy delta.reasoning wiring: loop cut at ${unitCount}/${REPEATS} units, breaker chunk + [DONE] delivered.`
+    );
+  } finally {
+    proxyChild.kill();
+    await new Promise((r) => upstream.close(r));
+  }
+}
+
 async function testSuite() {
   console.log("=== Testing Stream Proxy with Multi-Byte Splitting & Mid-Stream Error Translation ===");
 
@@ -207,6 +322,16 @@ async function testSuite() {
 
   await new Promise(r => mockServer.close(r));
   await new Promise(r => proxy.close(r));
+
+  // Test 3 (P7b): the REAL stream_proxy.js must feed delta.reasoning into its
+  // repetition detector. Ground truth (P7b forensics): the proxy read only
+  // delta.reasoning_content while this engine emits delta.reasoning
+  // (--reasoning-parser qwen3), leaving reasoning-level loops invisible — a
+  // loop then burned a single ~18-minute generation to the full max_tokens
+  // ceiling. A mock upstream streams a literal reasoning loop through the
+  // real proxy; the breaker chunk must arrive and the loop must be truncated.
+  await testRealProxyReasoningBreaker();
+
   console.log("=== ALL TESTS PASSED ===");
 }
 
