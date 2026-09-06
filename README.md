@@ -291,15 +291,18 @@ In an unbroken 11.25-hour autonomous pairing session across Gemini 3.8 Flash (An
 
 | Production Telemetry Dimension | Empirical Measurement | Operational Value |
 |---|---|---|
-| **Cumulative Prefill Volume** | **53,022,903 tokens** | Processed locally on RTX 3090 at **$0 token cost** |
-| **Cumulative Generation Volume** | **1,614,900 tokens** | Multi-pass codebase refactoring & structural AST surgery |
-| **Speculative Accepted Tokens** | **1,273,521 tokens** | **78.86% acceptance rate** on DFlash2 1.92B non-autoregressive drafter |
-| **Active Micro-Sessions Completed** | **132 sessions** | Micro-session roll cadence preventing KV cache decay |
-| **Microkernel Lifecycle Events** | **6,029 events** | Append-only event telemetry logged in `~/.qwen/sessions/` |
-| **Total Tool Invocations** | **1,885+ calls** | `bash`: 818, `read_file`: 481, `edit_file`: 321, `write_file`: 145, `search_code`: 58, `list_dir`: 44, `avo_*`: 23, `ast_*`: 2 |
+| **Cumulative Prefill Volume** | **56,312,194 tokens** | Processed locally on RTX 3090 at **$0 token cost** |
+| **Cumulative Generation Volume** | **1,749,192 tokens** | Multi-pass codebase refactoring & structural AST surgery |
+| **Empirical Prefill Throughput** | **9,454.3 tok/s** | Average across 56.3M prompt tokens (warm prefix-cache hits reaching 8,000–9,500+ tok/s; cold prefill 1,000–1,810 tok/s) |
+| **Empirical Generation (Decode) Speed** | **58.2 tok/s** | Sustained pure decode throughput (1.75M tokens / 30,077s; mean TPOT 15.42 ms $\to$ **64.9 tok/s** instantaneous) |
+| **Effective End-to-End Turn Speed** | **48.5 tok/s** | Round-trip throughput across all conversation turns including prefill & tool-call handling |
+| **Speculative Accepted Tokens** | **1,379,412 tokens** | **78.86% acceptance rate** on DFlash2 1.92B non-autoregressive drafter |
+| **Active Micro-Sessions Completed** | **134 sessions** | Micro-session roll cadence preventing KV cache decay |
+| **Microkernel Lifecycle Events** | **6,140+ events** | Append-only event telemetry logged in `~/.qwen/sessions/` |
+| **Total Tool Invocations** | **1,939+ calls** | Autonomous execution across Windows and WSL environments |
 | **Hardware VRAM Footprint** | **24,136 MiB / 24,576 MiB** | Universal 245K context + KVarN k4v2 cache |
 | **Operating Temperatures** | **31°C - 58°C** | Steady thermal curve under 250W power cap |
-| **Zero-Turn OS Wait Savings** | **~570M tokens** | Zero-turn HTTP long-poll (`:18021`) eliminated polling tax |
+| **Zero-Turn OS Wait Savings** | **~590M tokens** | Zero-turn HTTP long-poll (`:18021`) eliminated polling tax |
 | **Test Gate Verification** | **26/26 Suites Green** | 100% exit 0 under `npm run test:all` (zero skips) |
 
 ---

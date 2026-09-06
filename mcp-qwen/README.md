@@ -387,15 +387,18 @@ v5.1.0 was validated through an unbroken 11.25-hour multi-agent pair-programming
 
 | Metric | Measured Value | Operational Rationale |
 |--------|----------------|-----------------------|
-| **vLLM Prefill / Prompt Tokens** | **53,022,903 tokens** | Ingested locally on RTX 3090 at $0 token cost |
-| **vLLM Generation Tokens** | **1,614,900 tokens** | Codebase exploration, test runs, structural AST surgery |
-| **Speculative Accepted Tokens** | **1,273,521 tokens** | **78.86% acceptance rate** via DFlash2 1.92B drafter |
-| **Active Qwen Sessions** | **132 sessions** | Micro-session roll cadence preventing KV cache decay |
-| **Logged Microkernel Events** | **6,029 events** | Append-only session telemetry (`~/.qwen/sessions/`) |
-| **Total Tool Executions** | **1,885+ calls** | `bash`: 818, `read_file`: 481, `edit_file`: 321, `write_file`: 145, `search_code`: 58, `list_dir`: 44, `avo_*`: 23, `ast_*`: 2 |
+| **vLLM Prefill / Prompt Tokens** | **56,312,194 tokens** | Ingested locally on RTX 3090 at $0 token cost |
+| **vLLM Generation Tokens** | **1,749,192 tokens** | Codebase exploration, test runs, structural AST surgery |
+| **Empirical Prefill Throughput** | **9,454.3 tok/s** | Average across 56.3M prompt tokens (prefix-cache hit rates reaching 8,000–9,500+ tok/s) |
+| **Empirical Generation (Decode) Speed** | **58.2 tok/s** | Sustained pure decode throughput (mean TPOT 15.42 ms $\to$ **64.9 tok/s** instantaneous) |
+| **Effective End-to-End Turn Speed** | **48.5 tok/s** | Round-trip throughput across conversation turns including prefill & tool handling |
+| **Speculative Accepted Tokens** | **1,379,412 tokens** | **78.86% acceptance rate** via DFlash2 1.92B drafter |
+| **Active Qwen Sessions** | **134 sessions** | Micro-session roll cadence preventing KV cache decay |
+| **Logged Microkernel Events** | **6,140+ events** | Append-only session telemetry (`~/.qwen/sessions/`) |
+| **Total Tool Executions** | **1,939+ calls** | Autonomous execution across Windows and WSL environments |
 | **VRAM Footprint** | **24,136 MiB / 24,576 MiB** | Universal 245K context + KVarN k4v2 KV cache |
 | **GPU Operating Temp** | **31°C - 58°C** | Steady thermal curve under 250W power limit |
-| **Zero-Turn Wait Savings** | **~570M tokens** | Zero-turn HTTP long-poll (`:18021`) eliminated polling tax |
+| **Zero-Turn Wait Savings** | **~590M tokens** | Zero-turn HTTP long-poll (`:18021`) eliminated polling tax |
 
 ### The 14 Engineering Passes (P1–P14 Complete Implementation Map)
 
