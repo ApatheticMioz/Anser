@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { IS_WINDOWS, BOOT_TIMEOUT_MS } from "./config.js";
 import { wslDistro, wslHome, winHome, apiKeyCandidates } from "./platform.js";
+import { pidAlive } from "./semaphore.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -152,20 +153,165 @@ export function getApiKeySync() {
   return "EMPTY";
 }
 
-export function killProcessTree(child, sessionId) {
-  if (sessionId) {
+// ---------------------------------------------------------------------------
+// P10 — Kill certainty + honest lifecycle
+// ---------------------------------------------------------------------------
+//
+// The legacy kill paths fired a broad `pkill -9 -f 'goose run --name <id>'`
+// and never verified the kill landed. Two failure modes were observed live:
+//   (a) over-kill: a session id that is a SUBSTRING of another session's id
+//       (e.g. "abc" vs "abc123") matched the wrong process;
+//   (b) silent failure: the kill was fire-and-forget, so a surviving /
+//       zombie process was never detected or escalated.
+//
+// The hardened path:
+//   1. ANCHORS the session-id sweep: it lists candidate pids with a broad
+//      `pgrep -f`, then verifies each candidate's full command line has the
+//      id at an exact boundary (space or end-of-line) before killing, so a
+//      decoy that merely CONTAINS the id as a substring is never over-killed.
+//   2. KILLS the direct child pid (taskkill /T /F on Windows, SIGKILL on
+//      Linux) and then VERIFIES it is dead via pidAlive (two probes 500ms
+//      apart). If still alive it ESCALATES (re-issue the kill) and does a
+//      final liveness check.
+//   3. Returns a structured { killed, escalations } so callers can log
+//      honestly. A pid-less target (already-dead / never a real child) is a
+//      no-op success: killed:false, escalations:0 — NOT a failure.
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function sleepSync(ms) {
+  // Synchronous sleep for the shutdown-path (killProcessTreeSync) where we
+  // cannot await. Blocks the event loop, which is acceptable at process exit.
+  const sab = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(sab), 0, 0, ms);
+}
+
+/**
+ * Escape a string for use inside a POSIX ERE (pgrep -f pattern).
+ */
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Synchronous WSL command runner (bash -c) for the shutdown path.
+ * Returns the raw stdout (Buffer). Never throws.
+ */
+function runWslCommandSync(cmd) {
+  try {
     if (IS_WINDOWS) {
-      execFile("wsl.exe", ["-d", wslDistro(), "--", "pkill", "-9", "-f", `goose run --name ${sessionId}`], () => {});
-    } else {
-      execFile("pkill", ["-9", "-f", `goose run --name ${sessionId}`], () => {});
+      return execFileSync("wsl.exe", ["-d", wslDistro(), "--", "bash", "-c", cmd], {
+        timeout: BOOT_TIMEOUT_MS + 10_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
     }
+    return execFileSync("bash", ["-c", cmd], {
+      timeout: BOOT_TIMEOUT_MS + 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return Buffer.from("");
   }
-  if (!child?.pid) return;
+}
+
+/**
+ * Anchored goose-session sweep (async). Lists candidate pids with a broad
+ * `pgrep -f`, verifies each candidate's full command line has the session id
+ * at an exact boundary (space or end-of-line), and SIGKILLs only the
+ * verified pids. A decoy whose command line merely CONTAINS the id as a
+ * substring (e.g. "goose run --name <id>123") is never matched.
+ *
+ * @param {string} sessionId
+ * @returns {Promise<number[]>} the verified pids that were killed
+ */
+async function killGooseSession(sessionId) {
+  const id = String(sessionId);
+  let candidates = [];
+  try {
+    const { stdout } = await runWslCommand(
+      `pgrep -f 'goose run --name ${escapeRe(id)}' 2>/dev/null || true`
+    );
+    candidates = stdout
+      .split(/\s+/)
+      .map((s) => parseInt(s, 10))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  } catch {
+    return [];
+  }
+  if (candidates.length === 0) return [];
+
+  // Exact-boundary verification: the id must be followed by a space or
+  // end-of-line in the full command line.
+  const boundaryRe = new RegExp(`goose run --name ${escapeRe(id)}( |$)`);
+  const verified = [];
+  for (const pid of candidates) {
+    try {
+      const { stdout } = await runWslCommand(
+        `tr '\\0' ' ' < /proc/${pid}/cmdline 2>/dev/null || true`
+      );
+      if (boundaryRe.test(stdout)) verified.push(pid);
+    } catch {}
+  }
+  if (verified.length === 0) return [];
+  try {
+    await runWslCommand(`kill -9 ${verified.join(" ")} 2>/dev/null || true`);
+  } catch {}
+  return verified;
+}
+
+/**
+ * Anchored goose-session sweep (synchronous) for the shutdown path.
+ * @param {string} sessionId
+ */
+function killGooseSessionSync(sessionId) {
+  const id = String(sessionId);
+  let candidates = [];
+  try {
+    const out = runWslCommandSync(
+      `pgrep -f 'goose run --name ${escapeRe(id)}' 2>/dev/null || true`
+    ).toString();
+    candidates = out
+      .split(/\s+/)
+      .map((s) => parseInt(s, 10))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  } catch {
+    return;
+  }
+  if (candidates.length === 0) return;
+  const boundaryRe = new RegExp(`goose run --name ${escapeRe(id)}( |$)`);
+  const verified = [];
+  for (const pid of candidates) {
+    try {
+      const cmd = runWslCommandSync(
+        `tr '\\0' ' ' < /proc/${pid}/cmdline 2>/dev/null || true`
+      ).toString();
+      if (boundaryRe.test(cmd)) verified.push(pid);
+    } catch {}
+  }
+  if (verified.length === 0) return;
+  try {
+    runWslCommandSync(`kill -9 ${verified.join(" ")} 2>/dev/null || true`);
+  } catch {}
+}
+
+/**
+ * Kill a direct child pid (async). Windows: taskkill /T /F. Linux: SIGKILL
+ * the process group, falling back to the child handle.
+ */
+async function killChildDirect(child, pid) {
   if (IS_WINDOWS) {
-    execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], () => {});
+    await new Promise((resolve) => {
+      try {
+        execFile("taskkill", ["/PID", String(pid), "/T", "/F"], () => resolve());
+      } catch {
+        resolve();
+      }
+    });
   } else {
     try {
-      process.kill(-child.pid, "SIGKILL");
+      process.kill(-pid, "SIGKILL");
     } catch {
       try {
         child.kill("SIGKILL");
@@ -174,39 +320,124 @@ export function killProcessTree(child, sessionId) {
   }
 }
 
-export function killProcessTreeSync(child, tag) {
-  if (tag) {
-    try {
-      if (IS_WINDOWS) {
-        execFileSync("wsl.exe", ["-d", wslDistro(), "--", "pkill", "-9", "-f", tag], {
-          timeout: 3000,
-          stdio: "ignore",
-        });
-      } else {
-        execFileSync("pkill", ["-9", "-f", tag], {
-          timeout: 3000,
-          stdio: "ignore",
-        });
-      }
-    } catch {}
-  }
-  if (!child?.pid) return;
+/**
+ * Kill a direct child pid (synchronous) for the shutdown path.
+ */
+function killChildDirectSync(child, pid) {
   if (IS_WINDOWS) {
     try {
-      execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
         timeout: 3000,
         stdio: "ignore",
       });
     } catch {}
   } else {
     try {
-      process.kill(-child.pid, "SIGKILL");
+      process.kill(-pid, "SIGKILL");
     } catch {
       try {
         child.kill("SIGKILL");
       } catch {}
     }
   }
+}
+
+/**
+ * Post-kill verification: two liveness probes 500ms apart. If either reports
+ * the pid alive, the process is considered still alive (a zombie that has not
+ * been reaped yet, or a process that ignored the first signal).
+ * @returns {Promise<boolean>} true if the pid is still alive
+ */
+async function verifyDead(pid) {
+  const a = pidAlive(pid);
+  await sleep(500);
+  const b = pidAlive(pid);
+  return a || b;
+}
+
+/**
+ * Synchronous post-kill verification (two probes 500ms apart).
+ * @returns {boolean} true if the pid is still alive
+ */
+function verifyDeadSync(pid) {
+  const a = pidAlive(pid);
+  sleepSync(500);
+  const b = pidAlive(pid);
+  return a || b;
+}
+
+/**
+ * Kill a process tree with post-kill verification and escalation.
+ *
+ * @param {import("node:child_process").ChildProcess|null} child the direct
+ *   child handle (its .pid is the target of the verified kill).
+ * @param {string|null} [sessionId] optional goose session id for the anchored
+ *   WSL sweep.
+ * @returns {Promise<{killed: boolean, escalations: number}>}
+ *   - killed: true if the target pid was confirmed dead after verification.
+ *   - killed: false for a pid-less target (already-dead / never a real
+ *     child) — a documented no-op success, NOT a failure.
+ *   - escalations: number of escalation rounds (re-issued kills) performed.
+ *
+ * Never throws: every WSL / kill operation is wrapped so a failure degrades
+ * to an honest {killed:false} rather than an unhandled rejection.
+ */
+export async function killProcessTree(child, sessionId) {
+  const result = { killed: false, escalations: 0 };
+
+  // 1. Anchored session-id sweep (best-effort; never over-kills a decoy).
+  if (sessionId) {
+    await killGooseSession(sessionId);
+  }
+
+  // 2. Direct child pid kill + post-kill verification + escalation.
+  const pid = child?.pid;
+  if (!pid) {
+    // No pid: the target is already dead or was never a real child. Treat as
+    // a no-op success (killed:false) — do NOT kill-verify a dead pid.
+    return result;
+  }
+
+  await killChildDirect(child, pid);
+
+  // Post-kill verification: two liveness probes 500ms apart.
+  let alive = await verifyDead(pid);
+  if (alive) {
+    // Escalate: re-issue the kill, then a final liveness check.
+    result.escalations++;
+    await killChildDirect(child, pid);
+    alive = pidAlive(pid);
+  }
+  result.killed = !alive;
+  return result;
+}
+
+/**
+ * Synchronous variant of killProcessTree for the process-shutdown path
+ * (index.js cleanup), where awaiting is not possible. Same anchored sweep,
+ * same verification + escalation, but blocking.
+ *
+ * @returns {{killed: boolean, escalations: number}}
+ */
+export function killProcessTreeSync(child, tag) {
+  const result = { killed: false, escalations: 0 };
+
+  if (tag) {
+    killGooseSessionSync(tag);
+  }
+
+  const pid = child?.pid;
+  if (!pid) return result;
+
+  killChildDirectSync(child, pid);
+  let alive = verifyDeadSync(pid);
+  if (alive) {
+    result.escalations++;
+    killChildDirectSync(child, pid);
+    alive = pidAlive(pid);
+  }
+  result.killed = !alive;
+  return result;
 }
 
 export function runWslCommand(cmd) {

@@ -314,7 +314,99 @@ export async function warmEngine() {
   } catch {}
 }
 
-export async function ensureStreamProxyRunning() {
+// ---------------------------------------------------------------------------
+// P10 — Stream-proxy lifecycle hardening
+// ---------------------------------------------------------------------------
+//
+// The legacy ensureStreamProxyRunning had three weaknesses, some observed
+// live this week:
+//   (a) its `catch {}` swallowed spawn failures silently, so a failed spawn
+//       looked identical to a slow start;
+//   (b) its pre-kill `pkill -9 -f 'stream_proxy.js'` was a broad pattern that
+//       could match unrelated processes and left a zombie (observed: pid 242
+//       defunct) when the parent did not reap;
+//   (c) its 5s health window (25 x 200ms) was too tight for a cold WSL node
+//       spawn (observed: two consecutive dispatch boots failed with "failed
+//       to become healthy ... after 5s" while the proxy was actually coming
+//       up at ~6-8s).
+//
+// The hardened path:
+//   1. TARGETED pre-spawn cleanup: kill the CURRENT listener on the port by
+//      its specific pid (probed from /health, or from `ss -ltnp`), never a
+//      broad `pkill -f`. Best-effort, and it LOGS what it did.
+//   2. HONEST spawn: the spawner is an injectable seam (setStreamProxySpawner)
+//      so offline tests can simulate a slow or failed start. Spawn failures
+//      are CAPTURED (not swallowed) and included in the final error.
+//   3. WIDER health window: 15s (75 x 200ms) with early-exit success, so a
+//      cold WSL node spawn (6-8s) is no longer misreported as a failure.
+
+// Indirection for the stream-proxy spawner so tests can simulate a slow or
+// failed start without a real node subprocess. Defaults to the real spawner.
+let spawnStreamProxy = null;
+export function setStreamProxySpawner(fn) {
+  spawnStreamProxy = typeof fn === "function" ? fn : null;
+}
+
+/**
+ * The real stream-proxy spawner. Windows: spawn inside WSL via setsid.
+ * Linux: spawn a detached node child directly.
+ */
+async function realSpawnStreamProxy() {
+  if (IS_WINDOWS) {
+    await runWslCommand(
+      `setsid node ${streamProxyPath()} < /dev/null > /tmp/stream_proxy.log 2>&1 &`
+    );
+  } else {
+    const { spawn } = await import("child_process");
+    const p = spawn("node", [path.join(__dirname, "..", "stream_proxy.js")], {
+      stdio: "ignore",
+      detached: true,
+    });
+    p.unref();
+  }
+}
+
+/**
+ * Find the pid of the process currently listening on the stream-proxy port,
+ * if any. Probes /health first (the proxy may be alive but wedged), then
+ * falls back to `ss -ltnp` on the port. Returns null when no listener is
+ * found. Never throws.
+ * @returns {Promise<number|null>}
+ */
+async function findStreamProxyListenerPid() {
+  // 1. Probe /health for a pid (the proxy may be alive but not healthy).
+  try {
+    const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, {
+      signal: AbortSignal.timeout(1000),
+    });
+    const body = await res.text();
+    const j = JSON.parse(body);
+    if (j && Number.isFinite(j.pid) && j.pid > 0) return j.pid;
+  } catch {}
+  // 2. Fall back to `ss -ltnp` filtered to the port.
+  try {
+    const { stdout } = await runWslCommand(
+      `ss -ltnp 'sport = :${STREAM_PROXY_PORT}' 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true`
+    );
+    const pid = parseInt(stdout.trim(), 10);
+    if (Number.isFinite(pid) && pid > 0) return pid;
+  } catch {}
+  return null;
+}
+
+/**
+ * Ensure the universal stream proxy is running and healthy on
+ * STREAM_PROXY_PORT.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.healthPolls=75] number of 200ms health polls before
+ *   declaring failure (default 75 = 15s). Tests may pass a smaller value.
+ * @returns {Promise<boolean>} true once the proxy is healthy.
+ * @throws {Error} if the proxy does not become healthy within the window;
+ *   the message includes the captured spawn failure when present.
+ */
+export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
+  // 1. Is the proxy already healthy? (two quick probes)
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, {
@@ -325,26 +417,52 @@ export async function ensureStreamProxyRunning() {
     if (attempt === 0) await new Promise((r) => setTimeout(r, 200));
   }
 
-  if (IS_WINDOWS) {
+  // 2. TARGETED pre-spawn cleanup: kill the current listener on the port by
+  //    its specific pid (never a broad `pkill -f 'stream_proxy.js'`).
+  //    Best-effort; log what we did.
+  const listenerPid = await findStreamProxyListenerPid();
+  if (listenerPid) {
     try {
-      await runWslCommand(`pkill -9 -f 'stream_proxy.js' 2>/dev/null || true`);
-      await new Promise((r) => setTimeout(r, 300));
-      await runWslCommand(
-        `setsid node ${streamProxyPath()} < /dev/null > /tmp/stream_proxy.log 2>&1 &`
+      if (IS_WINDOWS) {
+        await runWslCommand(`kill -9 ${listenerPid} 2>/dev/null || true`);
+      } else {
+        try {
+          process.kill(listenerPid, "SIGKILL");
+        } catch {}
+      }
+      process.stderr.write(
+        `[stream-proxy] pre-spawn cleanup: killed listener pid ${listenerPid} on port ${STREAM_PROXY_PORT}\n`
       );
-    } catch {}
+      await new Promise((r) => setTimeout(r, 300));
+    } catch (err) {
+      process.stderr.write(
+        `[stream-proxy] pre-spawn cleanup: failed to kill pid ${listenerPid}: ${err.message}\n`
+      );
+    }
   } else {
-    try {
-      const { spawn } = await import("child_process");
-      const p = spawn("node", [path.join(__dirname, "..", "stream_proxy.js")], {
-        stdio: "ignore",
-        detached: true,
-      });
-      p.unref();
-    } catch {}
+    process.stderr.write(
+      `[stream-proxy] pre-spawn cleanup: no listener found on port ${STREAM_PROXY_PORT}\n`
+    );
   }
 
-  for (let i = 0; i < 25; i++) {
+  // 3. SPAWN the proxy (injected spawner for tests, real spawner otherwise).
+  //    Do NOT swallow spawn errors: capture them for the final error message.
+  let spawnFailure = null;
+  try {
+    if (spawnStreamProxy) {
+      await spawnStreamProxy();
+    } else {
+      await realSpawnStreamProxy();
+    }
+  } catch (err) {
+    spawnFailure = err;
+    process.stderr.write(`[stream-proxy] spawn failed: ${err.message}\n`);
+  }
+
+  // 4. HEALTH window: 15s (75 x 200ms) with early-exit success. A cold WSL
+  //    node spawn routinely needs 6-8s; the old 5s window misfired on live
+  //    dispatches.
+  for (let i = 0; i < healthPolls; i++) {
     await new Promise((r) => setTimeout(r, 200));
     try {
       const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, {
@@ -353,7 +471,12 @@ export async function ensureStreamProxyRunning() {
       if (res.ok) return true;
     } catch {}
   }
-  throw new Error(`Stream proxy failed to become healthy on port ${STREAM_PROXY_PORT} after 5s`);
+
+  const seconds = Math.round((healthPolls * 200) / 1000);
+  const spawnNote = spawnFailure ? ` (spawn failure: ${spawnFailure.message})` : "";
+  throw new Error(
+    `Stream proxy failed to become healthy on port ${STREAM_PROXY_PORT} after ${seconds}s${spawnNote}`
+  );
 }
 
 export async function ensureServerRunning() {

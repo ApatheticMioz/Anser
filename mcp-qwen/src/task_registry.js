@@ -383,6 +383,15 @@ export const statusHttpServer = http.createServer((req, res) => {
     if (task) {
       if (!task.done) {
         killProcessTree(task.child, task.sessionId);
+        // P10: trigger the deepseek_avo runner's abort signal so the in-flight
+        // LLM call stops and the runner's finally block disposes the MCP
+        // extension bridge (no leaked children). For a deepseek_avo task
+        // `task.child` is null, so this is the only way to stop it.
+        if (task.abortController) {
+          try {
+            task.abortController.abort();
+          } catch {}
+        }
         task.status = "cancelled";
         task.done = true;
         task.isError = true;

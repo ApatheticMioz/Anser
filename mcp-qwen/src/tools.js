@@ -326,6 +326,20 @@ export function registerTools(server) {
         const memTask = tasks.get(task_id);
         if (memTask && !memTask.done) {
           killProcessTree(memTask.child, memTask.sessionId);
+          // P10: trigger the deepseek_avo runner's abort signal. For a
+          // deepseek_avo task `memTask.child` is null (no goose subprocess),
+          // so killProcessTree is a no-op and the ONLY way to stop the
+          // in-flight LLM call is the abort signal. Aborting it makes the
+          // provider's fetch reject, which lands in the runner's catch and
+          // then its finally block — which disposes the MCP extension bridge
+          // (no leaked children). Without this, cancel would mark the task
+          // done but the runner (and its bridge children) would keep running
+          // until the LLM call completed naturally.
+          if (memTask.abortController) {
+            try {
+              memTask.abortController.abort();
+            } catch {}
+          }
           memTask.status = "cancelled";
           memTask.done = true;
           memTask.isError = true;
