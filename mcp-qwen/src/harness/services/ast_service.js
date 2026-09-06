@@ -19,7 +19,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { IS_WINDOWS } from "../../config.js";
 import { toWindowsPath, toPosixWslPath, canonicalizePath } from "../../wsl_bridge.js";
 import { DEFAULT_IGNORED_DIRS } from "./sandbox_fs.js";
@@ -82,6 +84,113 @@ async function loadNapiEngine() {
     process.stderr.write(`[ast_service] @ast-grep/napi unavailable (${err.message}); using CLI fallback\n`);
   }
   return _napiEngine;
+}
+
+// ---------------------------------------------------------------------------
+// P6 — Universal syntax-gate infrastructure.
+//
+// The syntax gate (validateSyntax) must cover EVERY language the AST engine
+// can rewrite. Each language has a dedicated checker; when a checker is
+// unavailable (binary missing, module failed to load) the gate degrades
+// HONESTLY: it returns a structured { checked: false, ... } result and a
+// stderr note, and NEVER reports an unchecked rewrite as "valid".
+//
+// All external checkers are probed ONCE and cached (module-level), mirroring
+// the lazy-load discipline of the napi engine so startup stays light.
+// ---------------------------------------------------------------------------
+
+// createRequire so the typescript package can be loaded synchronously and
+// lazily (it is a CJS package; a dynamic import would force an async path in
+// the otherwise-synchronous validateSyntax gate).
+const _require = createRequire(import.meta.url);
+
+// --- TypeScript (ts/tsx/mts/cts) ------------------------------------------
+// Lazy-loaded once; null if the module fails to load (treated as unavailable).
+let _tsModule = null;
+let _tsLoadAttempted = false;
+
+function loadTypescript() {
+  // Test seam: a forced "unavailable" override short-circuits the real load.
+  if (_probeOverrides.typescript === false) return null;
+  if (_tsLoadAttempted) return _tsModule;
+  _tsLoadAttempted = true;
+  try {
+    const mod = _require("typescript");
+    if (mod && typeof mod.transpileModule === "function") {
+      _tsModule = mod;
+    } else {
+      _tsModule = null;
+      process.stderr.write("[ast_service] typescript loaded but incomplete; TS syntax gate unavailable\n");
+    }
+  } catch (err) {
+    _tsModule = null;
+    process.stderr.write(`[ast_service] typescript unavailable (${err.message}); TS syntax gate unavailable\n`);
+  }
+  return _tsModule;
+}
+
+// --- External binary availability probes (cached once) ----------------------
+// A probe returns true only when the binary exists AND runs successfully
+// (exit 0). ENOENT (binary missing) and non-zero exit both mean "unavailable".
+function probeBinary(cmd, args) {
+  try {
+    execFileSync(cmd, args, { stdio: "ignore", timeout: 5000, windowsHide: true });
+    return true;
+  } catch (err) {
+    // ENOENT => binary not on PATH; non-zero exit => present but not runnable.
+    return false;
+  }
+}
+
+// Seamable override registry: tests can force a checker to "available" or
+// "unavailable" without touching the real environment (dependency injection).
+// Keys: "python" | "gofmt" | "rustfmt" | "typescript". Value: boolean, or
+// undefined to clear the override and fall back to the real probe.
+const _probeOverrides = {};
+
+/**
+ * Test seam: force a syntax-gate checker to be treated as available/unavailable
+ * regardless of the real environment. Pass undefined to clear the override.
+ * @param {"python"|"gofmt"|"rustfmt"|"typescript"} name
+ * @param {boolean|undefined} available
+ */
+export function setSyntaxProbeOverride(name, available) {
+  if (available === undefined) delete _probeOverrides[name];
+  else _probeOverrides[name] = available;
+}
+
+let _pythonProbe = null; // null = not probed yet; true/false = cached result
+function pythonAvailable() {
+  if ("python" in _probeOverrides) return _probeOverrides.python;
+  if (_pythonProbe !== null) return _pythonProbe;
+  const bin = IS_WINDOWS ? "python" : "python3";
+  _pythonProbe = probeBinary(bin, ["--version"]);
+  if (!_pythonProbe) {
+    process.stderr.write(`[ast_service] python (${bin}) unavailable; Python syntax gate will degrade honestly\n`);
+  }
+  return _pythonProbe;
+}
+
+let _gofmtProbe = null;
+function gofmtAvailable() {
+  if ("gofmt" in _probeOverrides) return _probeOverrides.gofmt;
+  if (_gofmtProbe !== null) return _gofmtProbe;
+  _gofmtProbe = probeBinary("gofmt", ["-h"]);
+  if (!_gofmtProbe) {
+    process.stderr.write("[ast_service] gofmt unavailable; Go syntax gate will degrade honestly\n");
+  }
+  return _gofmtProbe;
+}
+
+let _rustfmtProbe = null;
+function rustfmtAvailable() {
+  if ("rustfmt" in _probeOverrides) return _probeOverrides.rustfmt;
+  if (_rustfmtProbe !== null) return _rustfmtProbe;
+  _rustfmtProbe = probeBinary("rustfmt", ["--version"]);
+  if (!_rustfmtProbe) {
+    process.stderr.write("[ast_service] rustfmt unavailable; Rust syntax gate will degrade honestly\n");
+  }
+  return _rustfmtProbe;
 }
 
 /**
@@ -519,21 +628,28 @@ export class AstService {
     fs.writeFileSync(resolved, newContent, "utf8");
 
     // Mandatory compile/parse check on the newly written file (shared gate).
-    const validationError = this.validateSyntax(resolved, newContent, lang);
-    if (validationError) {
-      // Rollback immediately to original pristine content
+    const validation = this.validateSyntax(resolved, newContent, lang);
+    if (validation.checked && !validation.valid) {
+      // Verified INVALID -> rollback immediately to original pristine content.
       fs.writeFileSync(resolved, originalContent, "utf8");
       throw new Error(
-        `SyntaxValidationError: AST replacement resulted in malformed syntax (${validationError}). Disk rolled back.`
+        `SyntaxValidationError: AST replacement resulted in malformed syntax (${validation.error}). Disk rolled back.`
       );
     }
+
+    // Honest degradation: the rewrite is committed, but the tool result must
+    // state it was NOT syntax-verified (no checker available for this lang).
+    const verifiedNote = validation.checked
+      ? "Syntax validated."
+      : `Syntax NOT verified (no checker available for '${lang}').`;
 
     return {
       path: resolved,
       modified: true,
+      syntax_verified: validation.checked,
       bytes_before: Buffer.byteLength(originalContent, "utf8"),
       bytes_after: Buffer.byteLength(newContent, "utf8"),
-      message: `AST pattern '${pattern}' successfully replaced in ${path.basename(resolved)}. Syntax validated.`,
+      message: `AST pattern '${pattern}' successfully replaced in ${path.basename(resolved)}. ${verifiedNote}`,
     };
   }
 
@@ -574,21 +690,28 @@ export class AstService {
       }
 
       // Mandatory compile/parse check on the newly written file
-      const validationError = this.validateSyntax(resolved, updatedContent, lang);
-      if (validationError) {
-        // Rollback immediately to original pristine content
+      const validation = this.validateSyntax(resolved, updatedContent, lang);
+      if (validation.checked && !validation.valid) {
+        // Verified INVALID -> rollback immediately to original pristine content.
         fs.writeFileSync(resolved, originalContent, "utf8");
         throw new Error(
-          `SyntaxValidationError: AST replacement resulted in malformed syntax (${validationError}). Disk rolled back.`
+          `SyntaxValidationError: AST replacement resulted in malformed syntax (${validation.error}). Disk rolled back.`
         );
       }
+
+      // Honest degradation: committed, but the result states it was NOT
+      // syntax-verified when no checker was available for this language.
+      const verifiedNote = validation.checked
+        ? "Syntax validated."
+        : `Syntax NOT verified (no checker available for '${lang}').`;
 
       return {
         path: resolved,
         modified: true,
+        syntax_verified: validation.checked,
         bytes_before: Buffer.byteLength(originalContent, "utf8"),
         bytes_after: Buffer.byteLength(updatedContent, "utf8"),
-        message: `AST pattern '${pattern}' successfully replaced in ${path.basename(resolved)}. Syntax validated.`,
+        message: `AST pattern '${pattern}' successfully replaced in ${path.basename(resolved)}. ${verifiedNote}`,
       };
     } catch (err) {
       if (err.message.startsWith("SyntaxValidationError")) {
@@ -605,40 +728,312 @@ export class AstService {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // P6 — Universal syntax gate.
+  //
+  // validateSyntax returns a STRUCTURED result so callers can distinguish
+  // three outcomes:
+  //   { checked: true,  valid: true  }            -> verified valid
+  //   { checked: true,  valid: false, error }     -> verified INVALID (rollback)
+  //   { checked: false, valid: false, reason }    -> no checker (honest degrade)
+  //
+  // The gate NEVER reports an unchecked rewrite as valid, and NEVER silently
+  // skips: an unavailable checker yields checked:false plus a stderr note.
+  // -------------------------------------------------------------------------
+
   /**
-   * Validates syntax of a modified file.
-   * Returns null if valid, or an error description string if invalid.
+   * Validates the syntax of a modified file for the given language.
+   *
+   * @param {string} filePath Path of the (already-written) file (used for
+   *   on-disk checkers such as python/gofmt/rustfmt).
+   * @param {string} content  The new file content to validate.
+   * @param {string} lang     Normalized language identifier.
+   * @returns {{checked: boolean, valid: boolean, language: string,
+   *            reason?: string, error?: string}}
    */
   validateSyntax(filePath, content, lang) {
-    if (["js", "jsx", "ts", "tsx"].includes(lang)) {
-      try {
-        // For JS, quick node check
-        if (lang === "js") {
-          execFileSync(process.execPath, ["--check", filePath], {
-            timeout: 5000,
-            stdio: "ignore",
-          });
-        }
-        return null;
-      } catch (err) {
-        return err.message || "JavaScript parse error";
-      }
+    const language = (lang || "js").toLowerCase();
+    const result = this._dispatchSyntaxCheck(filePath, content, language);
+    // Honest-degradation stderr note (never silent, never a false "valid").
+    if (!result.checked) {
+      process.stderr.write(
+        `[ast_service] syntax gate: no checker available for '${language}' (${result.reason}); rewrite NOT syntax-verified\n`
+      );
     }
+    return result;
+  }
 
-    if (lang === "python") {
-      try {
-        const pythonBin = IS_WINDOWS ? "python" : "python3";
-        execFileSync(pythonBin, ["-m", "py_compile", filePath], {
-          timeout: 5000,
-          stdio: "ignore",
-        });
-        return null;
-      } catch (err) {
-        return err.message || "Python syntax error";
-      }
+  /**
+   * Routes a language to its dedicated checker. Unknown languages (c, cpp,
+   * html, css, ...) have no dedicated checker and degrade honestly.
+   */
+  _dispatchSyntaxCheck(filePath, content, lang) {
+    switch (lang) {
+      case "ts":
+      case "tsx":
+      case "mts":
+      case "cts":
+        return this._checkTypescript(content, lang);
+      case "js":
+      case "jsx":
+      case "mjs":
+      case "cjs":
+        return this._checkJavaScript(content, lang);
+      case "json":
+        return this._checkJson(content);
+      case "python":
+        return this._checkPython(filePath, content);
+      case "go":
+        return this._checkGo(filePath, content);
+      case "rust":
+        return this._checkRust(filePath, content);
+      default:
+        return {
+          checked: false,
+          valid: false,
+          language: lang,
+          reason: `no syntax checker registered for '${lang}'`,
+        };
     }
+  }
 
-    return null;
+  /**
+   * TypeScript gate: typescript.transpileModule with reportDiagnostics.
+   * Any diagnostic with category === Error means INVALID. transpileModule
+   * strips types, so type-level errors are NOT reported (only syntax errors
+   * surface) — which is exactly the parse-gate semantics we want.
+   */
+  _checkTypescript(content, lang) {
+    const ts = loadTypescript();
+    if (!ts) {
+      return {
+        checked: false,
+        valid: false,
+        language: lang,
+        reason: "typescript module unavailable",
+      };
+    }
+    try {
+      const compilerOptions = {
+        target: ts.ScriptTarget.ES2020,
+        module: ts.ModuleKind.ESNext,
+      };
+      // Only set jsx for .tsx; passing `jsx: undefined` makes transpileModule
+      // reject the option, so it must be omitted entirely for non-tsx.
+      if (lang === "tsx") compilerOptions.jsx = ts.JsxEmit.Preserve;
+      const out = ts.transpileModule(content, {
+        reportDiagnostics: true,
+        compilerOptions,
+      });
+      const errors = (out.diagnostics || []).filter(
+        (d) => d.category === ts.DiagnosticCategory.Error
+      );
+      if (errors.length === 0) {
+        return { checked: true, valid: true, language: lang };
+      }
+      const msg = errors
+        .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"))
+        .join("; ");
+      return { checked: true, valid: false, language: lang, error: msg };
+    } catch (err) {
+      // A throw from transpileModule is itself a hard parse failure.
+      return { checked: true, valid: false, language: lang, error: err.message };
+    }
+  }
+
+  /**
+   * JavaScript gate: `node --check` against a temp file whose extension
+   * matches the module system. This is the ESM nuance: a bare `.js` file has
+   * an ambiguous module type, so we force it deterministically —
+   *   ESM-syntax content  -> temp .mjs  (import/export parsed as ESM)
+   *   CJS/other content   -> temp .cjs  (require/module.exports parsed as CJS)
+   * A valid ESM file is therefore never rejected, and a syntax-broken file
+   * (in either module system) never passes.
+   */
+  _checkJavaScript(content, lang) {
+    const ext = looksLikeESM(content) ? ".mjs" : ".cjs";
+    const tmp = _writeTemp(content, ext);
+    try {
+      execFileSync(process.execPath, ["--check", tmp], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 5000,
+        windowsHide: true,
+      });
+      return { checked: true, valid: true, language: lang };
+    } catch (err) {
+      const detail = (err.stderr || err.message || "").toString().trim();
+      return {
+        checked: true,
+        valid: false,
+        language: lang,
+        error: detail || "JavaScript parse error",
+      };
+    } finally {
+      _removeTemp(tmp);
+    }
+  }
+
+  /**
+   * JSON gate: in-process JSON.parse (fast, no subprocess).
+   */
+  _checkJson(content) {
+    try {
+      JSON.parse(content);
+      return { checked: true, valid: true, language: "json" };
+    } catch (err) {
+      return { checked: true, valid: false, language: "json", error: err.message };
+    }
+  }
+
+  /**
+   * Python gate: `python -c "import ast; ast.parse(...)"` on a temp file.
+   * The python binary is probed once; if unavailable, degrade honestly.
+   */
+  _checkPython(filePath, content) {
+    if (!pythonAvailable()) {
+      return {
+        checked: false,
+        valid: false,
+        language: "python",
+        reason: "python interpreter unavailable",
+      };
+    }
+    const bin = IS_WINDOWS ? "python" : "python3";
+    const tmp = _writeTemp(content, ".py");
+    try {
+      execFileSync(
+        bin,
+        ["-c", "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read())", tmp],
+        { stdio: ["ignore", "pipe", "pipe"], timeout: 5000, windowsHide: true }
+      );
+      return { checked: true, valid: true, language: "python" };
+    } catch (err) {
+      const detail = (err.stderr || err.message || "").toString().trim();
+      return {
+        checked: true,
+        valid: false,
+        language: "python",
+        error: detail || "Python syntax error",
+      };
+    } finally {
+      _removeTemp(tmp);
+    }
+  }
+
+  /**
+   * Go gate: `gofmt -e` on a temp file. gofmt -e reports ALL syntax errors to
+   * stderr and exits non-zero on a parse failure. Probed once; degrades
+   * honestly when gofmt is absent.
+   */
+  _checkGo(filePath, content) {
+    if (!gofmtAvailable()) {
+      return {
+        checked: false,
+        valid: false,
+        language: "go",
+        reason: "gofmt unavailable",
+      };
+    }
+    const tmp = _writeTemp(content, ".go");
+    try {
+      execFileSync("gofmt", ["-e", tmp], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 5000,
+        windowsHide: true,
+      });
+      return { checked: true, valid: true, language: "go" };
+    } catch (err) {
+      const detail = (err.stderr || err.message || "").toString().trim();
+      return {
+        checked: true,
+        valid: false,
+        language: "go",
+        error: detail || "Go syntax error",
+      };
+    } finally {
+      _removeTemp(tmp);
+    }
+  }
+
+  /**
+   * Rust gate: `rustfmt --check` on a temp file. rustfmt exits non-zero (and
+   * writes to stderr) when the source does not parse. Probed once; degrades
+   * honestly when rustfmt is absent.
+   */
+  _checkRust(filePath, content) {
+    if (!rustfmtAvailable()) {
+      return {
+        checked: false,
+        valid: false,
+        language: "rust",
+        reason: "rustfmt unavailable",
+      };
+    }
+    const tmp = _writeTemp(content, ".rs");
+    try {
+      execFileSync("rustfmt", ["--check", tmp], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 5000,
+        windowsHide: true,
+      });
+      return { checked: true, valid: true, language: "rust" };
+    } catch (err) {
+      // rustfmt exits 1 for BOTH "would reformat" and "parse error". We only
+      // care about parse errors, so inspect stderr for a parse/syntax signal.
+      const detail = (err.stderr || err.message || "").toString().trim();
+      const isParseError = /error(\[|:)|expected|unexpected|parse/i.test(detail);
+      if (isParseError) {
+        return {
+          checked: true,
+          valid: false,
+          language: "rust",
+          error: detail || "Rust syntax error",
+        };
+      }
+      // Non-zero exit but no parse signal (pure formatting diff) -> the source
+      // parsed fine; treat as valid for the parse-gate purpose.
+      return { checked: true, valid: true, language: "rust" };
+    } finally {
+      _removeTemp(tmp);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helpers for the syntax gate (kept outside the class so they are
+// trivially unit-testable and shared across instances).
+// ---------------------------------------------------------------------------
+
+/**
+ * Heuristic ESM detection: true when the source has a top-level import /
+ * export / import.meta. Comments and string literals are stripped first so a
+ * word like "import" inside a comment or string does not misfire.
+ */
+function looksLikeESM(src) {
+  if (typeof src !== "string") return false;
+  const stripped = src
+    .replace(/\/\*[\s\S]*?\*\//g, "") // block comments
+    .replace(/\/\/[^\n]*/g, "") // line comments
+    .replace(/`(?:\\.|[^`\\])*`/g, "``") // template literals
+    .replace(/'(?:\\.|[^'\\\n])*'/g, "''") // single-quoted strings
+    .replace(/"(?:\\.|[^"\\\n])*"/g, '""'); // double-quoted strings
+  return /^\s*(import\s|import\(|export\s|import\.meta)/m.test(stripped);
+}
+
+/** Writes content to a fresh temp file with the given extension; returns path. */
+function _writeTemp(content, ext) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "astgate_"));
+  const file = path.join(dir, `check${ext}`);
+  fs.writeFileSync(file, content, "utf8");
+  return file;
+}
+
+/** Best-effort removal of a temp file and its parent dir. */
+function _removeTemp(file) {
+  try {
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  } catch {
+    /* ignore cleanup failures */
   }
 }
 
