@@ -128,15 +128,23 @@ export function listGooseSlots() {
 }
 
 /**
- * Clears all lingering slot lease locks in ~/.qwen/tasks/goose_slots/.
+ * Clears reclaimable slot lease locks in ~/.qwen/tasks/goose_slots/.
+ *
+ * P15: the old clearAllGooseSlots deleted EVERY slot_*.json unconditionally,
+ * which wiped another LIVE instance's lease (violating the multi-instance
+ * rule). A lease is now deleted only when its owner is this process
+ * (lease.pid === process.pid) or its owner pid is not alive. A lease that
+ * cannot be parsed (truncated mid-write) is treated as reclaimable, matching
+ * the existing readLease/leaseReclaimable convention.
  */
-export function clearAllGooseSlots() {
+export function clearReclaimableGooseSlots() {
   try {
     if (fs.existsSync(SLOTS_DIR)) {
       for (const f of fs.readdirSync(SLOTS_DIR)) {
-        if (f.startsWith("slot_") && f.endsWith(".json")) {
-          fs.rmSync(path.join(SLOTS_DIR, f), { force: true });
-        }
+        if (!f.startsWith("slot_") || !f.endsWith(".json")) continue;
+        const lease = readLease(path.join(SLOTS_DIR, f));
+        if (lease && lease.pid !== process.pid && pidAlive(lease.pid)) continue;
+        fs.rmSync(path.join(SLOTS_DIR, f), { force: true });
       }
     }
   } catch {}

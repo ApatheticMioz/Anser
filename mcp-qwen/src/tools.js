@@ -1,6 +1,5 @@
 import { z } from "zod";
 import http from "node:http";
-import { execFile } from "node:child_process";
 import {
   BASE_URL,
   STATUS_PORT,
@@ -11,7 +10,7 @@ import {
   AUTO_HEAL,
   WEDGE_STATS_SILENCE_S,
 } from "./config.js";
-import { normalizeWorkspacePath, canonicalizePath, killProcessTree } from "./wsl_bridge.js";
+import { normalizeWorkspacePath, canonicalizePath, killProcessTree, killGooseSession } from "./wsl_bridge.js";
 import {
   serverInfo,
   readEngineMetrics,
@@ -405,15 +404,14 @@ export function registerTools(server) {
         const diskTask = readTaskFromDisk(task_id);
         if (diskTask && !diskTask.done) {
           if (diskTask.sessionId) {
-            if (IS_WINDOWS) {
-              execFile(
-                "wsl.exe",
-                ["-d", "Ubuntu", "--", "pkill", "-9", "-f", `goose run --name ${diskTask.sessionId}`],
-                () => {}
-              );
-            } else {
-              execFile("pkill", ["-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
-            }
+            // P15: anchored sweep (pgrep -> /proc cmdline boundary verify ->
+            // kill) instead of a raw unanchored `pkill -9 -f` — a session id
+            // that is a substring of another session's id must never be
+            // over-killed, and the hardcoded `-d "Ubuntu"` wsl.exe call is
+            // gone with the switch.
+            try {
+              await killGooseSession(diskTask.sessionId);
+            } catch {}
           }
           diskTask.status = "cancelled";
           diskTask.done = true;

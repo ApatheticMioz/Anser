@@ -234,7 +234,15 @@ export function resolveSessionId(cwd, requestedSessionId) {
     return requestedSessionId.trim();
   }
   const hash = crypto.createHash("md5").update(cwd.toLowerCase()).digest("hex").slice(0, 8);
-  return `workspace_${hash}`;
+  // P15: the default session id must be unique per task, not just per cwd.
+  // The old `workspace_<hash8(cwd)>` was shared by EVERY instance and EVERY
+  // task in the same directory, so (a) a cancel sweep of one instance's task
+  // could match and kill ANOTHER instance's live goose child with the same
+  // id, and (b) two clients in one directory wrote to the same
+  // ~/.qwen/sessions/<id>/events.jsonl (cross-client ledger bleed). The
+  // pid + timestamp suffixes make each default id unique while keeping the
+  // `workspace_` prefix. Explicit client-passed ids are untouched above.
+  return `workspace_${hash}_${process.pid.toString(36)}_${Date.now().toString(36)}`;
 }
 
 export function startGooseTask({

@@ -1,18 +1,15 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { execFile } from "node:child_process";
 import {
   TASK_DIR,
   STATUS_PORT,
   TASK_RETENTION_MS,
   DEFAULT_TIMEOUT_MS,
   INACTIVITY_TIMEOUT_MS,
-  IS_WINDOWS,
 } from "./config.js";
-import { pidAlive, listGooseSlots, clearAllGooseSlots } from "./semaphore.js";
-import { killProcessTree } from "./wsl_bridge.js";
-import { wslDistro } from "./platform.js";
+import { pidAlive, listGooseSlots, clearReclaimableGooseSlots } from "./semaphore.js";
+import { killProcessTree, killGooseSessionSync } from "./wsl_bridge.js";
 
 try {
   fs.mkdirSync(TASK_DIR, { recursive: true });
@@ -167,6 +164,9 @@ export function notifyWaiters(task) {
 export async function cancelAllTasks(reason = "cancelled by caller") {
   let count = 0;
   // 1. Cancel in-memory tasks and notify waiters
+  // P15: collect the session ids of the in-memory tasks we cancel here so the
+  // anchored sweep below reaches their goose children too.
+  const memSessionIds = new Set();
   for (const task of tasks.values()) {
     if (!task.done) {
       if (task.child) {
@@ -187,10 +187,13 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
       saveTaskToDisk(task);
       notifyWaiters(task);
       count++;
+      if (task.sessionId) memSessionIds.add(task.sessionId);
     }
   }
 
   // 2. Cancel disk tasks
+  // P15: collect the session ids of the disk tasks we cancel here.
+  const diskSessionIds = new Set();
   for (const diskTask of listTasksFromDisk()) {
     if (!diskTask.done) {
       diskTask.status = "cancelled";
@@ -200,23 +203,28 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
       diskTask.result = { isError: true, text: `Task ${diskTask.id} was ${reason}.` };
       saveTaskToDisk(diskTask);
       count++;
+      if (diskTask.sessionId) diskSessionIds.add(diskTask.sessionId);
     }
   }
 
-  // 3. Kill all running goose processes machine-wide across Windows and WSL
-  if (IS_WINDOWS) {
+  // 3. P15: anchored per-session sweep instead of a machine-wide
+  // `pkill -9 -f "goose run"` / `taskkill /F /IM goose.exe`. The old
+  // machine-wide kill violated the multi-instance rule (it killed OTHER
+  // instances' live goose children and wiped their slot leases). The anchored
+  // sweep (pgrep -> /proc cmdline boundary verify -> kill) only matches a
+  // session id at an exact `--name <id>` boundary, so substring decoys and
+  // other instances' sessions survive. Sync kills are fast; cancel_all still
+  // returns promptly.
+  const sweepIds = new Set([...memSessionIds, ...diskSessionIds]);
+  for (const sessionId of sweepIds) {
     try {
-      execFile("wsl.exe", ["-d", wslDistro(), "--", "pkill", "-9", "-f", "goose run"], () => {});
-      execFile("taskkill", ["/F", "/IM", "goose.exe"], () => {});
-    } catch {}
-  } else {
-    try {
-      execFile("pkill", ["-9", "-f", "goose run"], () => {});
+      killGooseSessionSync(sessionId);
     } catch {}
   }
 
-  // 4. Clean up slot lease locks
-  clearAllGooseSlots();
+  // 4. Clean up slot lease locks (only this process's own or dead owners'
+  // leases — never another live instance's lease)
+  clearReclaimableGooseSlots();
 
   return count;
 }
@@ -405,11 +413,12 @@ export const statusHttpServer = http.createServer((req, res) => {
     const diskTask = readTaskFromDisk(taskId);
     if (diskTask) {
       if (diskTask.sessionId) {
-        if (IS_WINDOWS) {
-          execFile("wsl.exe", ["-d", wslDistro(), "--", "pkill", "-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
-        } else {
-          execFile("pkill", ["-9", "-f", `goose run --name ${diskTask.sessionId}`], () => {});
-        }
+        // P15: anchored sweep (pgrep -> /proc cmdline boundary verify -> kill)
+        // instead of a raw unanchored `pkill -9 -f` — a session id that is a
+        // substring of another session's id must never be over-killed.
+        try {
+          killGooseSessionSync(diskTask.sessionId);
+        } catch {}
       }
       diskTask.status = "cancelled";
       diskTask.done = true;

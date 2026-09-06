@@ -226,7 +226,7 @@ function runWslCommandSync(cmd) {
  * @param {string} sessionId
  * @returns {Promise<number[]>} the verified pids that were killed
  */
-async function killGooseSession(sessionId) {
+export async function killGooseSession(sessionId) {
   const id = String(sessionId);
   let candidates = [];
   try {
@@ -265,7 +265,7 @@ async function killGooseSession(sessionId) {
  * Anchored goose-session sweep (synchronous) for the shutdown path.
  * @param {string} sessionId
  */
-function killGooseSessionSync(sessionId) {
+export function killGooseSessionSync(sessionId) {
   const id = String(sessionId);
   let candidates = [];
   try {
