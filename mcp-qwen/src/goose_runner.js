@@ -370,6 +370,11 @@ export function startGooseTask({
             sessionId,
             maxTurns: maxTurnsVal,
             signal: abortController.signal,
+            // P8: make extensions[] first-class on the primary engine. The
+            // runner boots the MCP extension bridge before the loop and
+            // disposes it in its finally block (no leaked children).
+            extensions,
+            targetInWsl,
             onToken: (tok) => {
               taskEntry.lastActivityAt = Date.now();
               taskEntry.lastHeartbeatAt = Date.now();

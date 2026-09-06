@@ -35,6 +35,7 @@ import {
   initStatusServer,
 } from "./src/task_registry.js";
 import { registerTools } from "./src/tools.js";
+import { disposeAllBridges } from "./src/harness/services/mcp_bridge.js";
 
 const require = createRequire(import.meta.url);
 const { name: pkgName, version: pkgVersion } = require("./package.json");
@@ -48,6 +49,9 @@ const isMain = Boolean(
 function setupProcessLifecycleHandlers() {
   const cleanup = (signal) => {
     try {
+      // P8: reap any live MCP extension bridge children (deepseek_avo engine)
+      // so none survive process shutdown.
+      disposeAllBridges();
       for (const [id, task] of tasks.entries()) {
         if (!task.done) {
           task.done = true;

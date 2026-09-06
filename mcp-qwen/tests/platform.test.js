@@ -36,6 +36,8 @@ const {
   _resetWslUserCache,
   toPosixWslPath,
   toWindowsPath,
+  resolveCommandPath,
+  _resetCommandPathCache,
 } = await import("../src/platform.js");
 
 let passed = 0;
@@ -299,6 +301,42 @@ function assertOk(cond, name) {
   } finally {
     process.env = saved;
   }
+}
+
+// ---------------------------------------------------------------------------
+// (f) P8 bridge close-out: resolveCommandPath — bare names resolve to spawnable
+// absolute paths (Windows .cmd shims are not spawnable without this); absolute
+// and path-bearing commands pass through untouched; garbage degrades to null.
+// ---------------------------------------------------------------------------
+function testResolveCommandPath() {
+  _resetCommandPathCache();
+  const abs = resolveCommandPath("node");
+  assertOk(
+    typeof abs === "string" && path.isAbsolute(abs),
+    `bare 'node' resolves to an absolute spawnable path (got: ${abs})`
+  );
+  const passthrough = resolveCommandPath("D:\\some\\dir\\tool.cmd");
+  assertOk(
+    passthrough === "D:\\some\\dir\\tool.cmd",
+    "path-bearing command passes through untouched"
+  );
+  const unixish = resolveCommandPath("/usr/local/bin/tool");
+  assertOk(unixish === "/usr/local/bin/tool", "absolute posix path passes through untouched");
+  assertOk(resolveCommandPath("") === null, "empty command -> null");
+  assertOk(resolveCommandPath(null) === null, "null command -> null");
+  const cacheProbe = resolveCommandPath("node");
+  assertOk(
+    cacheProbe === abs,
+    "resolution is cached (second probe returns the same path)"
+  );
+  _resetCommandPathCache();
+}
+
+try {
+  testResolveCommandPath();
+} catch (err) {
+  failed++;
+  console.log(`[FAIL] resolveCommandPath: ${err.message}`);
 }
 
 console.log(`\n=== platform.test.js: ${passed} passed, ${failed} failed ===`);

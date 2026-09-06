@@ -18,6 +18,7 @@ import { eventLoggerPlugin } from "./services/event_logger.js";
 import { vllmProviderPlugin } from "./services/provider_vllm.js";
 import { avoPlugin } from "./avo/avo_operator.js";
 import { astPlugin } from "./services/ast_service.js";
+import { McpBridge } from "./services/mcp_bridge.js";
 import { normalizeWorkspacePath, canonicalizePath } from "../wsl_bridge.js";
 import { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } from "../config.js";
 
@@ -104,6 +105,8 @@ export class DeepSeekAvoRunner {
     onToken,
     onMetrics,
     onToolCall,
+    extensions,
+    targetInWsl = false,
   }) {
     const t0 = Date.now();
     // P4i: canonicalize the per-run cwd through the OS symlink/junction layer
@@ -131,6 +134,21 @@ export class DeepSeekAvoRunner {
     }
     ctx.plugin(avoPlugin, { workspaceRoot: effectiveCwd });
     ctx.plugin(astPlugin, { root: effectiveCwd });
+
+    // P8: boot the generic MCP extension bridge BEFORE the runner loop so the
+    // remote tools are registered on the Cordis Context and visible to the
+    // model on the very first turn. The bridge never throws (bad specs /
+    // failed handshakes are logged and skipped). It is disposed in the
+    // finally block below so no bridge child is ever leaked on failure/cancel.
+    let mcpBridge = null;
+    if (Array.isArray(extensions) && extensions.length > 0) {
+      mcpBridge = new McpBridge({
+        cwd: effectiveCwd,
+        targetInWsl,
+        extensions,
+      });
+      await mcpBridge.start(ctx);
+    }
 
     const logger = ctx.get("logger");
     const llm = ctx.get("llm");
@@ -426,6 +444,17 @@ export class DeepSeekAvoRunner {
         durationMs,
         totalCompletionTokens,
       });
+
+      // P8: tear down the MCP extension bridge (kill every bridge child via
+      // the process-tree helper + unregister the bridged tools) BEFORE the
+      // kernel context is disposed, so the reversible tool disposers still
+      // have a live context to unbind from. Never leaks children on
+      // failure/cancel/timeout.
+      if (mcpBridge) {
+        try {
+          mcpBridge.dispose();
+        } catch {}
+      }
 
       // Cleanly dispose microkernel and unmount all plugins
       ctx.dispose();

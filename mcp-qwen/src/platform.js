@@ -157,6 +157,52 @@ export function gooseBin() {
 }
 
 // ---------------------------------------------------------------------------
+// Bare-command resolution (P8 bridge: spawnable absolute paths)
+// ---------------------------------------------------------------------------
+
+const _cmdPathCache = new Map();
+
+/**
+ * Resolve a bare command name to a spawnable absolute path via which/where.
+ * Node's spawn does NOT resolve Windows .cmd shims (npx, uvx) without a
+ * shell — and shell mode would break argv-array purity — so callers that
+ * must spawn bare package runners on Windows resolve first. Absolute or
+ * path-bearing commands pass through untouched. Returns null when the
+ * command cannot be found. Lazily probed and cached; never throws.
+ * @param {string} command
+ * @returns {string|null}
+ */
+export function resolveCommandPath(command) {
+  if (!command || typeof command !== "string") return null;
+  if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
+    return command;
+  }
+  if (_cmdPathCache.has(command)) return _cmdPathCache.get(command);
+  let resolved = null;
+  try {
+    const probe = IS_WINDOWS ? "where.exe" : "which";
+    const out = execFileSync(probe, [command], {
+      timeout: 5000,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const first = out
+      .toString()
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .find(Boolean);
+    if (first) resolved = first;
+  } catch {}
+  _cmdPathCache.set(command, resolved);
+  return resolved;
+}
+
+/** Clear the resolved-command cache so the next call re-probes. Test-only. */
+export function _resetCommandPathCache() {
+  _cmdPathCache.clear();
+}
+
+// ---------------------------------------------------------------------------
 // POSIX shell (bash-compatible) resolver
 // ---------------------------------------------------------------------------
 
