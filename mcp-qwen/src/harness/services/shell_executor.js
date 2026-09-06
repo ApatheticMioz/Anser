@@ -16,13 +16,13 @@
  *    RELY ON RUNTIME INTERCEPTION FOR SYSTEM SAFETY.
  * ============================================================================
  *
- * Sandboxed Shell Executor Service (DeepSeek AVO Subprocess Runner)
+ * Sandboxed Shell Executor Service (Anser Subprocess Runner)
  *
  * Provides:
  * - Cross-environment command execution (Windows Host + WSL)
  * - Process group tracking with synchronous tree termination to eliminate zombies
  * - Bounded execution timeouts and stdout/stderr capture
- * - Cordis plugin integration exposing bash/exec_command tools
+ * - Anser plugin integration exposing bash/exec_command tools
  * - Multi-layer defense: delegates validation to zero-child-process shell_validator.js
  * - Low-level dead-man fuse and dry-run execution gating
  */
@@ -235,7 +235,7 @@ export class ShellExecutorService {
 }
 
 /**
- * Cordis Plugin to mount ShellExecutorService into Context.
+ * Anser Plugin to mount ShellExecutorService into Context.
  */
 export function shellExecutorPlugin(ctx, options = {}) {
   const executor = new ShellExecutorService(options);

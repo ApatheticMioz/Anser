@@ -52,7 +52,9 @@ benchmarks/swe-rebench/__pycache__/
 *.swp
 *~
 
-# AVO candidate lineage & runtime scratch
+# Evo candidate lineage & runtime scratch
+.evo/
+.test_evo_tmp/
 .avo/
 .test_avo_tmp/
 .test_live_tmp/

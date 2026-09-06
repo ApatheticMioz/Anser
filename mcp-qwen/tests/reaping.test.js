@@ -1,5 +1,5 @@
 /**
- * P10 — Process-reaping hardening tests (offline where possible).
+ * P10 - Process-reaping hardening tests (offline where possible).
  *
  * Vectors:
  *   1. Dummy process tree killed through the hardened killProcessTree path:
@@ -15,7 +15,7 @@
  *           within the widened 15s window.
  *        b. always-failing spawn throws an error containing the captured
  *           failure.
- *   5. Cancel-path (item 3): aborting the deepseek_avo runner's signal lands
+ *   5. Cancel-path (item 3): aborting the Anser runner's signal lands
  *      in the runner's finally block, which disposes the MCP extension bridge
  *      (zero surviving bridge children).
  */
@@ -38,7 +38,7 @@ const { pidAlive } = await import("../src/semaphore.js");
 const { getLiveBridgePids } = await import(
   "../src/harness/services/mcp_bridge.js"
 );
-const { DeepSeekAvoRunner } = await import("../src/harness/runner.js");
+const { AnserRunner } = await import("../src/harness/runner.js");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(__dirname, "fixtures", "echo_mcp_server.js");
@@ -99,10 +99,10 @@ async function testPidlessNoop() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: anchored pattern (WSL) — decoy survives, target dies
+// Test 3: anchored pattern (WSL) - decoy survives, target dies
 // ---------------------------------------------------------------------------
 async function testAnchoredPattern() {
-  console.log("\n[Test 3: anchored pattern (WSL) — decoy survives, target dies]");
+  console.log("\n[Test 3: anchored pattern (WSL) - decoy survives, target dies]");
 
   // Probe WSL availability (offline-skip pattern).
   let wslOk = false;
@@ -205,7 +205,7 @@ async function testStreamProxySlowStart() {
     const ok = await ensureStreamProxyRunning({ healthPolls: 75 });
     const dt = Date.now() - t0;
     assert(ok === true, "slow-start proxy became healthy within the 15s window");
-    assert(dt >= 5000, `took >5s (old window would have failed) — got ${dt}ms`);
+    assert(dt >= 5000, `took >5s (old window would have failed) - got ${dt}ms`);
   } finally {
     setStreamProxySpawner(null);
     if (server) server.close();
@@ -241,7 +241,7 @@ async function testStreamProxyFailedSpawn() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: cancel-path — abort lands in the runner's finally (bridge disposed)
+// Test 5: cancel-path - abort lands in the runner's finally (bridge disposed)
 // ---------------------------------------------------------------------------
 function makeHangingLlm() {
   return {
@@ -278,9 +278,9 @@ const noopLogger = {
 };
 
 async function testCancelPath() {
-  console.log("\n[Test 5: cancel-path — abort disposes the MCP bridge]");
+  console.log("\n[Test 5: cancel-path - abort disposes the MCP bridge]");
   const ac = new AbortController();
-  const runner = new DeepSeekAvoRunner({
+  const runner = new AnserRunner({
     llm: makeHangingLlm(),
     logger: noopLogger,
   });

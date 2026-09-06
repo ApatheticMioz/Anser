@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """
-NVIDIA AVO-Class Autonomous Loop Runner (August 2026 SOTA Specification)
+Evo Autonomous Loop Runner (August 2026 SOTA Specification)
 
-Standalone driver for the AVO evolution loop that the MCP server executes.
+Standalone driver for the Evo evolution loop that the MCP server executes.
 One round per invocation (re-run after each dispatch):
 
-  1. Loads the candidate lineage from <dir>/.avo/lineage.json - the file
-     written by AvoLineageEngine (mcp-qwen/avo_engine.js), using that
+  1. Loads the candidate lineage from <dir>/.evo/lineage.json - the file
+     written by EvoLineageEngine (mcp-qwen/evo_engine.js), using that
      engine's real schema (candidates[] with candidateId/hypothesis/
      status/metricScore, plus bestCommit/bestMetric).
   2. Asks the local model (direct OpenAI-compatible call to :18020) for the
      next concrete, testable variation hypothesis given the objective and
      the recent lineage brief.
-  3. Writes the ready-to-dispatch packet to <dir>/.avo/avq/ and prints the
+  3. Writes the ready-to-dispatch packet to <dir>/.evo/avq/ and prints the
      exact qwen_coworker(...) MCP call (hypothesis / test_command /
      metric_name / higher_is_better all set, so the MCP server runs the
      verification test after the Goose run and records the outcome in the
      lineage itself).
 
-This script never writes to .avo/lineage.json - the engine owns that file;
+This script never writes to .evo/lineage.json - the engine owns that file;
 the runner only reads it and proposes. Standard library only (runs from any
 Python 3, no venv needed).
 
 Usage:
-  python scripts/avo_runner.py --dir D:\\work --objective "raise bench throughput" \
+  python scripts/evo_runner.py --dir D:\\work --objective "raise bench throughput" \
       --test-cmd "pytest tests/ -q" --metric throughput
-  python scripts/avo_runner.py ... --lower-is-better   # minimize the metric
-  python scripts/avo_runner.py ... --dry-run           # skip the model call
+  python scripts/evo_runner.py ... --lower-is-better   # minimize the metric
+  python scripts/evo_runner.py ... --dry-run           # skip the model call
 """
 
 import argparse
@@ -49,7 +49,7 @@ def get_api_key():
 
 
 def load_lineage(target_dir):
-    path = os.path.join(target_dir, ".avo", "lineage.json")
+    path = os.path.join(target_dir, ".evo", "lineage.json")
     empty = {
         "bestCommit": None,
         "bestMetric": None,
@@ -73,17 +73,6 @@ def load_lineage(target_dir):
 
 def lineage_brief(lineage, n=5):
     candidates = lineage.get("candidates") or []
-    if not candidates and lineage.get("history"):
-        # Back-compat with the pre-engine "history" schema (id/metric keys).
-        candidates = [
-            {
-                "candidateId": h.get("id"),
-                "hypothesis": h.get("hypothesis"),
-                "status": h.get("status"),
-                "metricScore": h.get("metric"),
-            }
-            for h in lineage["history"]
-        ]
     best = lineage.get("bestMetric")
     if not candidates:
         return (
@@ -118,7 +107,7 @@ def ask_model(objective, brief, test_cmd, metric, higher_is_better):
                 {
                     "role": "system",
                     "content": (
-                        "You are the hypothesis generator for an NVIDIA AVO-style "
+                        "You are the hypothesis generator for an Evo-style "
                         "evolutionary optimization loop. Propose exactly ONE concrete, "
                         "testable code-level variation that could improve the target "
                         "metric. Be specific about which file or behavior to change and "
@@ -156,7 +145,7 @@ def ask_model(objective, brief, test_cmd, metric, higher_is_better):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="NVIDIA AVO autonomous loop runner (one round per invocation)"
+        description="Evo autonomous loop runner (one round per invocation)"
     )
     parser.add_argument("--dir", default=".", help="Target workspace directory")
     parser.add_argument("--objective", required=True, help="Overall research/optimization objective")
@@ -178,7 +167,7 @@ def main():
     higher_is_better = not args.lower_is_better
     lineage = load_lineage(target_dir)
 
-    print("=== NVIDIA AVO Autonomous Exploration Loop (one round) ===")
+    print("=== Evo Autonomous Exploration Loop (one round) ===")
     print(f"Directory: {target_dir}")
     print(f"Objective: {args.objective}")
     print(f"Test Command: {args.test_cmd}")
@@ -195,24 +184,24 @@ def main():
         )
         print(f"\n--- Hypothesis ---\n{hypothesis}\n")
 
-    # Persistent AVO session id: stable across rounds so the MCP server can
+    # Persistent Evo session id: stable across rounds so the MCP server can
     # resume the same named session and vLLM prefix caching stays effective.
-    slug = re.sub(r"[^a-z0-9]+", "_", args.objective.lower()).strip("_")[:24] or "avo"
-    session_id = f"avo_{slug}"
+    slug = re.sub(r"[^a-z0-9]+", "_", args.objective.lower()).strip("_")[:24] or "evo"
+    session_id = f"evo_{slug}"
 
     seq = len(lineage.get("candidates") or []) + 1
-    avq_dir = os.path.join(target_dir, ".avo", "avq")
+    avq_dir = os.path.join(target_dir, ".evo", "avq")
     os.makedirs(avq_dir, exist_ok=True)
     packet_path = os.path.join(avq_dir, f"candidate_{seq}_{int(time.time())}.md")
 
     instruction = (
-        f"Implement the following AVO candidate variation in this workspace: {hypothesis}\n"
+        f"Implement the following Evo candidate variation in this workspace: {hypothesis}\n"
         "Make the smallest change that tests the hypothesis. Do NOT run the "
         "verification test yourself (it runs automatically after your run) and "
         "do NOT commit; leave the working tree with the candidate edit in place."
     )
 
-    packet = f"""# AVO Candidate Dispatch Packet {seq}
+    packet = f"""# Evo Candidate Dispatch Packet {seq}
 
 Objective: {args.objective}
 Hypothesis: {hypothesis}

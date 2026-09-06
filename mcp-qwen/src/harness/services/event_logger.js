@@ -1,11 +1,11 @@
 /**
- * Append-Only JSONL Session Event Logger (DeepSeek Harness Inspired)
+ * Append-Only JSONL Session Event Logger (Anser Harness)
  *
  * Provides:
  * - Transparent, zero-binary event ledger (replaces opaque SQLite sessions.db)
  * - Atomic append-only writes for turns, tokens, tool invocations, and metrics
  * - Session branching (forking state at turn N for parallel evolutionary candidates)
- * - Cordis plugin integration
+ * - Anser plugin integration
  */
 
 import fs from "node:fs";
@@ -141,7 +141,7 @@ export class EventLoggerService {
 }
 
 /**
- * Cordis Plugin to mount EventLoggerService into Context.
+ * Anser Plugin to mount EventLoggerService into Context.
  */
 export function eventLoggerPlugin(ctx, options = {}) {
   const logger = new EventLoggerService(options);

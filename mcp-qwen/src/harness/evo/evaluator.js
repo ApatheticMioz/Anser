@@ -1,5 +1,5 @@
 /**
- * Closed-Loop Metric Evaluator (NVIDIA AVO Fitness Engine)
+ * Closed-Loop Metric Evaluator (Evo Fitness Engine)
  *
  * Executes evaluation commands and parses feedback into a quantitative FitnessScore.
  */

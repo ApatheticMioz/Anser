@@ -1,6 +1,8 @@
 # DeepSeek AVO: Autonomous Agent Harness & Evolutionary Framework
 **Engineering Progress, Decision Ledger, & Comparative Benchmarks**
 
+> **Archival note (2026-09-06):** Renamed from its pre-Anser working filename; content preserved verbatim as history. The project now ships as **Anser**.
+
 - **Project Lead**: Lead Architect (Gemini 3.8 Flash / Claude GLM-5.3) & Autonomous Execution Engine (Qwen3.8-27B)
 - **Start Date**: 2026-09-05
 - **Git Branch**: `feat/deepseek-avo`

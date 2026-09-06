@@ -387,7 +387,7 @@ raising.
 Raised `MAX_SEQS` 2 -> 4 in `launchers/start_huge.sh` (a conservative middle
 step versus upstream's own tested 8) and verified live on this box, not just
 trusted from docs: rebooted, watched the boot log directly (confirmed the
-process was alive and progressing via `ps`/`nvidia-smi` during a slower
+process was alive and progressing via `ps`/GPU telemetry during a slower
 cold-compile pass - the CUDA graph capture list grew from `[1,2,4,8,16]` to
 `[1,2,4,8,16,24,32]`, so compilation cache invalidated and had to redo, ~37s),
 and confirmed the final numbers: **KV cache size: 268,169 tokens - identical
@@ -724,7 +724,7 @@ postdate the last entry above.
 **Tool surface consolidated to 3.** The five-tool surface (ask_qwen /
 ask_qwen_fast / delegate_coding_task / qwen_check_task / qwen_cancel_task)
 collapsed into: `qwen_coworker` (the delegate path, plus session_id/cwd/
-extensions and the AVO fields), `qwen_task` (status/cancel/list over one
+extensions and the Evo fields), `qwen_task` (status/cancel/list over one
 in-memory task registry), `qwen_server` (vLLM lifecycle). Rationale: the
 2026-08-23 post-mortems showed the caller drifting between overlapping
 async-semantics tools mid-session; three tools with mutually exclusive jobs
@@ -755,7 +755,7 @@ that would 404 against the other instance.
 
 **400s fixed budget -> 1-hour budget + 10-minute inactivity watchdog.**
 DEFAULT_TIMEOUT_MS 400s -> 3,600,000ms and the kill logic split into two
-axes: a hard 1-hour total budget (AVO evolution loops and deep-research
+axes: a hard 1-hour total budget (Evo evolution loops and deep-research
 runs legitimately need it) plus a 10-minute zero-stream-chunk inactivity
 timeout as the real liveness guard (kill on silence, not on age). The old
 flat 400s was the wrong axis - it killed healthy long tasks while letting
@@ -763,23 +763,23 @@ genuinely stuck ones burn the whole thing (the verify:true post-mortems).
 The extensions bonus (+10min) and the per-task total are still threaded
 through every status message.
 
-**AVO lineage engine (avo_engine.js) + AVO fields on qwen_coworker.**
+**Evo lineage engine (evo_engine.js) + Evo fields on qwen_coworker.**
 `hypothesis`/`test_command`/`metric_name`/`higher_is_better` drive
-AvoLineageEngine: after the Goose run, the MCP server itself executes the
+EvoLineageEngine: after the run, the MCP server itself executes the
 test command (powershell/bash, 5min cap), extracts the named metric from the
-output, and records an immutable candidate in <cwd>/.avo/lineage.json with
+output, and records an immutable candidate in <cwd>/.evo/lineage.json with
 git commit provenance (improvements move bestCommit; regressions stay in the
 record for inspection - no auto-rollback, per the 2026-08-25 "no destructive
-hard resets" decision). scripts/avo_runner.py is the standalone driver: one
+hard resets" decision). scripts/evo_runner.py is the standalone driver: one
 round per invocation - reads the lineage, asks the local model (direct
 /v1/chat/completions call) for the next hypothesis, writes a dispatch packet
-to .avo/avq/ and prints the exact qwen_coworker call. It never writes
+to .evo/avq/ and prints the exact qwen_coworker call. It never writes
 lineage.json itself - the engine owns that file.
 
-**2026-08-27 audit (this pass).** The first cut of the AVO wiring (committed
+**2026-08-27 audit (this pass).** The first cut of the Evo wiring (committed
 in `2276965`) had a contract mismatch: index.js called `getLineageContext()`
 / `extractMetric()` which didn't exist on the engine (silently swallowed ->
-AVO context never injected, candidates never recorded), and called
+Evo context never injected, candidates never recorded), and called
 `recordCandidate` with the wrong keys and no `await` (would have recorded
 garbage-FAILED entries). Fixed: the engine now provides `getLineageContext()`
 (async alias of getLineageBrief) and `extractMetric()`, and `recordCandidate`
@@ -1041,7 +1041,7 @@ aggravated variant share the same first-JIT-launch signature.
 
    ### Bug 0: Zombie Task reporting `EXECUTING` while GPU sits at 0% (Observed 2026-08-30)
    - **Component**: Goose worker process behind `mcp-qwen` (`127.0.0.1:18021` task tracker + vLLM @ `:18020`).
-   - **Symptom**: `GET /task/<id>/status` reports `actively EXECUTING` with elapsed timer, while `nvidia-smi` shows 0% GPU utilization and vLLM has no running requests.
+   - **Symptom**: `GET /task/<id>/status` reports `actively EXECUTING` with elapsed timer, while GPU telemetry shows 0% utilization and vLLM has no running requests.
    - **Resolution in Stack**: Implemented `pidAlive(task.ownerPid)` liveness probing and `isTaskOrphaned(diskTask)` / `markTaskOrphanedOnDisk()` in `mcp-qwen/index.js` (lines 530-605). If worker process PID exits unexpectedly, the task tracker immediately detects orphan status on read and marks the task `FAILED`.
 
    ### Bug 1: Coworker Stream Timeout on Massive Turns (`Stream decode error`) (Observed 2026-08-30)

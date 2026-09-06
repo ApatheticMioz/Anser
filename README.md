@@ -1,22 +1,22 @@
-# LLM_Ecosystem & DeepSeek-AVO Harness
+# LLM_Ecosystem & Anser Harness
 
 [![Release](https://img.shields.io/github/v/tag/ApatheticMioz/LLM_Ecosystem?label=release)](https://github.com/ApatheticMioz/LLM_Ecosystem/releases)
 [![Test Gate: 26/26 Suites Green](https://img.shields.io/badge/Test%20Gate-26%2F26%20Suites%20Green-success.svg)](#10-testing--verification)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20WSL2%20Ubuntu-orange.svg)](https://learn.microsoft.com/en-us/windows/wsl/)
-[![Hardware](https://img.shields.io/badge/GPU-RTX%203090%20%2F%204090%20(24GB)-76B900.svg)](https://www.nvidia.com)
+[![Hardware](https://img.shields.io/badge/GPU-RTX%203090%20%2F%204090%20(24GB)-76B900.svg)](#6-model-serving-speculative-decoding--quantization)
 [![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#6-model-serving-speculative-decoding--quantization)
 [![Serving](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#6-model-serving-speculative-decoding--quantization)
-[![Microkernel](https://img.shields.io/badge/Harness-Cordis%20Zero--IPC-brightgreen.svg)](#3-why-deepseek-avo-is-5x300x-faster-than-legacy-goose)
+[![Microkernel](https://img.shields.io/badge/Harness-Anser%20Zero--IPC-brightgreen.svg)](#3-why-anser-is-5x300x-faster-than-legacy-goose)
 [![Security](https://img.shields.io/badge/Security-123%2F123%20Vectors%20Blocked%20(137%20Total)-success.svg)](#4-zero-risk-data-containment-the-5-layers-of-defense)
 [![SWE-rebench](https://img.shields.io/badge/SWE--rebench-32.0%25%20Resolved-blueviolet.svg)](#8-swe-rebench-validation-benchmark)
 
-**LLM_Ecosystem** is a production-grade, local-first multi-agent pair-programming infrastructure. High-reasoning orchestrators (**Claude 3.7 / 4.5 Sonnet**, **Claude Code**, or **Gemini 3.8 Flash** in Google Antigravity IDE) operate as the **Lead Architect & Meta-Supervisor**, while a locally-served **Qwen3.8-27B** (running on a single 24GB NVIDIA RTX 3090/4090 via vLLM + DFlash2 + KVarN @ 245K context) executes code exploration, structural AST manipulation, testing, and file editing for **$0 token cost**.
+**LLM_Ecosystem** is a production-grade, local-first multi-agent pair-programming infrastructure. High-reasoning orchestrators (**Claude 3.7 / 4.5 Sonnet**, **Claude Code**, or **Gemini 3.8 Flash** in Google Antigravity IDE) operate as the **Lead Architect & Meta-Supervisor**, while a locally-served **Qwen3.8-27B** (running on a single 24GB RTX 3090/4090 via vLLM + DFlash2 + KVarN @ 245K context) executes code exploration, structural AST manipulation, testing, and file editing for **$0 token cost**.
 
-Execution is driven by the **DeepSeek-AVO Agent Harness**—an in-process **Cordis microkernel** combined with **NVIDIA AVO (Autonomous Variation & Optimization)** closed-loop evolutionary mechanics, delivering microsecond tool latency, zero-risk blast-radius sandboxing, bounded traceback repair, and atomic state rollback.
+Execution is driven by the **Anser Agent Harness**—an in-process **Anser microkernel** combined with **Evo (Autonomous Variation & Optimization)** closed-loop evolutionary mechanics, delivering microsecond tool latency, zero-risk blast-radius sandboxing, bounded traceback repair, and atomic state rollback.
 
 > [!IMPORTANT]
-> **Legacy Goose Archival**: The legacy Goose CLI subprocess harness has been archived to branch [`archive/legacy-goose`](https://github.com/ApatheticMioz/LLM_Ecosystem/tree/archive/legacy-goose). While preserved as a fallback (`engine: "legacy_goose"`), the primary default production runtime is **DeepSeek-AVO** (`engine: "deepseek_avo"`).
+> **Legacy Goose Archival**: The legacy Goose CLI subprocess harness has been archived to branch [`archive/legacy-goose`](https://github.com/ApatheticMioz/LLM_Ecosystem/tree/archive/legacy-goose). The primary production runtime is the **Anser** in-process microkernel.
 
 ---
 
@@ -24,7 +24,7 @@ Execution is driven by the **DeepSeek-AVO Agent Harness**—an in-process **Cord
 
 1. [System Architecture](#1-system-architecture)
 2. [Repository Structure](#2-repository-structure)
-3. [Why DeepSeek-AVO is 5x–300x Faster Than Legacy Goose](#3-why-deepseek-avo-is-5x300x-faster-than-legacy-goose)
+3. [Why Anser is 5x–300x Faster Than Legacy Goose](#3-why-anser-is-5x300x-faster-than-legacy-goose)
 4. [Zero-Risk Data Containment (The 5 Layers of Defense)](#4-zero-risk-data-containment-the-5-layers-of-defense)
 5. [Consolidated MCP Tool Suite (`qwen38-local`)](#5-consolidated-mcp-tool-suite-qwen38-local)
 6. [Model Serving, Speculative Decoding & Quantization](#6-model-serving-speculative-decoding--quantization)
@@ -49,7 +49,7 @@ User <───────────────────> Meta-Supervisor
                            (Claude Sonnet in Claude Code / Gemini Flash in Antigravity)
                                         │
                                         │  MCP (stdio) - 3 Consolidated Tools:
-                                        │  • qwen_coworker (prompt, session_id, cwd, extensions, avo)
+                                        │  • qwen_coworker (prompt, session_id, cwd, extensions, evo)
                                         │  • qwen_task (status, cancel, list)
                                         │  • qwen_server (status, start, stop)
                                         ▼
@@ -62,12 +62,12 @@ User <───────────────────> Meta-Supervisor
              └─────────────────────────────────────────────────────────┘
                                         │
                                         ▼
-             DeepSeek-AVO Agent Harness (Embedded Cordis Microkernel)
+             Anser Agent Harness (Embedded Microkernel)
              ├── In-process zero-IPC tool execution (0.01ms V8 function calls)
              ├── Structural AST surgery: @ast-grep/napi (ast_search, ast_replace)
              ├── Compile-check safety gates: syntax validated before disk commit
              ├── Traceback condenser: bounded <=100 token digests from raw stderr
-             ├── Closed-loop evolutionary engine: lineage tracking (.avo/lineage.json)
+             ├── Closed-loop evolutionary engine: lineage tracking (.evo/lineage.json)
              ├── 90-vector zero-trust sandboxed filesystem (C: & D: containment)
              └── Dynamic extensions: free-search-mcp, context7, gh CLI
                                         │
@@ -81,7 +81,7 @@ User <───────────────────> Meta-Supervisor
              └── Static prompt templates (100% prefix-cache reuse @ 8-9k tok/s)
                                         │
                                         ▼
-             NVIDIA GeForce RTX 3090 / 4090 (24 GB VRAM @ 250W Power Cap)
+             GeForce RTX 3090 / 4090 (24 GB VRAM @ 250W Power Cap)
 ```
 
 ---
@@ -98,11 +98,11 @@ LLM_Ecosystem/
 │   ├── README.md                   # Documentation index
 │   └── audits/                     # Historical ledgers & adversarial audit reports
 │       ├── AUDIT_2026-09-05.md     # Codebase & cross-platform drift audit
-│       ├── DEEPSEEK_AVO_PROGRESS.md# DeepSeek-AVO implementation history
+│       ├── ANSER_PROGRESS.md# Anser implementation history
 │       ├── PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md # Threat model & security review
-│       └── QWEN_AVO_AUDIT.md       # Peer review & collaborative validation
+│       └── QWEN_EVO_AUDIT.md       # Peer review & collaborative validation
 │
-├── mcp-qwen/                       # DeepSeek-AVO MCP Server (Node.js)
+├── mcp-qwen/                       # Anser MCP Server (Node.js)
 │   ├── index.js                    # Server entry point exposing tools via stdio
 │   ├── stream_proxy.js             # Universal SSE streaming proxy on port 18022
 │   ├── package.json                # Dependencies (@modelcontextprotocol/sdk, @ast-grep/napi)
@@ -111,21 +111,21 @@ LLM_Ecosystem/
 │   ├── src/                        # Modular runtime implementation
 │   │   ├── config.js               # Central configuration & timeout constants
 │   │   ├── goose_runner.js         # Fallback legacy Goose subprocess runner
-│   │   ├── avo_engine.js           # Lineage tracker for legacy runner
+│   │   ├── evo_engine.js           # Lineage tracker for legacy runner
 │   │   ├── semaphore.js            # Cross-process disk-lease lock (MAX_CONCURRENT=1)
 │   │   ├── server_lifecycle.js     # vLLM launch, wedge detection & auto-healing
 │   │   ├── task_registry.js        # Background task state persistence (~/.qwen/tasks/)
 │   │   ├── tools.js                # Zod schemas & dispatch handlers
 │   │   ├── wsl_bridge.js           # Dual-platform DrvFs path resolver & process tree killer
-│   │   └── harness/                # DeepSeek-AVO Core Runtime
+│   │   └── harness/                # Anser Core Runtime
 │   │       ├── runner.js           # Main execution loop connecting vLLM & tools
-│   │       ├── core/               # Cordis microkernel (Context, Events, Plugins)
+│   │       ├── core/               # Anser microkernel (Context, Events, Plugins)
 │   │       ├── services/           # Sandboxed FS, AST surgery, Shell executor, Logger
-│   │       └── avo/                # Evolutionary operator, Evaluator, DAG, Trace repair
+│   │       └── evo/                # Evolutionary operator, Evaluator, DAG, Trace repair
 │   └── tests/                      # Automated Test & Validation Suite
 │       ├── security.test.js        # 90-vector blast-radius containment audit
 │       ├── canary.test.js          # AST search/replace, syntax gate, trace condenser
-│       ├── avo.test.js             # Closed-loop evaluation & rollback integration
+│       ├── evo.test.js             # Closed-loop evaluation & rollback integration
 │       ├── semaphore.test.js       # Cross-process lease exclusion tests
 │       ├── stream_proxy.test.js    # Multi-byte UTF-8 & mid-stream chunk tests
 │       ├── utf8_proxy.test.js      # Unicode replacement & SSE transport verification
@@ -134,7 +134,7 @@ LLM_Ecosystem/
 │
 ├── scripts/                        # Automation scripts & server launchers
 │   ├── status.bat                  # Unified service & GPU status checker (18020/18021)
-│   ├── avo_runner.py               # Autonomous evolutionary optimization CLI
+│   ├── evo_runner.py               # Autonomous evolutionary optimization CLI
 │   ├── main/                       # Production vLLM launchers (Windows batch)
 │   │   ├── start.bat               # Default launcher -> start_huge.bat
 │   │   ├── start_huge.bat          # 245K context launcher (DFlash2 + KVarN k4v2)
@@ -157,11 +157,11 @@ LLM_Ecosystem/
 
 ---
 
-## 3. Why DeepSeek-AVO is 5x–300x Faster Than Legacy Goose
+## 3. Why Anser is 5x–300x Faster Than Legacy Goose
 
-| Metric / Dimension | Legacy Goose (Rust CLI Subprocess) | DeepSeek-AVO (In-Process Cordis Microkernel) | Architectural Root Cause |
+| Metric / Dimension | Legacy Goose (Rust CLI Subprocess) | Anser (In-Process Microkernel) | Architectural Root Cause |
 |---|---|---|---|
-| **Per-Tool IPC Overhead** | 200–500ms per tool action | **0.01ms** | Cordis executes tools as direct V8 function calls inside the MCP memory space, eliminating process spawning. |
+| **Per-Tool IPC Overhead** | 200–500ms per tool action | **0.01ms** | Anser executes tools as direct V8 function calls inside the MCP memory space, eliminating process spawning. |
 | **Directory Traversal** | 1,500–12,000ms per operation | **5–40ms** (5x–300x faster) | Ripgrep-powered ignore engine automatically prunes `.venv`, `node_modules`, and caches from file searches. |
 | **Time to First Token (TTFT)** | 35,000–60,000ms | **190–2,335ms** | Direct HTTP/1.1 persistent SSE stream with proactive TCP keep-alive pings (`: keep-alive\n\n`). |
 | **State Persistence** | SQLite `sessions.db` write locks | **Atomic append-only JSONL** | Zero database locks, instant session branching, and non-blocking background streaming. |
@@ -190,7 +190,7 @@ Layer 3: Workspace Root Overwrite Guard  ──> Blocks directory deletion or ro
 Layer 4: Dangerous Shell Filter          ──> Blocks rm -rf /, format C:, del /s C:\, mkfs, dd, fork bombs
       │
       ▼
-Layer 5: AST Syntax Gate & AVO Rollback  ──> Validates code via node --check / py_compile before saving;
+Layer 5: AST Syntax Gate & Evo Rollback  ──> Validates code via node --check / py_compile before saving;
       │                                       instant byte-for-byte revert on test failure
       ▼
 [Safe Disk Operation]
@@ -200,7 +200,7 @@ Layer 5: AST Syntax Gate & AVO Rollback  ──> Validates code via node --check
 2. **Layer 2: Symlink Realpath Containment**: The harness invokes `fs.realpathSync()` on existing targets and walks parent chains on new files. Any symlink resolving outside the workspace throws `SymlinkEscapeError`.
 3. **Layer 3: Workspace Root Overwrite Guard**: Attempts to delete or overwrite the workspace root or parent drive roots throw `InvalidPathError`.
 4. **Layer 4: Dangerous Shell Command Blocking**: The shell executor inspects commands against regex patterns prohibiting catastrophic system destruction (`rm -rf /`, `format C:`, `del /s /q C:\`, `mkfs`, fork bombs). Working directories are validated against the workspace root before spawning.
-5. **Layer 5: AST Syntax-Validation Gates & Deterministic Rollback**: Structural replacements via `ast_replace` are checked in memory (`node --check` for JS, `py_compile` for Python) before disk commit. Malformed code is rejected immediately with `SyntaxValidationError`. In AVO mode, workspace snapshots revert regressions with 100% fidelity.
+5. **Layer 5: AST Syntax-Validation Gates & Deterministic Rollback**: Structural replacements via `ast_replace` are checked in memory (`node --check` for JS, `py_compile` for Python) before disk commit. Malformed code is rejected immediately with `SyntaxValidationError`. In Evo mode, workspace snapshots revert regressions with 100% fidelity.
 
 > [!TIP]
 > **Empirical Security Verification**: This model is verified by `npm run test:security`, passing **90/90 attack vectors blocked** across both Windows 11 and WSL2 Ubuntu.
@@ -217,7 +217,7 @@ Primary agentic interface for multi-turn pair-programming, exploration, code edi
 - **`session_id`** *(string, optional)*: Milestone session identifier (e.g. `"myrepo_phase1"`). Reuses warm KV prefix cache.
 - **`cwd`** *(string, optional)*: Target directory (Windows or POSIX path).
 - **`extensions`** *(string[], optional)*: Dynamic tool extensions (e.g. `["uvx free-search-mcp"]`, `["npx -y @upstash/context7-mcp"]`).
-- **`hypothesis`** *(string, optional)*: AVO hypothesis description for candidate mutation.
+- **`hypothesis`** *(string, optional)*: Evo hypothesis description for candidate mutation.
 - **`test_command`** *(string, optional)*: Verification command executed by the closed-loop evaluator.
 - **`metric_name`** *(string, optional)*: Optimization metric extracted from evaluation output.
 - **`higher_is_better`** *(boolean, optional)*: Optimization objective direction (default: `true`).
@@ -263,7 +263,7 @@ The serving backend runs inside WSL2 Ubuntu at `~/qwen-serving` (forked from [sy
 
 ## 7. Measured Throughput & Benchmarks
 
-*Hardware: Single NVIDIA GeForce RTX 3090 24GB @ 250W Power Cap, `CTX=huge`, `SPEC=dflash2`, `KVarN k4v2`.*
+*Hardware: Single GeForce RTX 3090 24GB @ 250W Power Cap, `CTX=huge`, `SPEC=dflash2`, `KVarN k4v2`.*
 
 ### Single-User Generation Speed
 
@@ -287,7 +287,7 @@ The serving backend runs inside WSL2 Ubuntu at `~/qwen-serving` (forked from [sy
 
 ### 11-Hour Multi-Agent Production Marathon Telemetry (v5.1.0 Validation)
 
-In an unbroken 11.25-hour autonomous pairing session across Gemini 3.8 Flash (Antigravity Meta-Supervisor), GLM-5.3-Flash / Claude Code (Lead Architect), and Qwen3.8-27B (AVO Cordis Coworker), the stack delivered the following production metrics:
+In an unbroken 11.25-hour autonomous pairing session across Gemini 3.8 Flash (Antigravity Meta-Supervisor), GLM-5.3-Flash / Claude Code (Lead Architect), and Qwen3.8-27B (Anser Coworker), the stack delivered the following production metrics:
 
 | Production Telemetry Dimension | Empirical Measurement | Operational Value |
 |---|---|---|
@@ -323,9 +323,9 @@ To evaluate real-world software engineering generalization without data contamin
 
 - **Host OS**: Windows 11 (build 22621+) with WSL2 enabled.
 - **WSL Distribution**: Ubuntu 22.04 LTS or Ubuntu 24.04 LTS.
-- **GPU**: NVIDIA GPU with $\ge 24\text{ GB}$ VRAM (GeForce RTX 3090, 4090, RTX 6000 Ada, or A100/H100).
+- **GPU**: GPU with $\ge 24\text{ GB}$ VRAM (GeForce RTX 3090, 4090, RTX 6000 Ada, or A100/H100).
 - **Host Tools**: Node.js $\ge 18.0.0$, Python $\ge 3.10$, Git.
-- **WSL Tools**: NVIDIA Container Toolkit / CUDA 12.4+, Python 3.11/3.12, Node.js 18+.
+- **WSL Tools**: CUDA Container Toolkit / CUDA 12.4+, Python 3.11/3.12, Node.js 18+.
 
 ### WSL2 Backend Setup
 
@@ -378,7 +378,7 @@ Run `python mcp-qwen/update_schemas.py` to populate tool schemas and supervisory
 #### 2. Anthropic Claude Code
 Register via CLI:
 ```bash
-claude mcp add --scope user qwen-avo node D:/LLM_Ecosystem/mcp-qwen/index.js
+claude mcp add --scope user qwen-anser node D:/LLM_Ecosystem/mcp-qwen/index.js
 ```
 Or add to `~/.claude.json`:
 ```json
@@ -417,17 +417,16 @@ The MCP server exposes the following environment-variable knobs (all defined in 
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `QWEN_ENGINE` | `deepseek_avo` | Execution engine: `deepseek_avo` (Cordis microkernel + AVO) or `legacy_goose` (CLI wrapper). |
 | `QWEN_RACE_MS` | `45000` | Synchronous race window (ms) before yielding to the zero-turn long-poll wait. |
-| `QWEN_MAX_CONCURRENT` | `1` | Maximum concurrent Goose/AVO execution slots (cross-process semaphore). |
-| `QWEN_STATE_DIR` | `~/.qwen` (or `/mnt/c/Users/Apath/.qwen` on WSL) | Root directory for task state, slot leases, and AVO lineage. |
+| `QWEN_MAX_CONCURRENT` | `1` | Maximum concurrent execution slots (cross-process semaphore). |
+| `QWEN_STATE_DIR` | `~/.qwen` (or `/mnt/c/Users/Apath/.qwen` on WSL) | Root directory for task state, slot leases, and Evo lineage. |
 | `QWEN_MIN_TIMEOUT_MS` | `600000` (10 min) | Minimum per-task timeout budget (ms). |
 | `QWEN_INACTIVITY_TIMEOUT_MS` | `1800000` (30 min) | Inactivity timeout: kill task if no tool activity for this duration. |
 | `QWEN_FIRST_TOKEN_TIMEOUT_MS` | `240000` (4 min) | Timeout for first token from vLLM after request dispatch. |
 | `QWEN_MAX_TURNS` | *(unset / unbounded)* | Hard cap on agent turns per task (null = orchestrator-governed). |
 | `QWEN_WEDGE_SILENCE_S` | `120` | Seconds of engine-log silence before wedge detection triggers auto-heal. |
 | `QWEN_AUTO_HEAL` | `true` (disable with `0`) | Enable automatic vLLM process kill & relaunch on detected engine wedge. |
-| `QWEN_ENGINE_LOG` | `/tmp/mcp_launch_huge.log` | Path to the vLLM engine log used for wedge silence monitoring. |
+| `QWEN_LOG_PATH` | `/tmp/mcp_launch_huge.log` | Path to the vLLM engine log used for wedge silence monitoring. |
 | `VLLM_PORT` | `18020` | Port for the vLLM OpenAI-compatible API endpoint. |
 | `STATUS_PORT` | `18021` | Port for the zero-turn long-poll HTTP status/wait server. |
 | `STREAM_PROXY_PORT` | `18022` | Port for the universal SSE streaming proxy. |
@@ -447,8 +446,8 @@ npm run test:all
 
 # Run individual targeted suites:
 npm run test:security    # 137-vector containment (123 attack vectors blocked, 14 allow vectors)
-npm run test:canary      # AST search, syntax gates, traceback condenser, AVO eval
-npm run test:avo         # Closed-loop evaluation & snapshot rollback (live engine)
+npm run test:canary      # AST search, syntax gates, traceback condenser, Evo eval
+npm run test:evo         # Closed-loop evaluation & snapshot rollback (live engine)
 npm run test:semaphore   # Cross-process lease exclusion tests (private state dir)
 npm run test:proxy       # Universal UTF-8 streaming proxy & repetition breaker
 npm run test:syntax      # Pre-commit syntax gates across JS, TS, Python, Go, Rust, JSON
@@ -466,9 +465,9 @@ Detailed design decisions, threat models, and architectural evaluations are inde
 - [mcp-qwen Incident-Derived Design Specification](mcp-qwen/docs/DESIGN.md) (L1–L17 architectural post-mortems)
 - [mcp-qwen Production Specification](mcp-qwen/README.md)
 - [Repository & Configuration Drift Audit](docs/audits/AUDIT_2026-09-05.md)
-- [DeepSeek-AVO Implementation & Progress Ledger](docs/audits/DEEPSEEK_AVO_PROGRESS.md)
+- [Anser Implementation & Progress Ledger](docs/audits/ANSER_PROGRESS.md)
 - [Patchwork Adversarial Security Audit](docs/audits/PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md)
-- [Qwen-AVO Collaborative Peer Audit](docs/audits/QWEN_AVO_AUDIT.md)
+- [Qwen-Evo Collaborative Peer Audit](docs/audits/QWEN_EVO_AUDIT.md)
 - [Engineering Notes & Delegation History](mcp-qwen/NOTES.md)
 
 ---
@@ -494,4 +493,4 @@ This project is licensed under the [MIT License](LICENSE).
 - **Huawei CSL** for the [KVarN](https://github.com/huawei-csl/KVarN) variance-normalized KV cache.
 - **Inco AI** for the [DFlash2](https://inco.ai/blog/dflash2/) non-autoregressive block drafter architecture.
 - **Herrington Darkholme & contributors** for [ast-grep](https://github.com/ast-grep/ast-grep).
-- **Cordis & NVIDIA AVO** for microkernel patterns and closed-loop evolutionary optimization principles.
+- **Anser & Evo** for microkernel patterns and closed-loop evolutionary optimization principles.

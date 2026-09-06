@@ -6,20 +6,20 @@ import path from "node:path";
 const execFileAsync = promisify(execFile);
 
 /**
- * NVIDIA AVO-Class Lineage Engine (Aug 2026 SOTA Specification)
+ * Evo Lineage Engine (Aug 2026 SOTA Specification)
  * 
  * Grounded in immutable Git checkpoints and real execution feedback.
  * Prohibits unstructured, stale natural language scratchpads.
  */
-export class AvoLineageEngine {
+export class EvoLineageEngine {
   constructor(cwd) {
     this.cwd = cwd;
-    this.avoDir = path.join(cwd, ".avo");
-    this.lineageFile = path.join(this.avoDir, "lineage.json");
+    this.evoDir = path.join(cwd, ".evo");
+    this.lineageFile = path.join(this.evoDir, "lineage.json");
   }
 
   async init() {
-    await fs.mkdir(this.avoDir, { recursive: true });
+    await fs.mkdir(this.evoDir, { recursive: true });
     try {
       const data = await fs.readFile(this.lineageFile, "utf-8");
       this.state = JSON.parse(data);
@@ -47,7 +47,7 @@ export class AvoLineageEngine {
   }
 
   async save() {
-    await fs.mkdir(this.avoDir, { recursive: true });
+    await fs.mkdir(this.evoDir, { recursive: true });
     await fs.writeFile(this.lineageFile, JSON.stringify(this.state, null, 2), "utf-8");
   }
 
@@ -59,21 +59,21 @@ export class AvoLineageEngine {
     await this.init();
     if (this.state.candidates.length === 0) {
       return (
-        `AVO Lineage Status: Fresh baseline at commit ${this.state.bestCommit}.\n` +
+        `Evo Lineage Status: Fresh baseline at commit ${this.state.bestCommit}.\n` +
         `No candidate variations evaluated yet.`
       );
     }
 
     const recent = this.state.candidates.slice(-8);
     const summaryLines = recent.map((c, i) => {
-      const statusIcon = c.status === "ACCEPTED" ? "✅" : "❌";
+      const statusIcon = c.status === "ACCEPTED" ? "[OK]" : "[FAIL]";
       const metricStr = c.metricScore !== null ? `Metric: ${c.metricScore}` : "No metric";
       const failSnippet = c.errorLog ? ` | Error: ${c.errorLog.slice(0, 120).replace(/\n/g, " ")}` : "";
       return `${statusIcon} [${c.candidateId}] Hypothesis: "${c.hypothesis}" -> ${c.status} (${metricStr})${failSnippet}`;
     });
 
     return (
-      `=== NVIDIA AVO Candidate Lineage History ===\n` +
+      `=== Evo Candidate Lineage History ===\n` +
       `Active Best Commit: ${this.state.bestCommit} (Best Metric: ${this.state.bestMetric ?? "N/A"})\n` +
       `Total Candidates Evaluated: ${this.state.candidates.length}\n` +
       `Recent Trajectory (Last ${recent.length}):\n` +

@@ -1,5 +1,5 @@
 /**
- * P9 — Skills library + keyword auto-inject tests (offline).
+ * P9 - Skills library + keyword auto-inject tests (offline).
  *
  * Vectors:
  *   1. frontmatter parsing (well-formed + malformed-skipped)
@@ -51,12 +51,12 @@ function makeTempSkills() {
   };
 
   // Well-formed skills with distinct keywords.
-  write("avo", `---
-name: avo
-description: AVO workflow
-keywords: [avo, lineage]
+  write("evo", `---
+name: evo
+description: Evo workflow
+keywords: [evo, lineage]
 ---
-AVO body text.`);
+Evo body text.`);
 
   write("traceback", `---
 name: traceback
@@ -163,7 +163,7 @@ no closing marker here`);
   {
     // A prompt containing keywords from all four keyword-bearing skills.
     const m = matchSkills({
-      prompt: "avo traceback canary rollback",
+      prompt: "evo traceback canary rollback",
       cwd: "",
       dir,
     });
@@ -197,10 +197,10 @@ no closing marker here`);
   {
     const list = listSkills(dir);
     assert(Array.isArray(list) && list.length >= 4, `listSkills returns array (got ${list.length})`);
-    const sample = list.find((s) => s.name === "avo");
+    const sample = list.find((s) => s.name === "evo");
     assert(sample && typeof sample.description === "string", "listSkills has description");
     assert(
-      sample && Array.isArray(sample.keywords) && sample.keywords.includes("avo"),
+      sample && Array.isArray(sample.keywords) && sample.keywords.includes("evo"),
       "listSkills has keywords array"
     );
     // listSkills should NOT include the body
@@ -210,14 +210,14 @@ no closing marker here`);
   // --- Test 6: cwd-based match ---
   console.log("\n[Test 6: cwd-based match]");
   {
-    // A prompt with no keywords, but a cwd path containing "avo".
-    const m = matchSkills({ prompt: "do the work", cwd: "/home/user/avo-project", dir });
+    // A prompt with no keywords, but a cwd path containing "evo".
+    const m = matchSkills({ prompt: "do the work", cwd: "/home/user/evo-project", dir });
     const names = m.map((s) => s.name);
-    assert(names.includes("avo"), `cwd 'avo' triggered avo skill (got ${names.join(",")})`);
+    assert(names.includes("evo"), `cwd 'evo' triggered evo skill (got ${names.join(",")})`);
 
     // a cwd with no keyword
     const none = matchSkills({ prompt: "do the work", cwd: "/home/user/other", dir });
-    assert(!none.some((s) => s.name === "avo"), "non-avo cwd did not trigger avo");
+    assert(!none.some((s) => s.name === "evo"), "non-evo cwd did not trigger evo");
   }
 
   // --- Test 7: malformed skill skipped, others still load ---
@@ -228,7 +228,7 @@ no closing marker here`);
     // The malformed one has no closing ---, so its "body" is the whole doc and
     // it still loads (with a body). The key assertion: loading did NOT throw
     // and the well-formed skills are all present.
-    assert(names.includes("avo"), "avo loaded");
+    assert(names.includes("evo"), "evo loaded");
     assert(names.includes("traceback"), "traceback loaded");
     assert(names.includes("canary"), "canary loaded");
     assert(names.includes("rollback"), "rollback loaded");

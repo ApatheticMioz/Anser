@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 echo =======================================================
-echo [kill_all_tasks] Emergency Qwen ^& DeepSeek-AVO Task Killer
+echo [kill_all_tasks] Emergency Qwen ^& Anser Task Killer
 echo =======================================================
 
 echo 1. Notifying Windows Status Coordinator (:18021)...
@@ -14,7 +14,7 @@ if %ERRORLEVEL% EQU 0 (
 
 echo 2. Terminating Windows worker processes...
 taskkill /F /IM goose.exe /T >nul 2>&1
-for /f "tokens=2 delims=," %%a in ('tasklist /FI "WINDOWTITLE eq *avo_runner*" /FO CSV /NH 2^>nul') do (
+for /f "tokens=2 delims=," %%a in ('tasklist /FI "WINDOWTITLE eq *evo_runner*" /FO CSV /NH 2^>nul') do (
     taskkill /F /PID %%~a >nul 2>&1
 )
 

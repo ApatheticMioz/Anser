@@ -1,5 +1,5 @@
 /**
- * Cordis-Style Microkernel Core
+ * Anser Microkernel Core
  *
  * Implements "Everything is a Plugin" with reversible effects:
  * - Service container with dependency injection

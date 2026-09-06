@@ -1,7 +1,7 @@
 /**
  * Runner Continuation-on-Cutoff Verification (fully OFFLINE)
  *
- * Proves the DeepSeek AVO runner is honest about and resilient to
+ * Proves the Anser runner is honest about and resilient to
  * output-ceiling truncation (finish_reason: "length"):
  *   (a) "length" twice then "stop"  -> completed, 2 continuations, finishReason logged
  *   (b) "length" always             -> terminates at the MAX_CONTINUATION_TURNS cap
@@ -30,7 +30,7 @@ import assert from "node:assert";
 process.env.QWEN_MAX_CONTINUATION_TURNS = "3";
 process.env.QWEN_EMPTY_STREAM_RETRIES = "2";
 
-const { DeepSeekAvoRunner, CONTINUATION_DIRECTIVE, REASONING_LANDING_DIRECTIVE } =
+const { AnserRunner, CONTINUATION_DIRECTIVE, REASONING_LANDING_DIRECTIVE } =
   await import("../src/harness/runner.js");
 const { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } = await import(
   "../src/config.js"
@@ -60,7 +60,7 @@ function makeMockLlm(script) {
         hadReasoning: step.hadReasoning ?? false,
       };
       // If the step explicitly carries a "finishReason" key (even if it is
-      // undefined), honor it verbatim — this models an aborted/zero-byte
+      // undefined), honor it verbatim - this models an aborted/zero-byte
       // stream that produced NO real finish_reason frame. Otherwise default
       // to "stop" (the provider's default-fill for a clean turn).
       const hasFinishReason = Object.prototype.hasOwnProperty.call(
@@ -114,7 +114,7 @@ async function vectorA() {
     { content: "Part three concludes it.", finishReason: "stop" },
   ]);
   const logger = makeMockLogger();
-  const runner = new DeepSeekAvoRunner({ llm, logger });
+  const runner = new AnserRunner({ llm, logger });
 
   const res = await runner.run({
     prompt: "Write a three-part answer.",
@@ -154,7 +154,7 @@ async function vectorB() {
     { content: "truncated...", finishReason: "length" },
   ]); // always returns the same "length" turn
   const logger = makeMockLogger();
-  const runner = new DeepSeekAvoRunner({ llm, logger });
+  const runner = new AnserRunner({ llm, logger });
 
   const res = await runner.run({
     prompt: "Keep going forever.",
@@ -199,7 +199,7 @@ async function vectorC() {
     { content: "Done after re-emitting.", finishReason: "stop" },
   ]);
   const logger = makeMockLogger();
-  const runner = new DeepSeekAvoRunner({ llm, logger });
+  const runner = new AnserRunner({ llm, logger });
 
   const res = await runner.run({
     prompt: "Search the code.",
@@ -231,14 +231,14 @@ async function vectorC() {
 }
 
 // ---------------------------------------------------------------------------
-// Vector (d): happy path — "stop" + empty toolCalls -> immediate break.
+// Vector (d): happy path - "stop" + empty toolCalls -> immediate break.
 // ---------------------------------------------------------------------------
 async function vectorD() {
   const llm = makeMockLlm([
     { content: "All done in one shot.", finishReason: "stop" },
   ]);
   const logger = makeMockLogger();
-  const runner = new DeepSeekAvoRunner({ llm, logger });
+  const runner = new AnserRunner({ llm, logger });
 
   const res = await runner.run({
     prompt: "Quick task.",
@@ -271,7 +271,7 @@ async function vectorE() {
     { content: "Recovered after the empty stream.", finishReason: "stop" },
   ]);
   const logger = makeMockLogger();
-  const runner = new DeepSeekAvoRunner({ llm, logger });
+  const runner = new AnserRunner({ llm, logger });
 
   const res = await runner.run({
     prompt: "Do the thing.",
@@ -319,7 +319,7 @@ async function vectorF() {
     { content: "", toolCalls: [], finishReason: undefined },
   ]);
   const logger = makeMockLogger();
-  const runner = new DeepSeekAvoRunner({ llm, logger });
+  const runner = new AnserRunner({ llm, logger });
 
   const res = await runner.run({
     prompt: "Keep trying.",
@@ -357,7 +357,7 @@ async function vectorF() {
 }
 
 // ---------------------------------------------------------------------------
-// Vector (g): empty-STOP turn (finish "stop", zero content, zero tool calls —
+// Vector (g): empty-STOP turn (finish "stop", zero content, zero tool calls -
 // the classic reasoning-burned-the-whole-budget signature) then a normal
 // stop-with-content turn. Must route through the P2b retry path with reason
 // "empty_stop" and complete.
@@ -368,7 +368,7 @@ async function vectorG() {
     { content: "Recovered after the empty stop.", finishReason: "stop" },
   ]);
   const logger = makeMockLogger();
-  const runner = new DeepSeekAvoRunner({ llm, logger });
+  const runner = new AnserRunner({ llm, logger });
 
   const res = await runner.run({
     prompt: "Do the thing.",
@@ -404,7 +404,7 @@ async function vectorH() {
     { content: "Landed with concrete output.", finishReason: "stop" },
   ]);
   const logger = makeMockLogger();
-  const runner = new DeepSeekAvoRunner({ llm, logger });
+  const runner = new AnserRunner({ llm, logger });
 
   const res = await runner.run({
     prompt: "Think, then act.",

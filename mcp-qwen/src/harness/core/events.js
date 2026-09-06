@@ -1,5 +1,5 @@
 /**
- * Cordis-style Event Bus with Reversible Disposers
+ * Anser Event Bus with Reversible Disposers
  * Provides lifecycle event decoupling where listeners return cleanup disposers.
  */
 

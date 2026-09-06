@@ -124,11 +124,10 @@ export const WEDGE_STATS_SILENCE_S = process.env.QWEN_WEDGE_SILENCE_S
 export const AUTO_HEAL = process.env.QWEN_AUTO_HEAL !== "0";
 export const HEAL_LOCK_FILE = path.join(TASK_DIR, ".engine_heal.lock");
 export const HEAL_LOCK_TTL_MS = 5 * 60_000;
-export const ENGINE_LOG_PATH = process.env.QWEN_ENGINE_LOG || "/tmp/mcp_launch_huge.log";
+export const ENGINE_LOG_PATH = process.env.QWEN_LOG_PATH || "/tmp/mcp_launch_huge.log";
 export const WEDGE_COUNTER_FILE = path.join(TASK_DIR, ".wedge_counter.json");
 
-// Execution Engine: 'deepseek_avo' (Cordis microkernel + NVIDIA AVO) or 'legacy_goose' (CLI wrapper)
-export const QWEN_ENGINE = process.env.QWEN_ENGINE || "deepseek_avo";
+// Execution engine: the native Anser runner is hard-wired; there is no engine selection.
 
 // Execution & Turn limits
 export const MAX_TURNS = process.env.QWEN_MAX_TURNS

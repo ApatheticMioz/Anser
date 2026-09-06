@@ -1,10 +1,10 @@
 /**
- * DeepSeek AVO vs. Legacy Goose Head-to-Head Benchmark Suite
+ * Evo Benchmark Suite
  *
  * Quantitatively benchmarks:
  * 1. Filesystem Traversal Latency & DrvFs Stall Elimination (.venv / node_modules ignore)
  * 2. Harness Startup Overhead & Time-to-First-Token (TTFT)
- * 3. Closed-Loop Evolutionary Optimization with NVIDIA AVO Fitness Guidance
+ * 3. Closed-Loop Evolutionary Optimization with Evo Fitness Guidance
  */
 
 import fs from "node:fs";
@@ -13,11 +13,9 @@ import assert from "node:assert";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { SandboxFsService } from "../src/harness/services/sandbox_fs.js";
-import { DeepSeekAvoRunner } from "../src/harness/runner.js";
+import { AnserRunner } from "../src/harness/runner.js";
 import { ShellExecutorService } from "../src/harness/services/shell_executor.js";
-import { AvoOperator } from "../src/harness/avo/avo_operator.js";
-import { getGooseExecutable } from "../src/wsl_bridge.js";
-import { IS_WINDOWS } from "../src/config.js";
+import { EvoOperator } from "../src/harness/evo/evo_operator.js";
 import { requireEngineOrSkip } from "./helpers/engine_probe.js";
 
 const execFileAsync = promisify(execFile);
@@ -64,7 +62,7 @@ async function runBenchmark1_FilesystemTraversal() {
   console.log("=======================================================");
   console.log("Testing traversal in a directory with 2,000+ mock .venv library files...");
 
-  // 1A. Legacy Un-sandboxed Naive Traversal
+  // 1A. Naive Un-sandboxed Traversal (baseline)
   const t0_legacy = Date.now();
   let legacyFilesFound = 0;
   const walkNaive = (dir) => {
@@ -81,23 +79,23 @@ async function runBenchmark1_FilesystemTraversal() {
   walkNaive(BENCHMARK_TMP);
   const dt_legacy = Date.now() - t0_legacy;
 
-  // 1B. DeepSeek AVO Sandboxed FS Service
-  const t0_avo = Date.now();
+  // 1B. Evo Sandboxed FS Service
+  const t0_evo = Date.now();
   const fsService = new SandboxFsService({ root: BENCHMARK_TMP });
-  const avoResult = await fsService.listDir({ path: ".", max_depth: 3 });
-  const dt_avo = Date.now() - t0_avo;
+  const evoResult = await fsService.listDir({ path: ".", max_depth: 3 });
+  const dt_evo = Date.now() - t0_evo;
 
   console.log(`\nResults:`);
-  console.log(`  - Legacy Naive Crawler: traversed ${legacyFilesFound} files in ${dt_legacy}ms (crawled all .venv packages)`);
-  console.log(`  - DeepSeek AVO Sandbox:  traversed ${avoResult.total_items} items in ${dt_avo}ms (.venv auto-isolated)`);
-  console.log(`  -> Speedup: ${(dt_legacy / Math.max(1, dt_avo)).toFixed(1)}x faster, 0 dependency noise\n`);
+  console.log(`  - Naive Crawler:  traversed ${legacyFilesFound} files in ${dt_legacy}ms (crawled all .venv packages)`);
+  console.log(`  - Evo Sandbox:    traversed ${evoResult.total_items} items in ${dt_evo}ms (.venv auto-isolated)`);
+  console.log(`  -> Speedup: ${(dt_legacy / Math.max(1, dt_evo)).toFixed(1)}x faster, 0 dependency noise\n`);
 
   return {
     dt_legacy,
-    dt_avo,
-    speedup: (dt_legacy / Math.max(1, dt_avo)).toFixed(1),
+    dt_evo,
+    speedup: (dt_legacy / Math.max(1, dt_evo)).toFixed(1),
     legacyFilesFound,
-    avoFilesFound: avoResult.total_items,
+    evoFilesFound: evoResult.total_items,
   };
 }
 
@@ -106,42 +104,41 @@ async function runBenchmark2_HarnessStartupAndStreaming() {
   console.log("BENCHMARK 2: Harness Startup Latency & Time-To-First-Token");
   console.log("=======================================================");
 
-  // 2A. DeepSeek AVO In-Process Cordis Microkernel
-  const t0_avo = Date.now();
-  const runner = new DeepSeekAvoRunner({ cwd: BENCHMARK_TMP });
-  let avoFirstTokenMs = null;
-  let avoTotalTokens = 0;
+  // 2A. Evo In-Process Anser Microkernel
+  const t0_evo = Date.now();
+  const runner = new AnserRunner({ cwd: BENCHMARK_TMP });
+  let evoFirstTokenMs = null;
+  let evoTotalTokens = 0;
 
-  const avoRes = await runner.run({
+  const evoRes = await runner.run({
     prompt: "Respond with exactly 'PONG'.",
     cwd: BENCHMARK_TMP,
     maxTurns: 1,
     onToken: () => {
-      if (avoFirstTokenMs === null) {
-        avoFirstTokenMs = Date.now() - t0_avo;
+      if (evoFirstTokenMs === null) {
+        evoFirstTokenMs = Date.now() - t0_evo;
       }
     },
     onMetrics: (m) => {
-      avoTotalTokens += m.completionTokens;
+      evoTotalTokens += m.completionTokens;
     },
   });
-  const dt_avo = Date.now() - t0_avo;
+  const dt_evo = Date.now() - t0_evo;
 
   console.log(`\nResults:`);
-  console.log(`  - DeepSeek AVO Microkernel: TTFT: ${avoFirstTokenMs}ms | Total Duration: ${dt_avo}ms`);
-  console.log(`    Response: ${JSON.stringify(avoRes.finalText.trim())}`);
-  console.log(`  - Note: Legacy Goose CLI involves subprocess spawn, environment marshalling, and SQLite locks.`);
+  console.log(`  - Evo Microkernel: TTFT: ${evoFirstTokenMs}ms | Total Duration: ${dt_evo}ms`);
+  console.log(`    Response: ${JSON.stringify(evoRes.finalText.trim())}`);
 
   return {
-    avoFirstTokenMs,
-    dt_avo,
-    avoTokens: avoTotalTokens,
+    evoFirstTokenMs,
+    dt_evo,
+    evoTokens: evoTotalTokens,
   };
 }
 
-async function runBenchmark3_ClosedLoopAvoOptimization() {
+async function runBenchmark3_ClosedLoopEvoOptimization() {
   console.log("\n=======================================================");
-  console.log("BENCHMARK 3: Closed-Loop Evolutionary Optimization (AVO)");
+  console.log("BENCHMARK 3: Closed-Loop Evolutionary Optimization (Evo)");
   console.log("=======================================================");
 
   const targetFile = path.join(BENCHMARK_TMP, "benchmark_target.mjs");
@@ -174,7 +171,7 @@ console.log(opsPerSec + ' ops/sec');
   );
 
   const shell = new ShellExecutorService({ cwd: BENCHMARK_TMP });
-  const avo = new AvoOperator({ workspaceRoot: BENCHMARK_TMP, shell });
+  const evo = new EvoOperator({ workspaceRoot: BENCHMARK_TMP, shell });
 
   // Baseline evaluation
   const baselineEval = await shell.execute({ command: "node run_perf.mjs", cwd: BENCHMARK_TMP });
@@ -183,7 +180,7 @@ console.log(opsPerSec + ' ops/sec');
 
   // Candidate 1: Propose O(N) optimized variation
   console.log("\n[Iteration 1] Proposing O(N) Linear Algorithm Variation...");
-  const cand1 = await avo.proposeCandidate({
+  const cand1 = await evo.proposeCandidate({
     hypothesis: "Replace O(N^2) nested loop with single O(N) linear reduction pass",
     files_to_modify: ["benchmark_target.mjs"],
   });
@@ -202,7 +199,7 @@ console.log(opsPerSec + ' ops/sec');
   );
 
   // Evaluate candidate 1
-  const eval1 = await avo.evaluateCandidate({
+  const eval1 = await evo.evaluateCandidate({
     command: "node run_perf.mjs",
     primary_metric: "throughput",
   });
@@ -210,18 +207,18 @@ console.log(opsPerSec + ' ops/sec');
   assert.ok(eval1.is_improvement, "O(N) variation should improve over O(N^2) baseline");
 
   // Select Candidate 1
-  await avo.selectCandidate({ candidate_id: cand1.candidate_id });
+  await evo.selectCandidate({ candidate_id: cand1.candidate_id });
   console.log("  -> Candidate 1 ACCEPTED into Lineage DAG!");
 
   // Candidate 2: Introduce broken variation to test deterministic rollback
   console.log("\n[Iteration 2] Proposing Regressive Variation with Syntax Defect...");
-  const cand2 = await avo.proposeCandidate({
+  const cand2 = await evo.proposeCandidate({
     hypothesis: "Faulty optimization introducing syntax error",
     files_to_modify: ["benchmark_target.mjs"],
   });
 
   fs.writeFileSync(targetFile, `export function processData() { SYNTAX ERROR; }\n`);
-  const eval2 = await avo.evaluateCandidate({
+  const eval2 = await evo.evaluateCandidate({
     command: "node run_perf.mjs",
     primary_metric: "throughput",
   });
@@ -229,15 +226,15 @@ console.log(opsPerSec + ' ops/sec');
   assert.strictEqual(eval2.passed, false, "Faulty variation must fail evaluation");
 
   // Revert Candidate 2
-  const revert2 = await avo.revertCandidate({ candidate_id: cand2.candidate_id });
+  const revert2 = await evo.revertCandidate({ candidate_id: cand2.candidate_id });
   console.log(`  -> Candidate 2 REVERTED cleanly! Files restored: ${revert2.files_reverted}`);
 
   // Verify workspace restored to Candidate 1 state
   const restoredCode = fs.readFileSync(targetFile, "utf8");
   assert.ok(restoredCode.includes("O(N) optimized"), "Workspace must retain Candidate 1 code after rollback");
 
-  const status = avo.getStatus();
-  console.log("\nFinal AVO Lineage DAG Summary:", status.summary);
+  const status = evo.getStatus();
+  console.log("\nFinal Evo Lineage DAG Summary:", status.summary);
   console.log("=======================================================\n");
 
   return {
@@ -251,17 +248,17 @@ console.log(opsPerSec + ' ops/sec');
 
 async function runAll() {
   console.log("************************************************************");
-  console.log("  DEEPSEEK AVO VS. LEGACY GOOSE HEAD-TO-HEAD BENCHMARKS");
+  console.log("  EVO BENCHMARKS");
   console.log("************************************************************");
 
-  // P11: BENCHMARK 2 runs real generations — skip honestly when the engine is down.
+  // P11: BENCHMARK 2 runs real generations - skip honestly when the engine is down.
   await requireEngineOrSkip("benchmark");
 
   await setupBenchmarkEnvironment();
   try {
     const b1 = await runBenchmark1_FilesystemTraversal();
     const b2 = await runBenchmark2_HarnessStartupAndStreaming();
-    const b3 = await runBenchmark3_ClosedLoopAvoOptimization();
+    const b3 = await runBenchmark3_ClosedLoopEvoOptimization();
 
     console.log(">>> ALL BENCHMARKS COMPLETED SUCCESSFULLY! <<<");
     return { b1, b2, b3 };

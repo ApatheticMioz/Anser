@@ -63,25 +63,25 @@ fact drives most of the liveness machinery:
   client timeout and far under Antigravity's 180s, so one constant is safe
   for both surfaces.
 
-### 1.3 Why `deepseek_avo` is the primary engine
+### 1.3 Why the in-process Anser microkernel is the runtime
 
-`qwen_coworker` defaults to `engine: "deepseek_avo"` (`src/config.js`,
-`src/goose_runner.js`): a pure-Node Cordis microkernel
-(`src/harness/core/kernel.js`) with sandboxed services, direct SSE streaming
-to the client, and the AVO operator. `legacy_goose` (a `goose.exe` CLI
-subprocess) remains as the fallback.
+`qwen_coworker` dispatches through the Anser in-process microkernel
+(`src/harness/core/kernel.js`): a pure-Node kernel with sandboxed services,
+direct SSE streaming to the client, and the Evo operator. The legacy
+`goose.exe` CLI subprocess path has been retired; the in-process runtime is
+the sole production engine.
 
-- **No binary dependency.** The legacy path depends on a Goose install, a
-  working `wsl.exe` spawn, and Goose's own session/extension machinery —
-  each a separate failure surface (fabricated `GOOSE_WORKING_DIR` paths,
-  `npx.cmd` shim failures, `--resume` crashes on missing sessions).
+- **No binary dependency.** The retired legacy path depended on a Goose
+  install, a working `wsl.exe` spawn, and Goose's own session/extension
+  machinery — each a separate failure surface (fabricated `GOOSE_WORKING_DIR`
+  paths, `npx.cmd` shim failures, `--resume` crashes on missing sessions).
 - **Direct streaming.** The provider (`src/harness/services/provider_vllm.js`)
   reads SSE from the stream proxy directly, so token-level telemetry
   (TTFT, reasoning tokens, idle watchdog) is available to the harness
-  instead of being inferred from Goose's stdout JSON lines.
-- **Cancellable.** A deepseek_avo task has no child process; cancellation
+  instead of being inferred from a subprocess's stdout JSON lines.
+- **Cancellable.** An Anser task has no child process; cancellation
   works through an `AbortController` that rejects the in-flight fetch
-  (`src/tools.js`, `src/task_registry.js`). The legacy path needs a
+  (`src/tools.js`, `src/task_registry.js`). The retired legacy path needed a
   process-tree kill.
 - **Reversible plugins.** Every service mounts through the kernel's
   disposer mechanism, so a session's tools and services are unbound
@@ -154,7 +154,7 @@ ceiling.
 **What happened:** the machine has an NTFS junction `D:\mnt\d -> D:\`. When
 the MCP server process was launched with the junction-form cwd,
 `process.cwd()` returned the junction literal, and every downstream
-containment check (sandbox FS, AST, AVO, shell) compared a junction-form
+containment check (sandbox FS, AST, Evo, shell) compared a junction-form
 target against a real-form root — producing false
 `SymlinkEscapeError`/`PathEscapeError` on perfectly in-workspace paths.
 A related variant: a dirent's `size` through a reparse point is the
@@ -226,8 +226,8 @@ with no isolation seam.
 **Structural fix:** the suite pins `QWEN_STATE_DIR` to a private temp
 directory before importing the config module (commit `b3c151e`), so it
 exercises the real lease code against a private slot dir. The same
-discipline applies to every suite that touches shared state: `avo.test.js`
-and `canary.test.js` use their own `.avo`/`.canary_tmp` workspaces.
+discipline applies to every suite that touches shared state: `evo.test.js`
+and `canary.test.js` use their own `.evo`/`.canary_tmp` workspaces.
 
 ### L6. `EADDRINUSE` killed the whole process (2026-08-23)
 
@@ -300,7 +300,7 @@ in the final error instead of swallowed.
 ### L10. Flat 400s budget → inactivity axis (v4.1.0)
 
 **What happened:** the flat 400s task ceiling killed healthy long tasks
-(AVO evolution loops, deep research) while genuinely stuck tasks burned the
+(Evo evolution loops, deep research) while genuinely stuck tasks burned the
 whole budget (the `verify:true` post-mortems: broad unstructured
 exploration, zero files written, timeout).
 
@@ -346,7 +346,7 @@ env var) that can disagree, with the model unable to see the mismatch.
 
 **Structural fix:** the spawn env sets `GOOSE_WORKING_DIR: cwd`
 (`src/goose_runner.js`) and the absolute cwd is restated as the first line
-of the task prompt as defense in depth. (The deepseek_avo primary engine
+of the task prompt as defense in depth. (The Anser in-process runtime
 has no such duality: the sandbox root is a single constructor argument.)
 
 ### L13. Child-spawn ANSI color pollution leak (P14)

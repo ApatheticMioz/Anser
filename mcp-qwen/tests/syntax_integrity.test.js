@@ -1,10 +1,10 @@
 /**
- * P11 — Syntax-Integrity Scan (chain test).
+ * P11 - Syntax-Integrity Scan (chain test).
  *
  * Walks src/ and tests/ recursively (skipping node_modules and any
  * dot-directories) and runs the P6 JS syntax gate (AstService.validateSyntax:
  * `node --check` against a temp copy whose extension matches the module
- * system — .mjs for ESM-looking files, else .cjs) on EVERY .js file found.
+ * system - .mjs for ESM-looking files, else .cjs) on EVERY .js file found.
  *
  * This closes the bug class where a stray block-terminator (two asterisks
  * immediately followed by a slash) inside a JSDoc / block comment
@@ -12,7 +12,7 @@
  * file that parses as a comment-terminated fragment and fails the syntax
  * gate. It is a permanent, whole-tree lock on JS syntax integrity.
  *
- * The gate is REUSED from src/harness/services/ast_service.js — this test
+ * The gate is REUSED from src/harness/services/ast_service.js - this test
  * does NOT reimplement parsing.
  *
  * Asserts zero invalid files; on failure it names the offending file and the
@@ -36,7 +36,7 @@ const invalidFiles = [];
 
 /**
  * Recursively collect .js files under `dir`, skipping node_modules and any
- * dot-directories (e.g. .venv, .avo, .test_avo_tmp).
+ * dot-directories (e.g. .venv, .evo, .test_evo_tmp).
  */
 function collectJsFiles(dir, out) {
   let entries;
@@ -90,7 +90,7 @@ function main() {
       invalidFiles.push({ file: rel, error: r.error });
       console.error(`  [FAIL] ${rel}: ${r.error}`);
     } else {
-      // checked:false — no checker available for js (should not happen for
+      // checked:false - no checker available for js (should not happen for
       // node --check, but degrade honestly rather than false-pass).
       failed++;
       invalidFiles.push({ file: rel, error: `not checked: ${r.reason}` });

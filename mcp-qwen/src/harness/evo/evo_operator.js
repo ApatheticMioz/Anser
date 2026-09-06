@@ -1,5 +1,5 @@
 /**
- * NVIDIA AVO Operator (Agentic Variation Operators Core Engine)
+ * Evo Operator (Evolutionary Variation Operators Core Engine)
  *
  * Implements the autonomous evolutionary loop:
  *   propose -> mutate -> execute -> evaluate -> select / revert
@@ -8,30 +8,30 @@
  * - Deterministic file snapshotting and rollback
  * - Closed-loop fitness scoring and Lineage DAG tracking
  * - Stagnation circuit breaker
- * - Cordis plugin exposing AVO tools to Qwen
+ * - Anser plugin exposing Evo tools
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import { LineageDag } from "./lineage_dag.js";
 import { ClosedLoopEvaluator } from "./evaluator.js";
-import { AvoWatchdog } from "./watchdog.js";
+import { EvoWatchdog } from "./watchdog.js";
 import { IS_WINDOWS } from "../../config.js";
 import { toPosixWslPath, toWindowsPath, canonicalizePath } from "../../wsl_bridge.js";
 
-export class AvoOperator {
+export class EvoOperator {
   constructor(options = {}) {
-    // P4i: canonicalize the AVO workspace root through the OS symlink/junction
+    // P4i: canonicalize the Evo workspace root through the OS symlink/junction
     // resolution layer so a junction/symlink cwd is stored as its real path.
     // assertWithinWorkspace then compares realpath against a real root,
     // eliminating false containment errors while still catching real escapes.
     this.workspaceRoot = canonicalizePath(options.workspaceRoot || process.cwd());
     this.shell = options.shell;
-    this.snapshotsDir = path.join(this.workspaceRoot, ".avo", "snapshots");
+    this.snapshotsDir = path.join(this.workspaceRoot, ".evo", "snapshots");
 
     this.dag = new LineageDag({ workspaceRoot: this.workspaceRoot });
     this.evaluator = new ClosedLoopEvaluator({ shell: this.shell });
-    this.watchdog = new AvoWatchdog(options.watchdogOptions || {});
+    this.watchdog = new EvoWatchdog(options.watchdogOptions || {});
 
     this.activeCandidate = null;
     this._ensureDirs();
@@ -128,7 +128,7 @@ export class AvoOperator {
    */
   async evaluateCandidate({ command, primary_metric = "tests_passed", timeout_ms = 120_000 }) {
     if (!this.activeCandidate) {
-      throw new Error("No active AVO candidate to evaluate. Call avo_propose_candidate first.");
+      throw new Error("No active Evo candidate to evaluate. Call evo_propose_candidate first.");
     }
 
     const evalResult = await this.evaluator.evaluate({
@@ -162,8 +162,8 @@ export class AvoOperator {
       stdout: evalResult.stdout.slice(0, 1000),
       stderr: evalResult.stderr.slice(0, 1000),
       recommendation: isImprovement
-        ? "Fitness improved or verified. Call avo_select_candidate to accept."
-        : "Candidate failed or degraded fitness. Call avo_revert_candidate to cleanly rollback.",
+        ? "Fitness improved or verified. Call evo_select_candidate to accept."
+        : "Candidate failed or degraded fitness. Call evo_revert_candidate to cleanly rollback.",
     };
   }
 
@@ -228,7 +228,7 @@ export class AvoOperator {
                 fs.unlinkSync(item.fullPath);
                 revertedCount++;
               } catch (err) {
-                console.error(`[AvoOperator] Error deleting new file ${item.fullPath}:`, err.message);
+                console.error(`[EvoOperator] Error deleting new file ${item.fullPath}:`, err.message);
               }
             }
           } else if (item.targetBackup && fs.existsSync(item.targetBackup)) {
@@ -237,7 +237,7 @@ export class AvoOperator {
               fs.copyFileSync(item.targetBackup, item.fullPath);
               revertedCount++;
             } catch (err) {
-              console.error(`[AvoOperator] Error reverting ${item.fullPath}:`, err.message);
+              console.error(`[EvoOperator] Error reverting ${item.fullPath}:`, err.message);
             }
           }
         }
@@ -253,7 +253,7 @@ export class AvoOperator {
           fs.copyFileSync(backupPath, fullPath);
           revertedCount++;
         } catch (err) {
-          console.error(`[AvoOperator] Error reverting ${fullPath}:`, err.message);
+          console.error(`[EvoOperator] Error reverting ${fullPath}:`, err.message);
         }
       }
     }
@@ -284,20 +284,20 @@ export class AvoOperator {
 }
 
 /**
- * Cordis Plugin to mount AvoOperator into Context.
+ * Anser Plugin to mount EvoOperator into Context.
  */
-export function avoPlugin(ctx, options = {}) {
+export function evoPlugin(ctx, options = {}) {
   const shell = ctx.get("shell");
-  const avo = new AvoOperator({
+  const evo = new EvoOperator({
     workspaceRoot: options.workspaceRoot || process.cwd(),
     shell,
     watchdogOptions: options.watchdogOptions,
   });
 
-  ctx.provide("avo", avo);
+  ctx.provide("evo", evo);
 
-  ctx.registerTool("avo_propose_candidate", {
-    description: "NVIDIA AVO: Propose an evolutionary code mutation hypothesis and snapshot target files for rollback",
+  ctx.registerTool("evo_propose_candidate", {
+    description: "Evo: Propose an evolutionary code mutation hypothesis and snapshot target files for rollback",
     parameters: {
       type: "object",
       properties: {
@@ -310,11 +310,11 @@ export function avoPlugin(ctx, options = {}) {
       },
       required: ["hypothesis"],
     },
-    execute: (args) => avo.proposeCandidate(args),
+    execute: (args) => evo.proposeCandidate(args),
   });
 
-  ctx.registerTool("avo_evaluate_candidate", {
-    description: "NVIDIA AVO: Execute closed-loop verification command and compute fitness score",
+  ctx.registerTool("evo_evaluate_candidate", {
+    description: "Evo: Execute closed-loop verification command and compute fitness score",
     parameters: {
       type: "object",
       properties: {
@@ -328,34 +328,34 @@ export function avoPlugin(ctx, options = {}) {
       },
       required: ["command"],
     },
-    execute: (args) => avo.evaluateCandidate(args),
+    execute: (args) => evo.evaluateCandidate(args),
   });
 
-  ctx.registerTool("avo_select_candidate", {
-    description: "NVIDIA AVO: Accept candidate mutation into lineage DAG when tests pass or fitness improves",
+  ctx.registerTool("evo_select_candidate", {
+    description: "Evo: Accept candidate mutation into lineage DAG when tests pass or fitness improves",
     parameters: {
       type: "object",
       properties: {
         candidate_id: { type: "string", description: "Candidate ID to accept (optional, defaults to active)" },
       },
     },
-    execute: (args) => avo.selectCandidate(args),
+    execute: (args) => evo.selectCandidate(args),
   });
 
-  ctx.registerTool("avo_revert_candidate", {
-    description: "NVIDIA AVO: Deterministically rollback workspace files to pre-mutation snapshot when variation fails",
+  ctx.registerTool("evo_revert_candidate", {
+    description: "Evo: Deterministically rollback workspace files to pre-mutation snapshot when variation fails",
     parameters: {
       type: "object",
       properties: {
         candidate_id: { type: "string", description: "Candidate ID to revert (optional, defaults to active)" },
       },
     },
-    execute: (args) => avo.revertCandidate(args),
+    execute: (args) => evo.revertCandidate(args),
   });
 
-  ctx.registerTool("avo_status", {
-    description: "NVIDIA AVO: Query the evolutionary candidate lineage DAG and current Pareto frontier",
+  ctx.registerTool("evo_status", {
+    description: "Evo: Query the evolutionary candidate lineage DAG and current Pareto frontier",
     parameters: { type: "object", properties: {} },
-    execute: () => avo.getStatus(),
+    execute: () => evo.getStatus(),
   });
 }

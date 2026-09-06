@@ -47,7 +47,7 @@ tools = {
         'description': (
             'Primary agentic interface for local Qwen3.8-27B running inside the Goose agent harness for $0. '
             'Has native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. '
-            'Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and AVO candidate mutations. '
+            'Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and Evo candidate mutations. '
             'USAGE - multi-turn chat is the primary mode:\n'
             '  - Open a named `session_id` and drive work iteratively in SHORT turns: "read X and report", "now draft it", '
             '"revise per this feedback". Send corrections and pushback as follow-up turns - do NOT rewrite one '
@@ -77,12 +77,11 @@ tools = {
                 'session_id': {'type': 'string', 'description': 'Named persistent session ID (maintains KV-cache and conversation context across turns)'},
                 'cwd': {'type': 'string', 'description': 'Working directory for filesystem and shell tools (defaults to current workspace)'},
                 'extensions': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Optional stdio extensions (e.g. [\'uvx free-search-mcp\'], [\'npx -y @upstash/context7-mcp\'])'},
-                'hypothesis': {'type': 'string', 'description': 'Optional NVIDIA AVO hypothesis being tested'},
+                'hypothesis': {'type': 'string', 'description': 'Optional Evo hypothesis being tested'},
                 'test_command': {'type': 'string', 'description': 'Optional verification test/benchmark command (e.g. \'pytest tests/test_core.py\')'},
                 'metric_name': {'type': 'string', 'description': 'Target metric name in benchmark output (e.g. \'throughput\', \'accuracy\')'},
                 'higher_is_better': {'type': 'boolean', 'description': 'Whether higher metric values represent improvement (default true)'},
                 'timeout_ms': {'type': 'integer', 'exclusiveMinimum': 0, 'maximum': 9007199254740991, 'description': 'Task timeout in ms (default 14,400,000ms (4 hours), minimum 600,000ms (10 min) - budgets are floored because a 27B model on consumer silicon routinely needs tens of minutes)'},
-                'engine': {'type': 'string', 'enum': ['deepseek_avo', 'legacy_goose'], 'description': 'Execution harness engine: \'deepseek_avo\' (default: Cordis microkernel, sandboxed filesystem, SSE direct streaming, NVIDIA AVO) or \'legacy_goose\' (Goose CLI subprocess)'}
             },
             'required': ['prompt']
         }

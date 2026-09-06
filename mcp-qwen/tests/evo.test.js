@@ -1,12 +1,12 @@
 /**
- * DeepSeek AVO Full System Test Suite & Comparative Benchmarks
+ * Evo Full System Test Suite & Comparative Benchmarks
  *
  * Validates:
- * 1. Cordis Microkernel & EventBus (lifecycle & reversible disposers)
+ * 1. Anser Microkernel & EventBus (lifecycle & reversible disposers)
  * 2. Sandboxed FS Service (.venv & node_modules ignore, path resolution, edits)
  * 3. Shell Executor (process control & timeouts)
  * 4. Event Logger (JSONL append-only streaming & branching)
- * 5. NVIDIA AVO Evolutionary Engine (propose -> snapshot -> evaluate -> select / revert)
+ * 5. Evo Evolutionary Engine (propose -> snapshot -> evaluate -> select / revert)
  * 6. Live vLLM Streaming & Runner Integration
  */
 
@@ -18,14 +18,14 @@ import { Context } from "../src/harness/core/kernel.js";
 import { SandboxFsService, sandboxFsPlugin } from "../src/harness/services/sandbox_fs.js";
 import { ShellExecutorService } from "../src/harness/services/shell_executor.js";
 import { EventLoggerService } from "../src/harness/services/event_logger.js";
-import { LineageDag } from "../src/harness/avo/lineage_dag.js";
-import { ClosedLoopEvaluator } from "../src/harness/avo/evaluator.js";
-import { AvoWatchdog } from "../src/harness/avo/watchdog.js";
-import { AvoOperator } from "../src/harness/avo/avo_operator.js";
-import { DeepSeekAvoRunner } from "../src/harness/runner.js";
+import { LineageDag } from "../src/harness/evo/lineage_dag.js";
+import { ClosedLoopEvaluator } from "../src/harness/evo/evaluator.js";
+import { EvoWatchdog } from "../src/harness/evo/watchdog.js";
+import { EvoOperator } from "../src/harness/evo/evo_operator.js";
+import { AnserRunner } from "../src/harness/runner.js";
 import { isEngineAvailable } from "./helpers/engine_probe.js";
 
-const TEST_DIR = path.resolve(process.cwd(), ".test_avo_tmp");
+const TEST_DIR = path.resolve(process.cwd(), ".test_evo_tmp");
 
 async function cleanup() {
   try {
@@ -34,7 +34,7 @@ async function cleanup() {
 }
 
 async function runTests() {
-  console.log("=== DeepSeek AVO Comprehensive System Validation ===\n");
+  console.log("=== Evo Comprehensive System Validation ===\n");
   await cleanup();
   fs.mkdirSync(TEST_DIR, { recursive: true });
 
@@ -59,9 +59,9 @@ async function runTests() {
   }
 
   // -------------------------------------------------------------
-  // Test 2: Cordis Microkernel & Plugin Lifecycle
+  // Test 2: Anser Microkernel & Plugin Lifecycle
   // -------------------------------------------------------------
-  console.log("[Test 2] Cordis Microkernel Context & Tool Registry...");
+  console.log("[Test 2] Anser Microkernel Context & Tool Registry...");
   {
     const ctx = new Context(null, "test_root");
     let unmounted = false;
@@ -151,15 +151,15 @@ async function runTests() {
   }
 
   // -------------------------------------------------------------
-  // Test 5: NVIDIA AVO Operator (Propose -> Snapshot -> Evaluate -> Rollback)
+  // Test 5: Evo Operator (Propose -> Snapshot -> Evaluate -> Rollback)
   // -------------------------------------------------------------
-  console.log("[Test 5] NVIDIA AVO Operator (Closed-Loop Mutation & Deterministic Rollback)...");
+  console.log("[Test 5] Evo Operator (Closed-Loop Mutation & Deterministic Rollback)...");
   {
     const targetFile = path.join(TEST_DIR, "algo.mjs");
     fs.writeFileSync(targetFile, "export function compute() { return 10; }\n");
 
     const shell = new ShellExecutorService({ cwd: TEST_DIR });
-    const avo = new AvoOperator({ workspaceRoot: TEST_DIR, shell });
+    const evo = new EvoOperator({ workspaceRoot: TEST_DIR, shell });
 
     const checkScript = path.join(TEST_DIR, "run_check.mjs");
     fs.writeFileSync(
@@ -168,7 +168,7 @@ async function runTests() {
     );
 
     // Step 1: Propose candidate with target file snapshot
-    const proposal = await avo.proposeCandidate({
+    const proposal = await evo.proposeCandidate({
       hypothesis: "Improve compute() to return 100",
       files_to_modify: ["algo.mjs"],
     });
@@ -178,7 +178,7 @@ async function runTests() {
     fs.writeFileSync(targetFile, "export function compute() { return 100; }\n");
 
     // Step 3: Evaluate candidate
-    const evalPass = await avo.evaluateCandidate({
+    const evalPass = await evo.evaluateCandidate({
       command: "node run_check.mjs",
       primary_metric: "throughput",
     });
@@ -186,12 +186,12 @@ async function runTests() {
     assert.strictEqual(evalPass.is_improvement, true, "Candidate should improve baseline");
 
     // Step 4: Accept candidate
-    await avo.selectCandidate({ candidate_id: proposal.candidate_id });
-    const status1 = avo.getStatus();
+    await evo.selectCandidate({ candidate_id: proposal.candidate_id });
+    const status1 = evo.getStatus();
     assert.strictEqual(status1.summary.acceptedCount, 2, "Lineage should have baseline + candidate accepted");
 
     // Step 5: Propose a regressive candidate and verify rollback
-    const badProposal = await avo.proposeCandidate({
+    const badProposal = await evo.proposeCandidate({
       hypothesis: "Broken modification causing crash",
       files_to_modify: ["algo.mjs"],
     });
@@ -199,13 +199,13 @@ async function runTests() {
     // Introduce syntax break
     fs.writeFileSync(targetFile, "BROKEN_SYNTAX_ERROR +++");
 
-    const evalFail = await avo.evaluateCandidate({
+    const evalFail = await evo.evaluateCandidate({
       command: "node run_check.mjs",
     });
     assert.strictEqual(evalFail.passed, false, "Broken code should fail evaluation");
 
     // Step 6: Revert candidate
-    const revertRes = await avo.revertCandidate({ candidate_id: badProposal.candidate_id });
+    const revertRes = await evo.revertCandidate({ candidate_id: badProposal.candidate_id });
     assert.strictEqual(revertRes.status, "rejected");
 
     // Verify file restored to pre-mutation state
@@ -228,7 +228,7 @@ async function runTests() {
       const liveDir = path.resolve(process.cwd(), ".test_live_tmp");
       fs.mkdirSync(liveDir, { recursive: true });
       try {
-        const runner = new DeepSeekAvoRunner({ cwd: liveDir });
+        const runner = new AnserRunner({ cwd: liveDir });
         let streamedTokens = "";
 
         const runRes = await runner.run({
@@ -251,7 +251,7 @@ async function runTests() {
   }
 
   await cleanup();
-  console.log("\n>>> ALL DEEPSEEK AVO TESTS PASSED SUCCESSFULLY! <<<\n");
+  console.log("\n>>> ALL EVO TESTS PASSED SUCCESSFULLY! <<<\n");
 }
 
 runTests().catch((err) => {

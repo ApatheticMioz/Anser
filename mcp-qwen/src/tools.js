@@ -83,7 +83,7 @@ export function registerTools(server) {
           .describe(
             "Optional stdio extensions (e.g. ['uvx free-search-mcp'], ['npx -y @upstash/context7-mcp'])"
           ),
-        hypothesis: z.string().optional().describe("Optional NVIDIA AVO hypothesis being tested"),
+        hypothesis: z.string().optional().describe("Optional Evo hypothesis being tested"),
         test_command: z
           .string()
           .optional()
@@ -104,12 +104,6 @@ export function registerTools(server) {
           .describe(
             "Task timeout in ms (default 14,400,000ms (4 hours), minimum 600,000ms (10 min) - budgets are floored because a 27B model on consumer silicon routinely needs tens of minutes)"
           ),
-        engine: z
-          .enum(["deepseek_avo", "legacy_goose"])
-          .optional()
-          .describe(
-            "Execution harness engine: 'deepseek_avo' (default: Cordis microkernel, sandboxed filesystem, SSE direct streaming, NVIDIA AVO) or 'legacy_goose' (Goose CLI subprocess)"
-          ),
       },
     },
     async ({
@@ -122,7 +116,6 @@ export function registerTools(server) {
       metric_name,
       higher_is_better,
       timeout_ms,
-      engine,
     }) => {
       let raceHandle;
       try {
@@ -131,11 +124,11 @@ export function registerTools(server) {
       // provenance fix: if the MCP server process was launched with a
       // junction/symlink cwd (e.g. D:\mnt\d\LLM_Ecosystem\mcp-qwen -> D:\),
       // process.cwd() returns the junction literal, and every downstream
-      // service (SandboxFsService, AstService, AvoOperator, the spawned
+      // service (SandboxFsService, AstService, EvoOperator, the spawned
       // goose/runner) would inherit that literal and produce false
-      // SymlinkEscapeError/PathEscapeError. Canonicalizing here — before the
+      // SymlinkEscapeError/PathEscapeError. Canonicalizing here - before the
       // cwd is persisted to the task entry, hashed into the session id, and
-      // passed to the runner — makes the entire pipeline operate on the real
+      // passed to the runner - makes the entire pipeline operate on the real
       // path. A requested real-path cwd is unaffected (realpath is a no-op on
       // a non-junction path), and a genuinely outside cwd is still caught by
       // the per-service containment checks downstream.
@@ -152,7 +145,6 @@ export function registerTools(server) {
         testCommand: test_command,
         metricName: metric_name,
         higherIsBetter: higher_is_better,
-        engine,
       });
 
       const raceTimer = new Promise((resolve) => {
@@ -192,7 +184,7 @@ export function registerTools(server) {
         isError: false,
       };
       } catch (err) {
-        // P12: MCP-conformant tool-execution failure — a normal result with
+        // P12: MCP-conformant tool-execution failure - a normal result with
         // isError:true, never a thrown exception or protocol-level error.
         // The original message is preserved verbatim; stack traces are never
         // leaked into content.
@@ -337,12 +329,12 @@ export function registerTools(server) {
         const memTask = tasks.get(task_id);
         if (memTask && !memTask.done) {
           killProcessTree(memTask.child, memTask.sessionId);
-          // P10: trigger the deepseek_avo runner's abort signal. For a
-          // deepseek_avo task `memTask.child` is null (no goose subprocess),
+          // P10: trigger the native runner's abort signal. For a
+          // native task `memTask.child` is null (no goose subprocess),
           // so killProcessTree is a no-op and the ONLY way to stop the
           // in-flight LLM call is the abort signal. Aborting it makes the
           // provider's fetch reject, which lands in the runner's catch and
-          // then its finally block — which disposes the MCP extension bridge
+          // then its finally block - which disposes the MCP extension bridge
           // (no leaked children). Without this, cancel would mark the task
           // done but the runner (and its bridge children) would keep running
           // until the LLM call completed naturally.
@@ -405,7 +397,7 @@ export function registerTools(server) {
         if (diskTask && !diskTask.done) {
           if (diskTask.sessionId) {
             // P15: anchored sweep (pgrep -> /proc cmdline boundary verify ->
-            // kill) instead of a raw unanchored `pkill -9 -f` — a session id
+            // kill) instead of a raw unanchored `pkill -9 -f` - a session id
             // that is a substring of another session's id must never be
             // over-killed, and the hardcoded `-d "Ubuntu"` wsl.exe call is
             // gone with the switch.
@@ -427,7 +419,7 @@ export function registerTools(server) {
         };
       }
       } catch (err) {
-        // P12: MCP-conformant tool-execution failure — a normal result with
+        // P12: MCP-conformant tool-execution failure - a normal result with
         // isError:true, never a thrown exception or protocol-level error.
         // The original message is preserved verbatim; stack traces are never
         // leaked into content.
@@ -579,7 +571,7 @@ export function registerTools(server) {
         };
       }
       } catch (err) {
-        // P12: MCP-conformant tool-execution failure — a normal result with
+        // P12: MCP-conformant tool-execution failure - a normal result with
         // isError:true, never a thrown exception or protocol-level error.
         // The original message is preserved verbatim; stack traces are never
         // leaked into content.

@@ -1,12 +1,12 @@
 /**
- * Direct vLLM HTTP/SSE Streaming Client (DeepSeek AVO Provider)
+ * Direct vLLM HTTP/SSE Streaming Client (Anser vLLM Provider)
  *
  * Provides:
  * - Direct HTTP streaming against vLLM (:18020) or Stream Proxy (:18022)
  * - Proactive keep-alive frame handling
  * - OpenAI-compatible function/tool calling parser
  * - Live token velocity (tokens/sec) and TTFT measurement
- * - Reversible Cordis plugin binding
+ * - Reversible Anser plugin binding
  */
 
 import {
@@ -397,7 +397,7 @@ export class VllmProviderService {
 }
 
 /**
- * Cordis Plugin to mount VllmProviderService into Context.
+ * Anser Plugin to mount VllmProviderService into Context.
  */
 export function vllmProviderPlugin(ctx, options = {}) {
   const provider = new VllmProviderService(options);

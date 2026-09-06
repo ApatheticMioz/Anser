@@ -1,23 +1,23 @@
 /**
- * Generic MCP Extension Bridge (DeepSeek-AVO primary engine)
+ * Generic MCP Extension Bridge (Anser primary engine)
  *
- * Makes `extensions[]` first-class on the primary deepseek_avo engine.
+ * Makes `extensions[]` first-class on the native engine.
  *
- * Previously `extensions[]` on a dispatch (e.g. `npx -y @upstash/context7-mcp`,
- * `uvx free-search-mcp`) was honored ONLY by the legacy_goose engine via
- * `--with-extension`. The primary engine silently dropped them — an advertised
- * capability that was dead on the main path.
+ * `extensions[]` on a dispatch (e.g. `npx -y @upstash/context7-mcp`,
+ * `uvx free-search-mcp`) is honored directly by the native engine: each spec
+ * is normalized, its MCP server is spawned as a piped stdio child, and its
+ * tools are registered on the Anser Context.
  *
  * This module:
- *   - Reuses the SAME extension-spec normalization contract as legacy_goose
- *     (a string like "npx -y pkg" OR a structured { command, args, name }),
- *     so both engines stay uniform.
+ *   - Normalizes each extension spec (a string like "npx -y pkg" OR a
+ *     structured { command, args, name }) into a uniform { command, args,
+ *     serverName } shape.
  *   - Spawns each extension's MCP server as a piped stdio child through the
  *     platform spawn-profile helpers (buildSpawnProfile) so WSL/Windows stays
- *     abstract. NEVER shell-interpolated — argv arrays only.
+ *     abstract. NEVER shell-interpolated - argv arrays only.
  *   - Speaks JSON-RPC over stdio (newline-delimited): initialize ->
  *     notifications/initialized -> tools/list, then tools/call passthrough.
- *   - Registers each remote tool on the Cordis Context with a namespaced name
+ *   - Registers each remote tool on the Anser Context with a namespaced name
  *     `ext_<server>_<tool>` (reversible via the kernel's disposers).
  *   - Teardown: dispose() kills every bridge child (process-tree kill) and
  *     unregisters the tools.
@@ -39,12 +39,12 @@ try {
 } catch {}
 
 // ---------------------------------------------------------------------------
-// Extension-spec normalization (shared contract with legacy_goose)
+// Extension-spec normalization
 // ---------------------------------------------------------------------------
 
 /**
  * Tokenize a command string into an argv array, respecting double-quoted
- * segments. No shell is ever invoked — this is a pure string split.
+ * segments. No shell is ever invoked - this is a pure string split.
  * @param {string} s
  * @returns {string[]}
  */
@@ -101,13 +101,13 @@ export function sanitizeName(s) {
 /**
  * Normalize a raw extension spec into { command, args, serverName }.
  *
- * Accepts the SAME input contract as legacy_goose:
+ * Input contract:
  *   - a string like "npx -y @upstash/context7-mcp" or "uvx free-search-mcp"
  *   - a structured object { command, args, name? }
  *
  * When `targetInWsl` is set, the Windows `.cmd`/`.exe` suffixes and the
- * `context7@latest` alias are normalized exactly as the legacy path does, so
- * both engines interpret a spec identically.
+ * `context7@latest` alias are normalized so the spec is interpreted
+ * identically inside WSL.
  *
  * @param {string|object} raw
  * @param {{ targetInWsl?: boolean }} [opts]
@@ -232,7 +232,7 @@ export class McpBridge {
   }
 
   /**
-   * Boot every extension, handshake, and register its tools on the Cordis
+   * Boot every extension, handshake, and register its tools on the Anser
    * Context. Never throws: a bad spec or a failed handshake is logged to
    * stderr and skipped so it can never take down the dispatch.
    * @param {import("../core/kernel.js").Context} ctx
@@ -272,7 +272,7 @@ export class McpBridge {
     this.servers.push(server);
 
     // P8 (orchestrator close-out): bare package runners (npx/uvx) are .cmd
-    // shims on Windows, which spawn() cannot resolve without a shell — and
+    // shims on Windows, which spawn() cannot resolve without a shell - and
     // shell mode would break argv-array purity and stdio piping. Resolve the
     // bare name to an absolute spawnable path via where/which first. WSL-mode
     // dispatches resolve inside Linux and need nothing here.

@@ -1,13 +1,13 @@
 /**
- * P4g — POSIX shell routing for the AVO bash tool.
+ * P4g - POSIX shell routing for the bash tool.
  *
  * Verifies:
  *   (a) posixShell() resolution: returns a path on this machine; result is
- *       cached; QWEN_POSIX_SHELL override honored; bogus path → null (probe
+ *       cached; QWEN_POSIX_SHELL override honored; bogus path -> null (probe
  *       guards).
  *   (b) Routing decision (LIVE, Windows-only): with a POSIX shell available,
- *       `echo hello | tr a-z A-Z` → stdout `HELLO`, exit 0 (Bug 1.1 repro
- *       class); `node -e "console.log('quotes-survive')"` → exact stdout, no
+ *       `echo hello | tr a-z A-Z` -> stdout `HELLO`, exit 0 (Bug 1.1 repro
+ *       class); `node -e "console.log('quotes-survive')"` -> exact stdout, no
  *       mangling (Bug 1.2 repro class); a multi-line quoted node -e script
  *       works; a color-forcing parent env (FORCE_COLOR) cannot leak ANSI
  *       escapes into tool output (P14, b4).
@@ -111,7 +111,7 @@ async function main() {
       }
     );
 
-    // (a4) Bogus QWEN_POSIX_SHELL path → null (probe guards).
+    // (a4) Bogus QWEN_POSIX_SHELL path -> null (probe guards).
     // Inject a failing probe so NO candidate (env, Git Bash, PATH) can pass.
     _resetPosixShellCache();
     setPosixShellProbeCandidate(() => false);
@@ -119,7 +119,7 @@ async function main() {
       { QWEN_POSIX_SHELL: "C:\\bogus\\nonexistent\\bash.exe" },
       () => {
         const p = posixShell();
-        assertOk(p === null, `bogus QWEN_POSIX_SHELL path → null (got: ${p})`);
+        assertOk(p === null, `bogus QWEN_POSIX_SHELL path -> null (got: ${p})`);
       }
     );
     setPosixShellProbeCandidate(null); // restore real probe
@@ -147,7 +147,7 @@ async function main() {
           });
           assertOk(
             res.exitCode === 0 && res.stdout.trim() === "HELLO",
-            `Bug 1.1: echo hello | tr a-z A-Z → ${JSON.stringify(
+            `Bug 1.1: echo hello | tr a-z A-Z -> ${JSON.stringify(
               res.stdout.trim()
             )} (exit ${res.exitCode})`
           );
@@ -163,7 +163,7 @@ async function main() {
           });
           assertOk(
             res.exitCode === 0 && res.stdout.trim() === "quotes-survive",
-            `Bug 1.2: node -e quotes survive → ${JSON.stringify(
+            `Bug 1.2: node -e quotes survive -> ${JSON.stringify(
               res.stdout.trim()
             )} (exit ${res.exitCode})`
           );
@@ -180,7 +180,7 @@ async function main() {
           });
           assertOk(
             res.exitCode === 0 && res.stdout.trim() === "3",
-            `Multi-line node -e → ${JSON.stringify(res.stdout.trim())} (exit ${res.exitCode})`
+            `Multi-line node -e -> ${JSON.stringify(res.stdout.trim())} (exit ${res.exitCode})`
           );
         }
       );
@@ -203,7 +203,7 @@ async function main() {
             res.exitCode === 0 &&
               res.stdout.trim() === "plain-text" &&
               !res.stdout.includes("\u001b"),
-            `P14: FORCE_COLOR=3 parent env → ANSI-free output (got ${JSON.stringify(
+            `P14: FORCE_COLOR=3 parent env -> ANSI-free output (got ${JSON.stringify(
               res.stdout.trim()
             )}, exit ${res.exitCode})`
           );
@@ -228,7 +228,7 @@ async function main() {
           const res = await executor.execute({ command: "echo cmd-mode-ok" });
           assertOk(
             res.exitCode === 0 && res.stdout.trim() === "cmd-mode-ok",
-            `QWEN_SHELL_MODE=cmd: echo cmd-mode-ok → ${JSON.stringify(
+            `QWEN_SHELL_MODE=cmd: echo cmd-mode-ok -> ${JSON.stringify(
               res.stdout.trim()
             )} (exit ${res.exitCode})`
           );
@@ -237,7 +237,7 @@ async function main() {
 
       // (c2) With mode=cmd the POSIX shell is never spawned.
       // Prove by setting QWEN_POSIX_SHELL to a bogus path: if the POSIX shell
-      // were used, the command would fail. It succeeds → cmd.exe was used.
+      // were used, the command would fail. It succeeds -> cmd.exe was used.
       await withEnv(
         {
           QWEN_SHELL_MODE: "cmd",
@@ -249,7 +249,7 @@ async function main() {
           });
           assertOk(
             res.exitCode === 0 && res.stdout.trim() === "posix-never-spawned",
-            `QWEN_SHELL_MODE=cmd: POSIX shell never spawned (bogus path ignored) → ${JSON.stringify(
+            `QWEN_SHELL_MODE=cmd: POSIX shell never spawned (bogus path ignored) -> ${JSON.stringify(
               res.stdout.trim()
             )} (exit ${res.exitCode})`
           );
@@ -276,7 +276,7 @@ async function main() {
         });
         assertOk(
           res.stdout === "[DRY-RUN SIMULATED]" && res.exitCode === 0,
-          `Dry-run gate returns simulated result for bash-routed command → ${JSON.stringify(
+          `Dry-run gate returns simulated result for bash-routed command -> ${JSON.stringify(
             res.stdout
           )}`
         );
@@ -299,7 +299,7 @@ async function main() {
         }
         assertOk(
           threw && errMsg.includes("CommandSecurityError"),
-          `Validator rejects destructive command before routing → ${
+          `Validator rejects destructive command before routing -> ${
             threw ? errMsg : "NO THROW"
           }`
         );
@@ -330,7 +330,7 @@ async function main() {
           assertOk(
             res.exitCode === 0 &&
               res.stdout.trim().toLowerCase() === expected.toLowerCase(),
-            `CWD fidelity: /mnt/d/... → ${JSON.stringify(
+            `CWD fidelity: /mnt/d/... -> ${JSON.stringify(
               res.stdout.trim()
             )} (expected ${expected})`
           );
@@ -348,7 +348,7 @@ async function main() {
           assertOk(
             res.exitCode === 0 &&
               res.stdout.trim().toLowerCase() === "d:\\llm_ecosystem\\mcp-qwen",
-            `CWD fidelity: D:\\... passed verbatim → ${JSON.stringify(
+            `CWD fidelity: D:\\... passed verbatim -> ${JSON.stringify(
               res.stdout.trim()
             )}`
           );

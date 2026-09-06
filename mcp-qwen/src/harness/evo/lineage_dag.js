@@ -1,8 +1,8 @@
 /**
- * Lineage DAG Service (NVIDIA AVO Candidate Graph)
+ * Lineage DAG Service (Evo Candidate Graph)
  *
  * Tracks the tree of evolutionary variations, mutation hypotheses,
- * test outcomes, and fitness scores in `.avo/lineage.json`.
+ * test outcomes, and fitness scores in `.evo/lineage.json`.
  */
 
 import fs from "node:fs";
@@ -12,11 +12,11 @@ import { canonicalizePath } from "../../wsl_bridge.js";
 export class LineageDag {
   constructor(options = {}) {
     // P4i: canonicalize the workspace root through the OS symlink/junction
-    // layer so the .avo/ directory (lineage.json, snapshots) is anchored to
+    // layer so the .evo/ directory (lineage.json, snapshots) is anchored to
     // the real path even when the process was launched through a junction.
     this.workspaceRoot = canonicalizePath(options.workspaceRoot || process.cwd());
-    this.avoDir = path.join(this.workspaceRoot, ".avo");
-    this.dagFile = path.join(this.avoDir, "lineage.json");
+    this.evoDir = path.join(this.workspaceRoot, ".evo");
+    this.dagFile = path.join(this.evoDir, "lineage.json");
     this.nodes = new Map();
     this.rootId = null;
     this.currentHeadId = null;
@@ -24,14 +24,14 @@ export class LineageDag {
     this._load();
   }
 
-  _ensureAvoDir() {
+  _ensureEvoDir() {
     try {
-      fs.mkdirSync(this.avoDir, { recursive: true });
+      fs.mkdirSync(this.evoDir, { recursive: true });
     } catch {}
   }
 
   _load() {
-    this._ensureAvoDir();
+    this._ensureEvoDir();
     if (fs.existsSync(this.dagFile)) {
       try {
         const raw = fs.readFileSync(this.dagFile, "utf8");
@@ -46,7 +46,7 @@ export class LineageDag {
         return;
       } catch (err) {
         // Quarantine corrupt file rather than silently overwriting it
-        const corruptBackup = path.join(this.avoDir, `lineage.json.corrupt-${Date.now()}`);
+        const corruptBackup = path.join(this.evoDir, `lineage.json.corrupt-${Date.now()}`);
         console.error(`[LineageDag] Corrupt lineage.json detected. Quarantining to ${corruptBackup}:`, err.message);
         try {
           fs.copyFileSync(this.dagFile, corruptBackup);
@@ -70,7 +70,7 @@ export class LineageDag {
   }
 
   persist() {
-    this._ensureAvoDir();
+    this._ensureEvoDir();
     const data = {
       version: "2026.1",
       rootId: this.rootId,
@@ -78,7 +78,7 @@ export class LineageDag {
       nodes: Array.from(this.nodes.values()),
       updatedAt: new Date().toISOString(),
     };
-    const tmpFile = path.join(this.avoDir, `lineage.tmp_${process.pid}_${Date.now()}`);
+    const tmpFile = path.join(this.evoDir, `lineage.tmp_${process.pid}_${Date.now()}`);
     try {
       fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2), "utf8");
       fs.renameSync(tmpFile, this.dagFile);

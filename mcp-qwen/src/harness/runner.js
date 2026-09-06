@@ -1,12 +1,12 @@
 /**
- * DeepSeek AVO Runtime Engine (Cordis Microkernel Orchestrator)
+ * Anser Runtime Engine (Microkernel Orchestrator)
  *
  * Replaces legacy Goose CLI with:
  * - Pure Node.js runtime (no binary compilation or subprocess shell wrappers)
- * - Cordis Context lifecycle with reversible plugin mount/unmount
+ * - Anser Context lifecycle with reversible plugin mount/unmount
  * - SSE streaming with real-time token dispatch to Antigravity
  * - Sandboxed ripgrep filesystem & bash toolset
- * - NVIDIA AVO closed-loop evolutionary operators
+ * - Evo closed-loop evolutionary operators
  * - Append-only JSONL event ledger & session branching
  */
 
@@ -16,14 +16,14 @@ import { sandboxFsPlugin } from "./services/sandbox_fs.js";
 import { shellExecutorPlugin } from "./services/shell_executor.js";
 import { eventLoggerPlugin } from "./services/event_logger.js";
 import { vllmProviderPlugin } from "./services/provider_vllm.js";
-import { avoPlugin } from "./avo/avo_operator.js";
+import { evoPlugin } from "./evo/evo_operator.js";
 import { astPlugin } from "./services/ast_service.js";
 import { McpBridge } from "./services/mcp_bridge.js";
 import { injectSkills, matchSkills } from "../skills.js";
 import { normalizeWorkspacePath, canonicalizePath } from "../wsl_bridge.js";
 import { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } from "../config.js";
 
-const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the DeepSeek AVO harness.
+const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the Anser harness.
 You pair with the Lead Architect (Gemini / Claude) to explore, design, edit, test, and optimize software systems.
 
 Operating Guidelines:
@@ -33,10 +33,10 @@ Operating Guidelines:
    - 'ast_search' to find code by syntactic pattern with metavariables (e.g. 'function $NAME($ARGS) { $$$BODY }').
    - 'ast_replace' to perform AST-verified node replacement with compile-check safety.
 4. Use 'bash' to run builds, tests, benchmarks, or git operations safely.
-5. When optimizing or refactoring, use NVIDIA AVO tools:
-   - 'avo_propose_candidate' to snapshot files before modifying.
-   - 'avo_evaluate_candidate' to test and compute fitness score (receives compact failure digests on error).
-   - 'avo_select_candidate' to accept improvements, or 'avo_revert_candidate' to rollback regressions.
+5. When optimizing or refactoring, use the Evo tools:
+   - 'evo_propose_candidate' to snapshot files before modifying.
+   - 'evo_evaluate_candidate' to test and compute fitness score (receives compact failure digests on error).
+   - 'evo_select_candidate' to accept improvements, or 'evo_revert_candidate' to rollback regressions.
 6. Provide concise, direct technical summaries of your actions and findings.`;
 
 /**
@@ -50,7 +50,7 @@ export const CONTINUATION_DIRECTIVE =
 
 /**
  * User-role directive injected when the token-ceiling cutoff (finish_reason:
- * "length") happened DURING server-side reasoning (thinking) — i.e. the model
+ * "length") happened DURING server-side reasoning (thinking) - i.e. the model
  * burned its output budget deliberating and was cut off before emitting any
  * visible content or tool calls. Unlike the generic resume directive, this one
  * tells the model to STOP deliberating and immediately produce concrete,
@@ -59,11 +59,11 @@ export const CONTINUATION_DIRECTIVE =
  */
 export const REASONING_LANDING_DIRECTIVE =
   "Your reasoning was cut off by the output token ceiling. " +
-  "Stop deliberating now — wrap up immediately and emit your concrete next " +
+  "Stop deliberating now - wrap up immediately and emit your concrete next " +
   "actions as visible content or tool calls (edit_file / write_file / bash). " +
   "Do not re-enter extended reasoning.";
 
-export class DeepSeekAvoRunner {
+export class AnserRunner {
   constructor(options = {}) {
     // P4i: canonicalize the default cwd through the OS symlink/junction layer
     // so a junction/symlink cwd is stored as its real path before it is
@@ -77,7 +77,7 @@ export class DeepSeekAvoRunner {
   }
 
   /**
-   * Runs an autonomous agent session using the DeepSeek AVO harness.
+   * Runs an autonomous agent session using the Anser harness.
    *
    * @param {object} params
    * @param {string} params.prompt The user / orchestrator objective
@@ -100,7 +100,7 @@ export class DeepSeekAvoRunner {
   async run({
     prompt,
     cwd,
-    sessionId = `avo_${Date.now()}`,
+    sessionId = `evo_${Date.now()}`,
     maxTurns = this.defaultMaxTurns,
     signal,
     onToken,
@@ -111,11 +111,11 @@ export class DeepSeekAvoRunner {
   }) {
     const t0 = Date.now();
     // P4i: canonicalize the per-run cwd through the OS symlink/junction layer
-    // so every plugin mounted below (sandbox fs, shell, AVO, AST) receives a
+    // so every plugin mounted below (sandbox fs, shell, Evo, AST) receives a
     // real path, not a junction literal.
     const effectiveCwd = cwd ? canonicalizePath(normalizeWorkspacePath(cwd)) : this.defaultCwd;
 
-    // Initialize Cordis microkernel context
+    // Initialize the Anser microkernel context
     const ctx = new Context(null, `session_${sessionId}`);
 
     // Mount core services. The LLM provider and event logger can be injected
@@ -133,11 +133,11 @@ export class DeepSeekAvoRunner {
     } else {
       ctx.plugin(vllmProviderPlugin);
     }
-    ctx.plugin(avoPlugin, { workspaceRoot: effectiveCwd });
+    ctx.plugin(evoPlugin, { workspaceRoot: effectiveCwd });
     ctx.plugin(astPlugin, { root: effectiveCwd });
 
     // P8: boot the generic MCP extension bridge BEFORE the runner loop so the
-    // remote tools are registered on the Cordis Context and visible to the
+    // remote tools are registered on the Anser Context and visible to the
     // model on the very first turn. The bridge never throws (bad specs /
     // failed handshakes are logged and skipped). It is disposed in the
     // finally block below so no bridge child is ever leaked on failure/cancel.
@@ -165,7 +165,7 @@ export class DeepSeekAvoRunner {
 
     logger.append({
       type: "session_start",
-      harness: "DeepSeek-AVO",
+      harness: "Anser",
       version: "2026.1",
       cwd: effectiveCwd,
       prompt,
@@ -309,7 +309,7 @@ export class DeepSeekAvoRunner {
           finalText = turnResult.content;
         }
 
-        // If no tool calls, the model concluded its turn — UNLESS the output
+        // If no tool calls, the model concluded its turn - UNLESS the output
         // was cut off by the token ceiling (finish_reason: "length"). In that
         // case the answer is truncated, so we re-prompt the model to resume.
         if (!turnResult.toolCalls || turnResult.toolCalls.length === 0) {
@@ -446,7 +446,7 @@ export class DeepSeekAvoRunner {
       }
     } catch (err) {
       status = "error";
-      finalText = `DeepSeek AVO execution error: ${err.message}`;
+      finalText = `Anser execution error: ${err.message}`;
       logger.append({ type: "session_error", error: err.message, stack: err.stack });
     } finally {
       const durationMs = Date.now() - t0;

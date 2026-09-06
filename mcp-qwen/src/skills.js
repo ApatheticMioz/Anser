@@ -1,5 +1,5 @@
 /**
- * src/skills.js — Packaged skills library with keyword auto-injection.
+ * src/skills.js - Packaged skills library with keyword auto-injection.
  *
  * A "skill" is a reusable workflow recipe stored at:
  *
@@ -23,7 +23,7 @@
  *
  * `matchSkills({ prompt, cwd })` returns the skills whose keywords appear in
  * the prompt (case-insensitive substring / word match) OR in the cwd path
- * string (so a repo named "avo" can trigger an avo skill). Results are
+ * string (so a repo named "evo" can trigger an evo skill). Results are
  * additive and budget-capped: at most 3 skills, each body capped at ~2000
  * chars, and a total injected budget of ~6000 chars.
  *
@@ -284,13 +284,13 @@ export function matchSkills({ prompt = "", cwd = "", dir } = {}) {
   for (const skill of capped) {
     let body = skill.body;
     if (body.length > MAX_BODY_CHARS) {
-      body = body.slice(0, MAX_BODY_CHARS) + "\n…[truncated]";
+      body = body.slice(0, MAX_BODY_CHARS) + "\n...[truncated]";
     }
     if (total + body.length > MAX_TOTAL_CHARS) {
       // Truncate to fit the remaining budget; drop if nothing fits.
       const remaining = MAX_TOTAL_CHARS - total;
       if (remaining <= 0) break;
-      body = body.slice(0, remaining) + "\n…[truncated]";
+      body = body.slice(0, remaining) + "\n...[truncated]";
     }
     total += body.length;
     out.push({ name: skill.name, description: skill.description, body });

@@ -1,11 +1,11 @@
 /**
- * Fast Canary Pilot Validation for DeepSeek-AVO
+ * Fast Canary Pilot Validation for Evo
  *
  * Verifies:
  * 1. AST structural search & rewrite with ast-grep
  * 2. Mandatory syntax validation gate (rejection of broken code without disk mutation)
  * 3. Traceback & failure condenser (compact <=100 token digest from noisy tracebacks)
- * 4. AVO candidate evaluation with failure digest feedback and clean rollback
+ * 4. Evo candidate evaluation with failure digest feedback and clean rollback
  * 5. Dual platform cross-check
  */
 
@@ -13,10 +13,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AstService } from "../src/harness/services/ast_service.js";
-import { condenseTraceback } from "../src/harness/avo/trace_repair.js";
+import { condenseTraceback } from "../src/harness/evo/trace_repair.js";
 import { Context } from "../src/harness/core/kernel.js";
 import { astPlugin } from "../src/harness/services/ast_service.js";
-import { avoPlugin } from "../src/harness/avo/avo_operator.js";
+import { evoPlugin } from "../src/harness/evo/evo_operator.js";
 import { shellExecutorPlugin } from "../src/harness/services/shell_executor.js";
 import { sandboxFsPlugin } from "../src/harness/services/sandbox_fs.js";
 
@@ -25,7 +25,7 @@ const TEST_DIR = path.resolve(__dirname, "..", ".canary_tmp");
 fs.mkdirSync(TEST_DIR, { recursive: true });
 
 async function runCanary() {
-  console.log("=== Starting DeepSeek-AVO Canary Pilot ===");
+  console.log("=== Starting Evo Canary Pilot ===");
   let passed = 0;
   let failed = 0;
 
@@ -158,16 +158,16 @@ FAILED test_core.py::test_calc - AssertionError: assert 50 == 100
   assert(digest.summary.includes("[FailureDigest]"), "Generated compact [FailureDigest]");
   assert(digest.summary.length < 200, `Digest is bounded (${digest.summary.length} chars)`);
 
-  // --- Test 5: Cordis AVO Closed-Loop Integration ---
-  console.log("\n[Test 5: Cordis AVO Integration with Failure Digest]");
+  // --- Test 5: Evo Closed-Loop Integration ---
+  console.log("\n[Test 5: Evo Integration with Failure Digest]");
   const ctx = new Context(null, "canary_session");
   ctx.plugin(sandboxFsPlugin, { root: process.cwd() });
   ctx.plugin(shellExecutorPlugin, { cwd: process.cwd() });
   ctx.plugin(astPlugin, { root: process.cwd() });
-  ctx.plugin(avoPlugin, { workspaceRoot: process.cwd() });
+  ctx.plugin(evoPlugin, { workspaceRoot: process.cwd() });
 
-  const avo = ctx.get("avo");
-  const proposeRes = await avo.proposeCandidate({
+  const evo = ctx.get("evo");
+  const proposeRes = await evo.proposeCandidate({
     hypothesis: "Test candidate for canary validation",
     files_to_modify: [sampleJs],
   });
@@ -178,7 +178,7 @@ FAILED test_core.py::test_calc - AssertionError: assert 50 == 100
   fs.writeFileSync(sampleJs, "// mutated for candidate\n", "utf8");
 
   // Revert candidate
-  const revertRes = await avo.revertCandidate({ candidate_id: proposeRes.candidate_id });
+  const revertRes = await evo.revertCandidate({ candidate_id: proposeRes.candidate_id });
   assert(revertRes.status === "rejected", "Cleanly reverted candidate via snapshot");
 
   const restoredContent = fs.readFileSync(sampleJs, "utf8");

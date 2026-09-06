@@ -1,5 +1,7 @@
 # Qwen / DeepSeek AVO — Stress-Review & Audit Report
 
+> **Archival note (2026-09-06):** Renamed from its pre-Anser working filename; content preserved verbatim as history. The project now ships as **Anser**.
+
 **Branch under review:** `feat/deepseek-avo`
 **Commits:** `7ad481f` (microkernel core + sandboxed services), `90ae613` (AVO operators + lineage DAG), `6221c94` (runner + dual-engine dispatch), `91f6f25` (validation suite + benchmarks)
 **Auditor:** Autonomous Execution Coworker (Qwen3.8-27B) — DeepSeek AVO harness

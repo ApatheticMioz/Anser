@@ -1,5 +1,5 @@
 /**
- * Sandboxed Filesystem Service (DeepSeek Harness Inspired)
+ * Sandboxed Filesystem Service (Anser Sandboxed Filesystem)
  *
  * Enforces:
  * - Strict .ignore policies (auto-skips .venv, node_modules, .git, __pycache__)
@@ -352,7 +352,7 @@ export class SandboxFsService {
 }
 
 /**
- * Cordis Plugin to mount SandboxFsService and its tools into Context.
+ * Anser Plugin to mount SandboxFsService and its tools into Context.
  */
 export function sandboxFsPlugin(ctx, options = {}) {
   const fsService = new SandboxFsService(options);

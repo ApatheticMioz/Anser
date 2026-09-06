@@ -1,5 +1,5 @@
 /**
- * Evolutionary Watchdog & Stagnation Circuit Breaker (NVIDIA AVO)
+ * Evolutionary Watchdog & Stagnation Circuit Breaker (Evo)
  *
  * Protects agent runs against:
  * - Mutation stagnation (consecutive rejected candidates)
@@ -7,7 +7,7 @@
  * - Infinite loops without fitness improvement
  */
 
-export class AvoWatchdog {
+export class EvoWatchdog {
   constructor(options = {}) {
     this.maxConsecutiveRejections = options.maxConsecutiveRejections || 4;
     this.consecutiveRejections = 0;
@@ -33,7 +33,7 @@ export class AvoWatchdog {
       return {
         tripped: true,
         consecutiveRejections: this.consecutiveRejections,
-        message: `[AVO Watchdog Circuit Breaker] Stagnation detected: ${this.consecutiveRejections} consecutive candidate mutations were rejected. Recommend varying mutation strategy, reverting to baseline, or inspecting error stack trace directly.`,
+        message: `[Evo Watchdog Circuit Breaker] Stagnation detected: ${this.consecutiveRejections} consecutive candidate mutations were rejected. Recommend varying mutation strategy, reverting to baseline, or inspecting error stack trace directly.`,
       };
     }
 

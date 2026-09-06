@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Local Qwen3.8-27B MCP Server (August 2026 SOTA; version: package.json)
+ * Anser - Unified Local Model Agent Harness & MCP Server (version: package.json)
  *
  * Architecture:
  * - Lead Architect: Claude 5 Sonnet in Claude Code / Gemini 3.8 Flash in Antigravity
@@ -49,7 +49,7 @@ const isMain = Boolean(
 function setupProcessLifecycleHandlers() {
   const cleanup = (signal) => {
     try {
-      // P8: reap any live MCP extension bridge children (deepseek_avo engine)
+      // P8: reap any live MCP extension bridge children (native engine)
       // so none survive process shutdown.
       disposeAllBridges();
       for (const [id, task] of tasks.entries()) {

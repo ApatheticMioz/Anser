@@ -1,5 +1,5 @@
 /**
- * P4i — Path Canonicalization Hardening Regression Suite
+ * P4i - Path Canonicalization Hardening Regression Suite
  *
  * Proves the workspace-path pipeline is realpath-canonical end-to-end so that
  * a junction/symlink cwd can NEVER produce a false SymlinkEscapeError /
@@ -8,7 +8,7 @@
  * Root cause under test: this machine has a Windows junction D:\mnt\d -> D:\.
  * When a process is launched with cwd through the junction, process.cwd()
  * returns the junction literal while the sandbox services' containment checks
- * realpath targets to the real path — a literal-vs-real mismatch that produced
+ * realpath targets to the real path - a literal-vs-real mismatch that produced
  * false escape errors (reproduced in canary/ast_engine from the junction cwd).
  *
  * Vectors:
@@ -20,7 +20,7 @@
  *      PathEscapeError / SymlinkEscapeError.
  *   3. DECISIVE VECTOR: spawn a child node process with cwd set to the
  *      junction path; the child constructs the service from process.cwd() and
- *      performs an editFile on a REAL-path file — the exact production failure
+ *      performs an editFile on a REAL-path file - the exact production failure
  *      shape. Must succeed.
  *
  * Skip-guarded where symlink/junction creation is unavailable (e.g. a
@@ -35,7 +35,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { SandboxFsService } from "../src/harness/services/sandbox_fs.js";
 import { AstService } from "../src/harness/services/ast_service.js";
-import { AvoOperator } from "../src/harness/avo/avo_operator.js";
+import { EvoOperator } from "../src/harness/evo/evo_operator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE = path.resolve(__dirname, "..");
@@ -222,7 +222,7 @@ async function runTests() {
       blockedDotdot = /PathEscapeError|SymlinkEscapeError/.test(e.message);
     }
     ok(blockedDotdot,
-      `../outside blocked (err: ${dotdotErr?.message ?? "NONE — BREACH"})`);
+      `../outside blocked (err: ${dotdotErr?.message ?? "NONE - BREACH"})`);
 
     // 2b. A directory link INSIDE the real root that points OUTSIDE, accessed
     //     through the link root. Its realpath lands outside the real root, so
@@ -244,32 +244,32 @@ async function runTests() {
         blockedSymlink = /PathEscapeError|SymlinkEscapeError/.test(e.message);
       }
       ok(blockedSymlink,
-        `symlink-to-outside blocked (err: ${symlinkErr?.message ?? "NONE — BREACH"})`);
+        `symlink-to-outside blocked (err: ${symlinkErr?.message ?? "NONE - BREACH"})`);
     }
 
-    // 2c. AvoOperator.assertWithinWorkspace through the link root.
-    const avo = new AvoOperator({ workspaceRoot: linkRoot });
-    let avoBlocked = false;
-    let avoErr = null;
+    // 2c. EvoOperator.assertWithinWorkspace through the link root.
+    const evo = new EvoOperator({ workspaceRoot: linkRoot });
+    let evoBlocked = false;
+    let evoErr = null;
     try {
-      avo.assertWithinWorkspace(path.join(linkRoot, "..", "outside.js"));
+      evo.assertWithinWorkspace(path.join(linkRoot, "..", "outside.js"));
     } catch (e) {
-      avoErr = e;
-      avoBlocked = /SecurityContainmentError/.test(e.message);
+      evoErr = e;
+      evoBlocked = /SecurityContainmentError/.test(e.message);
     }
-    ok(avoBlocked,
-      `AvoOperator.assertWithinWorkspace ../outside blocked (err: ${avoErr?.message ?? "NONE — BREACH"})`);
+    ok(evoBlocked,
+      `EvoOperator.assertWithinWorkspace ../outside blocked (err: ${evoErr?.message ?? "NONE - BREACH"})`);
   }
 
   // ------------------------------------------------------------------------
-  // Test 3: DECISIVE VECTOR — child process with junction cwd.
+  // Test 3: DECISIVE VECTOR - child process with junction cwd.
   // ------------------------------------------------------------------------
   console.log("\n[Test 3] Decisive vector: child node process with junction cwd");
   if (!linkCreated) {
     skip("child-process junction-cwd editFile", "symlink/junction unavailable");
   } else {
     // Write a child script that constructs the service from process.cwd()
-    // (the junction) and edits a REAL-path file — the exact production
+    // (the junction) and edits a REAL-path file - the exact production
     // failure shape (root = junction literal, target = real path).
     // The import uses a file:// URL (required for ESM on Windows).
     const servicePath = path.join(WORKSPACE, "src", "harness", "services", "sandbox_fs.js");

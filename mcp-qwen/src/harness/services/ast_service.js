@@ -5,7 +5,7 @@
  * - Code-like pattern matching (ast_search) with metavariables ($VAR, $$$BODY)
  * - Structural code surgery (ast_replace) that preserves formatting and ignores whitespace
  * - Mandatory compile/syntax validation before writing mutations to disk
- * - Cordis plugin integration with reversible registration
+ * - Anser plugin integration with reversible registration
  * - Dual Windows NTFS and WSL DrvFs cross-path safety
  *
  * Engine selection (P5):
@@ -1447,7 +1447,7 @@ function _removeTemp(file) {
 }
 
 /**
- * Cordis Plugin to mount AstService into Context.
+ * Anser Plugin to mount AstService into Context.
  */
 export function astPlugin(ctx, options = {}) {
   const ast = new AstService(options);

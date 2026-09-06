@@ -1,13 +1,13 @@
-# mcp-qwen
+# mcp-anser
 
-Unified local Qwen3.8-27B DeepSeek-AVO agent harness & MCP server. Exposes the
+Unified local Qwen3.8-27B Anser agent harness & MCP server. Exposes the
 Qwen3.8-27B coworker (vLLM + DFlash2 + KVarN, 245K context) to two runtimes:
 **Claude Code CLI** and **Google Antigravity IDE**.
 
-- In-process Cordis microkernel with reversible plugin mount/unmount
+- In-process Anser microkernel with reversible plugin mount/unmount
 - Structural AST surgery via `@ast-grep/napi` (in-process) + CLI fallback
 - 137-vector zero-trust containment (123 attack vectors blocked, 14 allow vectors)
-- Closed-loop evolutionary optimization (`.avo/lineage.json`)
+- Closed-loop evolutionary optimization (`.evo/lineage.json`)
 - Zero-turn OS-level wait (`curl` long-poll on `:18021` saving ~570M tokens)
 - Engine wedge detection + auto-heal
 - Full 26-suite test gate (`npm run test:all`) validated live with zero skips
@@ -17,7 +17,7 @@ Qwen3.8-27B coworker (vLLM + DFlash2 + KVarN, 245K context) to two runtimes:
 ### Claude Code CLI
 
 ```bash
-claude mcp add --scope user qwen-avo node D:/LLM_Ecosystem/mcp-qwen/index.js
+claude mcp add --scope user qwen-anser node D:/LLM_Ecosystem/mcp-qwen/index.js
 ```
 
 The server registers three tools: `qwen_coworker`, `qwen_task`, `qwen_server`.
@@ -40,19 +40,19 @@ and verifies the `mcp_config.json` entries. Re-run after any schema change in
 | File | Purpose |
 |------|---------|
 | `index.js` | MCP server entry: registers 3 tools, lifecycle handlers, `isMain` guard |
-| `src/config.js` | All constants + env-var parsing (ports, timeouts, budgets, engine selection) |
+| `src/config.js` | All constants + env-var parsing (ports, timeouts, budgets) |
 | `src/platform.js` | Platform abstraction: WSL/Windows path translation, shell resolution, spawn-profile builder |
 | `src/wsl_bridge.js` | WSL bridge: path translators, `canonicalizePath`, `killProcessTree` (anchored sweep + verify) |
 | `src/semaphore.js` | Cross-process goose slot semaphore (disk-lease, O_EXCL claim, heartbeat, reclaim) |
 | `src/task_registry.js` | Task registry + HTTP status server (`:18021`): long-poll wait, cancel, orphan detection |
 | `src/server_lifecycle.js` | vLLM lifecycle: boot, wedge detection (stats silence + canary), auto-heal, stream-proxy ensure |
 | `src/tools.js` | MCP tool registration: `qwen_coworker`, `qwen_task`, `qwen_server` |
-| `src/goose_runner.js` | Task dispatch: engine selection (deepseek_avo / legacy_goose), watchdog, AVO lineage |
+| `src/goose_runner.js` | Task dispatch: watchdog, Evo lineage |
 | `src/skills.js` | Skills library: frontmatter parsing, keyword matching, budget-capped injection |
-| `src/avo_engine.js` | AVO lineage engine (git-commit-based, `getLineageContext`, `extractMetric`, `recordCandidate`) |
+| `src/evo_engine.js` | Evo lineage engine (git-commit-based, `getLineageContext`, `extractMetric`, `recordCandidate`) |
 | `src/repetition_detector.js` | Stateful SSE repetition detector (tiered char limits, block-level pattern) |
-| `src/harness/runner.js` | DeepSeek AVO runner: Cordis agent loop, continuation, empty-stream guard, reasoning ceiling |
-| `src/harness/core/kernel.js` | Cordis microkernel: Context, plugin mount/unmount, tool registry, EventBus |
+| `src/harness/runner.js` | Anser runner: agent loop, continuation, empty-stream guard, reasoning ceiling |
+| `src/harness/core/kernel.js` | Anser microkernel: Context, plugin mount/unmount, tool registry, EventBus |
 | `src/harness/core/events.js` | EventBus (typed event emission) |
 | `src/harness/services/sandbox_fs.js` | Sandboxed FS: `read_file`, `write_file`, `edit_file`, `list_dir`, `search_code` |
 | `src/harness/services/shell_executor.js` | Shell executor: `bash` / `exec_command` (POSIX routing, WSL, dry-run) |
@@ -61,11 +61,11 @@ and verifies the `mcp_config.json` entries. Re-run after any schema change in
 | `src/harness/services/provider_vllm.js` | vLLM SSE streaming client (reasoning accounting, idle watchdog, ceiling) |
 | `src/harness/services/mcp_bridge.js` | MCP extension bridge: spawns remote MCP servers, registers `ext_<server>_<tool>` |
 | `src/harness/services/event_logger.js` | Append-only JSONL session event logger |
-| `src/harness/avo/avo_operator.js` | AVO operator: `avo_propose/evaluate/select/revert_candidate`, `avo_status` |
-| `src/harness/avo/lineage_dag.js` | Lineage DAG (`.avo/lineage.json`): candidate tree, fitness tracking |
-| `src/harness/avo/evaluator.js` | Closed-loop metric evaluator (fitness score, failure digest) |
-| `src/harness/avo/trace_repair.js` | Traceback condenser (≤100-token failure digest) |
-| `src/harness/avo/watchdog.js` | AVO watchdog: stagnation breaker, token-velocity decay |
+| `src/harness/evo/evo_operator.js` | Evo operator: `evo_propose/evaluate/select/revert_candidate`, `evo_status` |
+| `src/harness/evo/lineage_dag.js` | Lineage DAG (`.evo/lineage.json`): candidate tree, fitness tracking |
+| `src/harness/evo/evaluator.js` | Closed-loop metric evaluator (fitness score, failure digest) |
+| `src/harness/evo/trace_repair.js` | Traceback condenser (≤100-token failure digest) |
+| `src/harness/evo/watchdog.js` | Evo watchdog: stagnation breaker, token-velocity decay |
 | `stream_proxy.js` | Universal stream proxy (`:18022`): UTF-8 reassembly, SSE keep-alive, multimodal guard, repetition breaker |
 | `update_schemas.py` | Antigravity schema generator (writes JSON + instructions.md) |
 
@@ -75,7 +75,7 @@ and verifies the `mcp_config.json` entries. Re-run after any schema change in
 
 ```bash
 # Register (one-time)
-claude mcp add --scope user qwen-avo node D:/LLM_Ecosystem/mcp-qwen/index.js
+claude mcp add --scope user qwen-anser node D:/LLM_Ecosystem/mcp-qwen/index.js
 
 # In a Claude Code session, dispatch:
 #   qwen_coworker(prompt="...", cwd="D:/LLM_Ecosystem/my-project", session_id="task1")
@@ -117,7 +117,6 @@ All variables are read at process start (module-level) unless noted.
 | `STREAM_PROXY_PORT` | `18022` | Stream proxy port (used by `src/config.js` for the provider) |
 | `VLLM_PROXY_PORT` | `18022` | Stream proxy listen port (used by `stream_proxy.js`) |
 | `VLLM_PROXY_HOST` | `127.0.0.1` | Stream proxy bind address (loopback only; WSL2 forwards it to the Windows host) |
-| `QWEN_ENGINE` | `deepseek_avo` | Execution engine: `deepseek_avo` (Cordis) or `legacy_goose` (CLI) |
 | `QWEN_STATE_DIR` | `~/.qwen` (or WSL-mapped Windows home) | Root for task JSON, slot leases, session logs, wedge counter |
 | `QWEN_MAX_TOKENS` | `49152` | Per-turn output token budget |
 | `QWEN_MAX_REASONING_TOKENS` | `32768` | Per-turn reasoning (thinking) token ceiling; hit → `finish_reason: "length"` |
@@ -133,7 +132,7 @@ All variables are read at process start (module-level) unless noted.
 | `QWEN_EMPTY_STREAM_RETRIES` | `2` | Retries for empty/zero-byte generations before honest failure |
 | `QWEN_WEDGE_SILENCE_S` | `120` | Engine stats silence threshold (seconds) for wedge declaration |
 | `QWEN_AUTO_HEAL` | `true` (disable with `0`) | Auto-reboot wedged engine |
-| `QWEN_ENGINE_LOG` | `/tmp/mcp_launch_huge.log` | vLLM engine log path (for stats-line wedge detection) |
+| `QWEN_LOG_PATH` | `/tmp/mcp_launch_huge.log` | vLLM engine log path (for stats-line wedge detection) |
 | `QWEN_WSL_DISTRO` | `Ubuntu` | WSL distro name |
 | `QWEN_WSL_USER` | *(probed via `whoami`)* | WSL user |
 | `QWEN_WSL_HOME` | `/home/<user>` | WSL home directory |
@@ -163,7 +162,7 @@ a string (e.g. `"npx -y @upstash/context7-mcp"`) or a structured object
    first (Node's `spawn` cannot resolve `.cmd` shims without a shell).
 3. **Handshake** — JSON-RPC over stdio: `initialize` →
    `notifications/initialized` → `tools/list`. Per-step timeout: 60s.
-4. **Registration** — Each remote tool is registered on the Cordis Context as
+4. **Registration** — Each remote tool is registered on the Anser Context as
    `ext_<server>_<tool>` (e.g. `ext_context7_mcp_get_library_docs`).
    Per-server tool cap: 64.
 5. **Lifecycle** — The bridge is booted **before** the agent loop (so tools
@@ -192,7 +191,7 @@ keywords: [keyword1, keyword2, keyword3]
 
 **Matching:** `matchSkills({ prompt, cwd })` in `src/skills.js` performs a
 case-insensitive substring match of each keyword against both the prompt text
-and the cwd path string. A repo named `avo` triggers the `avo` skill.
+and the cwd path string. A repo named `evo` triggers the `evo` skill.
 
 **Budgets** (enforced in `matchSkills`):
 - `MAX_SKILLS = 3` — at most 3 skills injected per dispatch
@@ -208,9 +207,9 @@ note.
 
 | Skill | Keywords |
 |-------|----------|
-| `avo-mutation-rollback` | rollback, revert, mutation, regression, snapshot, candidate |
+| `evo-mutation-rollback` | rollback, revert, mutation, regression, snapshot, candidate |
 | `canary-test-staging` | canary, smoke test, staging suite, test gate, narrow test, targeted test |
-| `hypothesis-generation` | hypothesis, avo, fitness, benchmark, optimization, candidate, lineage |
+| `hypothesis-generation` | hypothesis, evo, fitness, benchmark, optimization, candidate, lineage |
 | `traceback-condensing` | traceback, stack trace, error digest, trace_repair, assertion failure, pytest, failed test |
 
 ## Security Model
@@ -353,11 +352,11 @@ Three layers of defense:
 | # | Suite | Command | Type | Purpose |
 |---|-------|---------|------|---------|
 | 1 | `security.test.js` | `npm run test:security` | Offline | 137-vector containment (123 attack vectors blocked, 14 allow vectors; path, symlink, null-byte, device, shell chains/homoglyphs) |
-| 2 | `canary.test.js` | `npm run test:canary` | Offline | Fast canary pilot: AST search/rewrite, syntax gate, traceback condenser, AVO eval |
+| 2 | `canary.test.js` | `npm run test:canary` | Offline | Fast canary pilot: AST search/rewrite, syntax gate, traceback condenser, Evo eval |
 | 3 | `ast_engine.test.js` | `npm test` | Offline | napi-vs-CLI equivalence (search + replace, byte-identical) |
 | 4 | `ast_batch.test.js` | `npm run test:batch` | Offline | Batch replace (directory/glob target, dry_run preview) |
 | 5 | `edit_file_guard.test.js` | `npm test` | Offline | edit_file guards: zero-occurrence, AmbiguousTargetError, LineEndingMismatchError |
-| 6 | `avo.test.js` | `npm run test:avo` | Live / Skip | Full AVO system (kernel, sandbox, AST, shell, AVO, live vLLM; honest-skip offline) |
+| 6 | `evo.test.js` | `npm run test:evo` | Live / Skip | Full Evo system (kernel, sandbox, AST, shell, Evo, live vLLM; honest-skip offline) |
 | 7 | `semaphore.test.js` | `npm run test:semaphore` | Offline | Cross-process goose slot semaphore (lease files in private temp dir) |
 | 8 | `runner_continuation.test.js` | `npm run test:continuation` | Offline | Continuation-on-cutoff: length, empty-generation, reasoning-landing |
 | 9 | `wedge_guard.test.js` | `npm run test:wedge` | Offline | Busy-gate + heal backstop (fully offline) |
@@ -377,7 +376,7 @@ Three layers of defense:
 | 23 | `schema_parity.test.js` | `npm run test:schema_parity` | Offline | Schema drift lock: live-served zod schemas vs `update_schemas.py` JSON |
 | 24 | `stream_proxy.test.js` | `npm run test:proxy` | Live / Mock | SSE stream proxy: repetition tiering, UTF-8 reassembly, real proxy regression |
 | 25 | `utf8_proxy.test.js` | `npm run test:proxy` | Live / Mock | Multi-byte UTF-8 split across chunks reassembly verification |
-| 26 | `benchmark.test.js` | `npm run test:benchmark` | Live / Skip | Head-to-head AVO vs Goose microkernel benchmark |
+| 26 | `benchmark.test.js` | `npm run test:benchmark` | Live / Skip | Head-to-head Evo vs legacy-Goose microkernel benchmark |
 
 **Live-engine test gating**: Suites 6, 19, 20, and 26 use `tests/helpers/engine_probe.js` (`isEngineAvailable` / `requireEngineOrSkip`) to probe `/v1/models` with a 3s timeout. When vLLM is running, all 26 suites execute live; when offline, they print `[SKIP]` and exit 0. Under active engine operation, `npm run test:all` runs all 26 suites with **zero skips and zero failures**.
 
@@ -423,5 +422,5 @@ v5.1.0 was validated through an unbroken 11.25-hour multi-agent pair-programming
 
 ## Version
 
-**5.1.1** (tracked in `package.json` and git tag `v5.1.1` — the only current-version literal; the MCP server serves it from there). 5.1.0 consolidated all 14 engineering passes and complete 26-suite verification; 5.1.1 stabilizes multi-instance lifecycle (anchored cancel sweeps, loopback proxy bind, retention invariant — remaining races tracked in issue #1).
+**5.2.0** (tracked in `package.json` and git tag `v5.2.0` — the only current-version literal; the MCP server serves it from there). 5.1.0 consolidated all 14 engineering passes and complete 26-suite verification; 5.1.1 stabilized multi-instance lifecycle (anchored cancel sweeps, loopback proxy bind, retention invariant); 5.2.0 completes the Anser/Evo brand rename (engine core, evo subsystem, `.evo` data dir) and retires the legacy engine selection.
 

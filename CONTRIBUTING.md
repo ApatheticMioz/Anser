@@ -1,6 +1,6 @@
 # Contributing to LLM_Ecosystem
 
-Thank you for your interest in contributing to **LLM_Ecosystem** and the **DeepSeek-AVO** agent harness!
+Thank you for your interest in contributing to **LLM_Ecosystem** and the **Anser** agent harness!
 
 ---
 
@@ -17,8 +17,8 @@ Before submitting code, please review our core architectural invariants:
    - Any new filesystem or shell capability must be accompanied by boundary security test cases in `mcp-qwen/tests/security.test.js`.
 3. **Pure Text Coworker Execution**:
    - The local Qwen model runs with `--language-model-only` to preserve 100% of GPU VRAM for the 245K context and speculative decoding. Never route vision/image tasks to the local model.
-4. **Cordis In-Process Tool Execution**:
-   - New tools should be implemented as in-process Cordis microkernel plugins (`src/harness/services/`) rather than external CLI subprocesses to maintain sub-millisecond execution speeds.
+4. **In-Process Tool Execution**:
+   - New tools should be implemented as in-process Anser microkernel plugins (`src/harness/services/`) rather than external CLI subprocesses to maintain sub-millisecond execution speeds.
 
 ---
 
@@ -40,7 +40,7 @@ npm install
 Run the full automated test suite before opening a pull request:
 
 ```powershell
-# Run standard test suite (Security, Canary, AVO, Semaphore)
+# Run standard test suite (Security, Canary, Evo, Semaphore)
 npm test
 
 # Run all tests including streaming proxies
@@ -51,7 +51,7 @@ To run individual test suites:
 ```powershell
 npm run test:security    # 90-vector blast-radius sandboxing audit
 npm run test:canary      # AST search/replace, syntax gate, trace condenser
-npm run test:avo         # Closed-loop evaluation & snapshot rollback
+npm run test:evo         # Closed-loop evaluation & snapshot rollback
 npm run test:semaphore   # Cross-process lease exclusion tests
 npm run test:proxy       # Universal UTF-8 streaming proxy verification
 ```
