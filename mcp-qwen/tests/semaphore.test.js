@@ -6,14 +6,35 @@
  * Default (parent): wipes stale leases, verifies in-process exclusion and
  * hand-off, then verifies a *separate OS process* is excluded while it holds.
  *
+ * Isolated (telemetry Issue 3): QWEN_STATE_DIR is pinned to a fresh temp dir
+ * below, so the production lease dir is never wiped or asserted against —
+ * running this suite while a real task holds a lease is safe.
+ *
  * Run: node test_global_semaphore.js
  */
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import os from "os";
-import { acquireGooseSlot, releaseGooseSlot, listGooseSlots } from "../index.js";
-import { SLOTS_DIR } from "../src/config.js";
+import path from "path";
+
+// config.js computes QWEN_STATE_DIR (and SLOTS_DIR under it) at import time
+// from this env var. Pin it BEFORE importing index.js/config.js so the whole
+// suite operates on a private lease dir. Without this, the rmSync wipe below
+// would delete a live task's slot_0.json from ~/.qwen/tasks/goose_slots
+// whenever `npm test` runs while a Qwen task is in flight (Gemini telemetry
+// Issue 3). Only the PARENT mints the dir: this module's top level also runs
+// in the spawned child, which must instead REUSE the inherited pin — a second
+// mint there would give parent and child different lease dirs and silently
+// defeat the cross-process exclusion assertion below.
+if (process.argv[2] !== "child") {
+  process.env.QWEN_STATE_DIR = fs.mkdtempSync(
+    path.join(os.tmpdir(), "semaphore_test_state_")
+  );
+}
+
+const { acquireGooseSlot, releaseGooseSlot, listGooseSlots } = await import("../index.js");
+const { SLOTS_DIR } = await import("../src/config.js");
 
 const SLOT_DIR = SLOTS_DIR;
 
@@ -60,8 +81,8 @@ async function parentMode() {
     process.exit(failures === 0 ? 0 : 1);
   }, HARD_DEADLINE_MS).unref();
 
-  // Wipe leftover leases from prior runs (safe: no new-code MCP instance should
-  // be mid-task while running this test).
+  // Wipe leftover leases from prior runs. Safe unconditionally: SLOT_DIR is
+  // the private temp dir pinned above, never the production lease dir.
   fs.rmSync(SLOT_DIR, { recursive: true, force: true });
 
   // 1. First acquire is immediate, and exactly one lease is visible.
