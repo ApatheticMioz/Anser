@@ -116,7 +116,7 @@ All variables are read at process start (module-level) unless noted.
 | `STATUS_PORT` | `18021` | Task status HTTP server port (long-poll wait, cancel) |
 | `STREAM_PROXY_PORT` | `18022` | Stream proxy port (used by `src/config.js` for the provider) |
 | `VLLM_PROXY_PORT` | `18022` | Stream proxy listen port (used by `stream_proxy.js`) |
-| `VLLM_PROXY_HOST` | `0.0.0.0` | Stream proxy bind address |
+| `VLLM_PROXY_HOST` | `127.0.0.1` | Stream proxy bind address (loopback only; WSL2 forwards it to the Windows host) |
 | `QWEN_ENGINE` | `deepseek_avo` | Execution engine: `deepseek_avo` (Cordis) or `legacy_goose` (CLI) |
 | `QWEN_STATE_DIR` | `~/.qwen` (or WSL-mapped Windows home) | Root for task JSON, slot leases, session logs, wedge counter |
 | `QWEN_MAX_TOKENS` | `49152` | Per-turn output token budget |
@@ -252,7 +252,9 @@ Five-layer containment, all fail-closed:
    - **ANSI color isolation** (P14, vector `b4`): `shell_executor.js` strips
      color-forcing environment variables (`FORCE_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`)
      and injects `NO_COLOR=1` into child processes, preventing terminal escapes from
-     polluting piped output under Claude Code.
+     polluting piped output under Claude Code. WSL-bound commands are additionally
+     sanitized inside the bash payload (P15), since Windows-side env does not cross
+     into WSL without `WSLENV`.
 
 5. **Dead-man fuse** (`assertDeadManFuse`): a final pre-spawn barrier that
    re-checks pattern-level blocks and a synthetic canary token.
@@ -350,7 +352,7 @@ Three layers of defense:
 
 | # | Suite | Command | Type | Purpose |
 |---|-------|---------|------|---------|
-| 1 | `security.test.js` | `npm run test:security` | Offline | 137-vector containment (123 attack vectors blocked, 14 allow vectors; path, symlink, null-byte, device, shell chains/homoglyphs, ANSI color isolation `b4`) |
+| 1 | `security.test.js` | `npm run test:security` | Offline | 137-vector containment (123 attack vectors blocked, 14 allow vectors; path, symlink, null-byte, device, shell chains/homoglyphs) |
 | 2 | `canary.test.js` | `npm run test:canary` | Offline | Fast canary pilot: AST search/rewrite, syntax gate, traceback condenser, AVO eval |
 | 3 | `ast_engine.test.js` | `npm test` | Offline | napi-vs-CLI equivalence (search + replace, byte-identical) |
 | 4 | `ast_batch.test.js` | `npm run test:batch` | Offline | Batch replace (directory/glob target, dry_run preview) |

@@ -102,7 +102,7 @@ LLM_Ecosystem/
 │       ├── PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md # Threat model & security review
 │       └── QWEN_AVO_AUDIT.md       # Peer review & collaborative validation
 │
-├── mcp-qwen/                       # DeepSeek-AVO MCP Server (v5.0.0, Node.js)
+├── mcp-qwen/                       # DeepSeek-AVO MCP Server (v5.1.0, Node.js)
 │   ├── index.js                    # Server entry point exposing tools via stdio
 │   ├── stream_proxy.js             # Universal SSE streaming proxy on port 18022
 │   ├── package.json                # Dependencies (@modelcontextprotocol/sdk, @ast-grep/napi)
@@ -446,7 +446,7 @@ npm test
 npm run test:all
 
 # Run individual targeted suites:
-npm run test:security    # 137-vector containment (123 attack vectors blocked, ANSI color isolation b4)
+npm run test:security    # 137-vector containment (123 attack vectors blocked, 14 allow vectors)
 npm run test:canary      # AST search, syntax gates, traceback condenser, AVO eval
 npm run test:avo         # Closed-loop evaluation & snapshot rollback (live engine)
 npm run test:semaphore   # Cross-process lease exclusion tests (private state dir)
