@@ -41,6 +41,10 @@ You operate within a hierarchical multi-agent pair-programming architecture in G
    - Never execute manual health checks, network probes (`curl localhost:18020`), or scratch scripts prior to dispatching.
 6. **Honest Attribution**:
    - Never use "We" or claim coworker collaboration unless a `qwen_coworker` MCP call was genuinely dispatched and its completed output incorporated.
+7. **Universal UNIX LF Line-Ending Invariant (`\n`)**:
+   - All source code, test fixtures, configs, scripts, documentation, and agent completions across this workspace MUST strictly use UNIX LF (`\n`) line endings.
+   - Under NO circumstances may an autonomous agent (Claude Code, Qwen, Gemini) write or commit files with Windows CRLF (`\r\n`) line endings (with the sole exception of legacy `.bat`/`.cmd` files where CRLF is strictly required by the legacy `cmd.exe` interpreter).
+   - All file-writing operations and code generation must normalize newlines to `\n` prior to disk flush. Any attempt to write CRLF to non-batch files will trip `LineEndingMismatchError` as an immediate dead-man fuse.
 
 ---
 
