@@ -1,6 +1,6 @@
 {
   "name": "mcp-qwen",
-  "version": "5.1.0",
+  "version": "5.1.1",
   "description": "Unified local Qwen3.8-27B DeepSeek-AVO agent harness & MCP server: in-process Cordis microkernel, structural AST surgery (@ast-grep/napi), bounded traceback condenser, 90-vector zero-trust sandboxed filesystem, closed-loop evolutionary optimization (.avo/lineage.json), vLLM + DFlash2 + KVarN @ 245K context, zero-turn OS wait @18021, and engine wedge detection.",
   "main": "index.js",
   "scripts": {

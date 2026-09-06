@@ -1,4 +1,4 @@
-# mcp-qwen v5.1.0
+# mcp-qwen
 
 Unified local Qwen3.8-27B DeepSeek-AVO agent harness & MCP server. Exposes the
 Qwen3.8-27B coworker (vLLM + DFlash2 + KVarN, 245K context) to two runtimes:
@@ -423,5 +423,5 @@ v5.1.0 was validated through an unbroken 11.25-hour multi-agent pair-programming
 
 ## Version
 
-**5.1.0** (tracked in `package.json` and git tag `v5.1.0`). Production milestone release consolidating all 14 engineering passes, complete 26-suite verification, and multi-agent pairing invariants.
+**5.1.1** (tracked in `package.json` and git tag `v5.1.1` — the only current-version literal; the MCP server serves it from there). 5.1.0 consolidated all 14 engineering passes and complete 26-suite verification; 5.1.1 stabilizes multi-instance lifecycle (anchored cancel sweeps, loopback proxy bind, retention invariant — remaining races tracked in issue #1).
 

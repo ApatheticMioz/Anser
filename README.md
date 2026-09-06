@@ -1,6 +1,6 @@
 # LLM_Ecosystem & DeepSeek-AVO Harness
 
-[![Release: v5.1.0](https://img.shields.io/badge/Release-v5.1.0%20(14%2F14%20Passes)-brightgreen.svg)](https://github.com/ApatheticMioz/LLM_Ecosystem/releases/tag/v5.1.0)
+[![Release](https://img.shields.io/github/v/tag/ApatheticMioz/LLM_Ecosystem?label=release)](https://github.com/ApatheticMioz/LLM_Ecosystem/releases)
 [![Test Gate: 26/26 Suites Green](https://img.shields.io/badge/Test%20Gate-26%2F26%20Suites%20Green-success.svg)](#10-testing--verification)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20WSL2%20Ubuntu-orange.svg)](https://learn.microsoft.com/en-us/windows/wsl/)
@@ -102,7 +102,7 @@ LLM_Ecosystem/
 │       ├── PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md # Threat model & security review
 │       └── QWEN_AVO_AUDIT.md       # Peer review & collaborative validation
 │
-├── mcp-qwen/                       # DeepSeek-AVO MCP Server (v5.1.0, Node.js)
+├── mcp-qwen/                       # DeepSeek-AVO MCP Server (Node.js)
 │   ├── index.js                    # Server entry point exposing tools via stdio
 │   ├── stream_proxy.js             # Universal SSE streaming proxy on port 18022
 │   ├── package.json                # Dependencies (@modelcontextprotocol/sdk, @ast-grep/napi)

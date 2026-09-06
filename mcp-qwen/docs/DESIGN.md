@@ -1,7 +1,8 @@
 # mcp-qwen — Design Document
 
 Distilled from the incident ledger in `NOTES.md` (kept raw; this file is the
-"why"). Every claim below cites the module that implements it. Version 5.1.0.
+"why"). Every claim below cites the module that implements it. Release
+version: tracked solely in `package.json` / git tags.
 
 ## 1. Architecture Rationale
 
