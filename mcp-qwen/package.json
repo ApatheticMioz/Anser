@@ -4,8 +4,8 @@
   "description": "Unified local Qwen3.8-27B DeepSeek-AVO agent harness & MCP server: in-process Cordis microkernel, structural AST surgery (@ast-grep/napi), bounded traceback condenser, 90-vector zero-trust sandboxed filesystem, closed-loop evolutionary optimization (.avo/lineage.json), vLLM + DFlash2 + KVarN @ 245K context, zero-turn OS wait @18021, and engine wedge detection.",
   "main": "index.js",
   "scripts": {
-    "test": "node tests/security.test.js && node tests/canary.test.js && node tests/ast_engine.test.js && node tests/ast_batch.test.js && node tests/edit_file_guard.test.js && node tests/avo.test.js && node tests/semaphore.test.js && node tests/runner_continuation.test.js && node tests/wedge_guard.test.js && node tests/platform.test.js && node tests/posix_routing.test.js && node tests/path_canonicalization.test.js && node tests/syntax_gates.test.js && node tests/provider_reasoning.test.js && node tests/mcp_bridge.test.js",
-    "test:all": "node tests/security.test.js && node tests/canary.test.js && node tests/ast_engine.test.js && node tests/ast_batch.test.js && node tests/edit_file_guard.test.js && node tests/avo.test.js && node tests/semaphore.test.js && node tests/stream_proxy.test.js && node tests/utf8_proxy.test.js && node tests/runner_continuation.test.js && node tests/wedge_guard.test.js && node tests/platform.test.js && node tests/posix_routing.test.js && node tests/path_canonicalization.test.js && node tests/syntax_gates.test.js && node tests/provider_reasoning.test.js && node tests/mcp_bridge.test.js",
+    "test": "node tests/security.test.js && node tests/canary.test.js && node tests/ast_engine.test.js && node tests/ast_batch.test.js && node tests/edit_file_guard.test.js && node tests/avo.test.js && node tests/semaphore.test.js && node tests/runner_continuation.test.js && node tests/wedge_guard.test.js && node tests/platform.test.js && node tests/posix_routing.test.js && node tests/path_canonicalization.test.js && node tests/syntax_gates.test.js && node tests/provider_reasoning.test.js && node tests/mcp_bridge.test.js && node tests/skills.test.js",
+    "test:all": "node tests/security.test.js && node tests/canary.test.js && node tests/ast_engine.test.js && node tests/ast_batch.test.js && node tests/edit_file_guard.test.js && node tests/avo.test.js && node tests/semaphore.test.js && node tests/stream_proxy.test.js && node tests/utf8_proxy.test.js && node tests/runner_continuation.test.js && node tests/wedge_guard.test.js && node tests/platform.test.js && node tests/posix_routing.test.js && node tests/path_canonicalization.test.js && node tests/syntax_gates.test.js && node tests/provider_reasoning.test.js && node tests/mcp_bridge.test.js && node tests/skills.test.js",
     "test:security": "node tests/security.test.js",
     "test:canary": "node tests/canary.test.js",
     "test:avo": "node tests/avo.test.js",
@@ -18,6 +18,7 @@
     "test:batch": "node tests/ast_batch.test.js",
     "test:proxy": "node tests/stream_proxy.test.js && node tests/utf8_proxy.test.js",
     "test:bridge": "node tests/mcp_bridge.test.js",
+    "test:skills": "node tests/skills.test.js",
     "test:benchmark": "node tests/benchmark.test.js"
   },
   "keywords": [

@@ -39,6 +39,7 @@ import {
 } from "./task_registry.js";
 import { AvoLineageEngine } from "./avo_engine.js";
 import { DeepSeekAvoRunner } from "./harness/runner.js";
+import { injectSkills } from "./skills.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -329,6 +330,11 @@ export function startGooseTask({
       const targetInWsl = cwdInWsl || (IS_WINDOWS && process.env.QWEN_FORCE_WSL !== "0");
       const targetCwd = targetInWsl ? toPosixWslPath(cwd) : toWindowsPath(cwd);
 
+      // P9: keyword auto-inject matching skills from the packaged skills/
+      // library into the instruction block. Additive and budget-capped; when
+      // nothing matches the prompt is returned unchanged. Never throws.
+      const effectivePrompt = injectSkills(prompt, targetCwd);
+
       let finalTaskPrompt = `Your working directory is exactly: ${targetCwd}\n\n`;
       if (avoContext) {
         finalTaskPrompt += `=== NVIDIA AVO Lineage Context ===\n${avoContext}\n\n`;
@@ -336,7 +342,7 @@ export function startGooseTask({
       if (hypothesis) {
         finalTaskPrompt += `=== Current Hypothesis ===\n${hypothesis}\n\n`;
       }
-      finalTaskPrompt += `=== Instruction ===\n${prompt}\n\n`;
+      finalTaskPrompt += `=== Instruction ===\n${effectivePrompt}\n\n`;
       finalTaskPrompt += `=== Operational & Tooling Directives ===\n`;
       finalTaskPrompt += `- Available File Tools: Use \`write\` to create or overwrite files, \`edit\` to perform targeted text search-and-replace, \`tree\` to view directories, and \`shell\` (bash) to inspect files using \`cat\`, \`head\`, \`grep\`, or other POSIX utilities.\n`;
       finalTaskPrompt += `- Text-Only Engine: You are a pure text model with Universal 245K context. Do NOT call \`read_image\` on binary images (.png, .jpg). Multimodal image inspection is handled exclusively by the Lead Architect.\n`;

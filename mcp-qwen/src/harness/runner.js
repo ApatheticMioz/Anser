@@ -19,6 +19,7 @@ import { vllmProviderPlugin } from "./services/provider_vllm.js";
 import { avoPlugin } from "./avo/avo_operator.js";
 import { astPlugin } from "./services/ast_service.js";
 import { McpBridge } from "./services/mcp_bridge.js";
+import { injectSkills, matchSkills } from "../skills.js";
 import { normalizeWorkspacePath, canonicalizePath } from "../wsl_bridge.js";
 import { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } from "../config.js";
 
@@ -153,6 +154,15 @@ export class DeepSeekAvoRunner {
     const logger = ctx.get("logger");
     const llm = ctx.get("llm");
 
+    // P9: keyword auto-inject matching skills from the packaged skills/
+    // library into the user prompt BEFORE it enters the message list. This is
+    // additive and budget-capped; when nothing matches the prompt is returned
+    // unchanged. Never throws (malformed skills are skipped upstream).
+    const matchedSkillNames = matchSkills({ prompt, cwd: effectiveCwd }).map(
+      (s) => s.name
+    );
+    const effectivePrompt = injectSkills(prompt, effectiveCwd);
+
     logger.append({
       type: "session_start",
       harness: "DeepSeek-AVO",
@@ -161,14 +171,18 @@ export class DeepSeekAvoRunner {
       prompt,
     });
 
+    if (matchedSkillNames.length > 0) {
+      logger.append({ type: "skills_injected", skills: matchedSkillNames });
+    }
+
     const messages = [
       { role: "system", content: DEFAULT_SYSTEM_PROMPT },
       ...logger.getConversationHistory(),
     ];
 
-    // Add current user prompt
-    messages.push({ role: "user", content: prompt });
-    logger.append({ type: "user_message", content: prompt });
+    // Add current user prompt (with any auto-injected skills block)
+    messages.push({ role: "user", content: effectivePrompt });
+    logger.append({ type: "user_message", content: effectivePrompt });
 
     let turnsTaken = 0;
     let finalText = "";
