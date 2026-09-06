@@ -31,7 +31,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { IS_WINDOWS } from "../../config.js";
 import { isWslLocation, normalizeWorkspacePath, killProcessTreeSync, canonicalizePath } from "../../wsl_bridge.js";
-import { toPosixWslPath, toWindowsPath, posixShell } from "../../platform.js";
+import { toPosixWslPath, toWindowsPath, posixShell, wslDistro } from "../../platform.js";
 import {
   validateShellSafety,
   assertDeadManFuse,
@@ -105,7 +105,11 @@ export class ShellExecutorService {
       if (isWslTarget) {
         executable = "wsl.exe";
         const posixCwd = toPosixWslPath(effectiveCwd);
-        args = ["-d", "Ubuntu", "--", "bash", "-c", `EXEC_TAG="${execTag}" && cd "${posixCwd}" && ${command}`];
+        // P15: Windows-side env (childEnv) never crosses into WSL without
+        // WSLENV, so the color-forcing vars are sanitized INSIDE the -c
+        // payload: Node >= 24 honors FORCE_COLOR on piped stdout and would
+        // otherwise corrupt JSON.parse'd ast-grep output and metric regexes.
+        args = ["-d", wslDistro(), "--", "bash", "-c", `EXEC_TAG="${execTag}" && unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat; cd "${posixCwd}" && ${command}`];
         spawnCwd = undefined; // let WSL handle cd
       } else if (process.env.QWEN_SHELL_MODE !== "cmd" && posixShell()) {
         // POSIX shell routing (P4g): the command is handed to a real

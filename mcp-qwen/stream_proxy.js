@@ -30,7 +30,10 @@ import { RepetitionDetector } from "./src/repetition_detector.js";
 
 const UPSTREAM_PORT = parseInt(process.env.VLLM_PORT || "18020", 10);
 const PROXY_PORT = parseInt(process.env.VLLM_PROXY_PORT || "18022", 10);
-const PROXY_HOST = process.env.VLLM_PROXY_HOST || "0.0.0.0";
+// P15: bind loopback only — a LAN-reachable proxy lets any remote client
+// drive the MAX_SEQS=1 GPU queue and wedge the engine for local clients.
+// WSL2 localhost-forwarding keeps it reachable from the Windows host.
+const PROXY_HOST = process.env.VLLM_PROXY_HOST || "127.0.0.1";
 
 function forwardToUpstream(req, res, reqBodyBuffer) {
   // Disable socket-level timeouts on incoming client connection

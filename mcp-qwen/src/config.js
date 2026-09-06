@@ -89,7 +89,9 @@ export const MAX_REASONING_TOKENS = (() => {
 })();
 
 export const EXTENSION_BONUS_TIMEOUT_MS = 600_000; // 10 min
-export const TASK_RETENTION_MS = 10_800_000; // 3 hours
+// Invariant: retention must always outlive the longest legal task
+// (DEFAULT_TIMEOUT_MS), or it can unlink a LIVE task's JSON mid-run.
+export const TASK_RETENTION_MS = DEFAULT_TIMEOUT_MS + 1_800_000; // 4h + 30min
 
 export const MAX_CONCURRENT_GOOSE = process.env.QWEN_MAX_CONCURRENT
   ? Math.max(1, parseInt(process.env.QWEN_MAX_CONCURRENT, 10))
