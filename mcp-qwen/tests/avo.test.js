@@ -23,6 +23,7 @@ import { ClosedLoopEvaluator } from "../src/harness/avo/evaluator.js";
 import { AvoWatchdog } from "../src/harness/avo/watchdog.js";
 import { AvoOperator } from "../src/harness/avo/avo_operator.js";
 import { DeepSeekAvoRunner } from "../src/harness/runner.js";
+import { isEngineAvailable } from "./helpers/engine_probe.js";
 
 const TEST_DIR = path.resolve(process.cwd(), ".test_avo_tmp");
 
@@ -218,14 +219,8 @@ async function runTests() {
   // -------------------------------------------------------------
   console.log("[Test 6] Live vLLM Streaming & Direct Microkernel Execution...");
   {
-    // Check if vLLM endpoint is reachable
-    let vllmOnline = false;
-    try {
-      const probe = await fetch("http://127.0.0.1:18020/v1/models", { signal: AbortSignal.timeout(1000) });
-      if (probe.ok) vllmOnline = true;
-    } catch {
-      vllmOnline = false;
-    }
+    // Check if vLLM endpoint is reachable (shared P11 availability probe)
+    const vllmOnline = await isEngineAvailable();
 
     if (!vllmOnline) {
       console.log("  -> [SKIP] vLLM endpoint offline at :18020 (skipping live inference test)");

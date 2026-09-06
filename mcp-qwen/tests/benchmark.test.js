@@ -18,6 +18,7 @@ import { ShellExecutorService } from "../src/harness/services/shell_executor.js"
 import { AvoOperator } from "../src/harness/avo/avo_operator.js";
 import { getGooseExecutable } from "../src/wsl_bridge.js";
 import { IS_WINDOWS } from "../src/config.js";
+import { requireEngineOrSkip } from "./helpers/engine_probe.js";
 
 const execFileAsync = promisify(execFile);
 const BENCHMARK_TMP = path.resolve(process.cwd(), ".benchmark_tmp");
@@ -252,6 +253,9 @@ async function runAll() {
   console.log("************************************************************");
   console.log("  DEEPSEEK AVO VS. LEGACY GOOSE HEAD-TO-HEAD BENCHMARKS");
   console.log("************************************************************");
+
+  // P11: BENCHMARK 2 runs real generations — skip honestly when the engine is down.
+  await requireEngineOrSkip("benchmark");
 
   await setupBenchmarkEnvironment();
   try {

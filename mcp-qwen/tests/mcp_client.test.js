@@ -2,11 +2,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { requireEngineOrSkip } from "./helpers/engine_probe.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const scriptPath = path.resolve(__dirname, "..", "index.js");
 
 async function main() {
+  // P11: live-engine test — skip honestly when the engine is down.
+  await requireEngineOrSkip("mcp_client");
+
   const transport = new StdioClientTransport({
     command: "node",
     args: [scriptPath],
