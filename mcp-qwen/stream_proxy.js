@@ -53,6 +53,28 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
   let pingInterval = null;
   let hasDone = false;
 
+  // P7b: per-request lifecycle observability. Before this pass the proxy
+  // logged NOTHING per request — when a task died of engine_empty_response,
+  // the proxy log was empty and the death was undecidable from here. One
+  // stderr line per streaming request now records the whole story:
+  // ttft (first upstream byte), bytes forwarded, duration, and the end cause.
+  // "upstream-end-no-done" is the killer signature (stream closed by the
+  // upstream without any finish_reason); "client-early-close" means the
+  // consumer hung up first. The guard makes the first cause win.
+  const lifecycle = {
+    t0: Date.now(),
+    ttft: null,
+    bytes: 0,
+    logged: false,
+    log(cause) {
+      if (this.logged) return;
+      this.logged = true;
+      console.error(
+        `[StreamProxy] ${req.method} ${req.url} ttft=${this.ttft ?? "never"} bytes=${this.bytes} dur=${Date.now() - this.t0}ms end=${cause}`
+      );
+    },
+  };
+
   // For streaming requests, send 200 OK headers immediately and start proactive keep-alive pings.
   // This keeps the TCP socket active and prevents Goose/reqwest from timing out with
   // "Stream decode error: error decoding response body" during long 30-45s vLLM prompt prefills.
@@ -161,6 +183,8 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
       upstreamRes.on("data", (chunk) => {
         const text = decoder.decode(chunk, { stream: true });
         if (!text) return;
+        lifecycle.ttft ??= Date.now() - lifecycle.t0;
+        lifecycle.bytes += Buffer.byteLength(text);
 
         lineBuffer += text;
         if (lineBuffer.includes("data: [DONE]")) {
@@ -206,14 +230,19 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
                   continue;
                 }
 
-                // Check for degenerate runaway repetition in token deltas (content or reasoning)
+                // Check for degenerate runaway repetition in token deltas (content or reasoning).
+                // Engine emits reasoning as `delta.reasoning` (--reasoning-parser qwen3, P2d live SSE
+                // evidence); `reasoning_content` kept as legacy fallback. Both must feed the detector
+                // or a reasoning-level repetition loop burns the full max_tokens budget invisibly
+                // (P7b root cause: ~18-min single generation, spec-decode acceptance pinned at 8.0).
                 const delta = parsed?.choices?.[0]?.delta;
                 if (delta) {
-                  const tokenText = delta.content || delta.reasoning_content || "";
+                  const tokenText = delta.content || delta.reasoning || delta.reasoning_content || "";
                   if (tokenText) {
                     const rep = repetitionDetector.feed(tokenText);
                     if (rep) {
                       console.error(`[StreamProxy Circuit Breaker] Runaway repetition detected (${rep.type}: ${JSON.stringify(rep.pattern)}, count: ${rep.count}). Safely aborting stream.`);
+                      lifecycle.log(`repetition-breaker(${rep.type})`);
                       if (pingInterval) clearInterval(pingInterval);
                       hasDone = true;
                       const breakerChunk = {
@@ -244,6 +273,7 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
       });
 
       upstreamRes.on("end", () => {
+        lifecycle.log(hasDone ? "done" : "upstream-end-no-done");
         if (pingInterval) clearInterval(pingInterval);
         const tail = decoder.decode();
         if (tail) {
@@ -263,6 +293,7 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
       });
 
       upstreamRes.on("error", (err) => {
+        lifecycle.log(`upstream-error(${err ? (err.message || String(err)) : "unknown"})`);
         if (pingInterval) clearInterval(pingInterval);
         try {
           if (!hasDone) {
@@ -288,6 +319,9 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
       });
 
       res.on("close", () => {
+        // Normal completions log via the upstream 'end' handler first; a close
+        // with hasDone still false means the CONSUMER hung up early.
+        if (!hasDone) lifecycle.log("client-early-close");
         if (pingInterval) clearInterval(pingInterval);
         upstreamReq.destroy();
       });
@@ -297,6 +331,7 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
   upstreamReq.setTimeout(0);
 
   upstreamReq.on("error", (err) => {
+    if (isStreamRequest) lifecycle.log(`connect-error(${err ? err.message : "unknown"})`);
     if (pingInterval) clearInterval(pingInterval);
     if (!res.headersSent) {
       if (isStreamRequest) {

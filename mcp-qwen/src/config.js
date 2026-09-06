@@ -55,6 +55,39 @@ export const FIRST_TOKEN_TIMEOUT_MS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 240_000; // 4 min
 })();
 
+// P7b: streaming idle tolerance for a single generation turn. This is the
+// first-byte AND inter-chunk idle watchdog on the provider's SSE read loop.
+// A legitimate first token can take many minutes on a cold 200K prefill
+// (prefix-cache miss) or behind a queued request on a MAX_SEQS=1 engine, so
+// the default is 15 minutes (900000ms) — well above any realistic TTFT — and
+// is overridable via QWEN_STREAM_IDLE_TIMEOUT_MS. This is a DIFFERENT axis
+// from max_tokens (generation-length cap); it only bounds how long the stream
+// may go SILENT before we declare the connection dead.
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 900_000; // 15 min
+export const STREAM_IDLE_TIMEOUT_MS = (() => {
+  const parsed = parseInt(process.env.QWEN_STREAM_IDLE_TIMEOUT_MS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+})();
+
+// P7b: per-turn ceiling on reasoning (thinking) tokens, enforced CLIENT-side
+// by the provider's SSE read loop. Ground truth (P7b forensics): a reasoning
+// loop burned a single uninterrupted ~18-minute generation to the full 49152
+// max_tokens ceiling (engine /metrics: one Running request, spec-decode
+// acceptance pinned at the 8.0 maximum = literal repetition). The stream-proxy
+// circuit breaker now catches LITERAL loops (it was blind to delta.reasoning
+// — field-name mismatch, fixed same pass), but a SEMANTIC loop (re-phrasing
+// without exact repetition) is only boundable by a token budget. When the
+// ceiling is hit the provider ends the turn with finish_reason "length" +
+// hadReasoning, so the runner's P2d reasoning-cutoff continuation directive
+// lands ("stop deliberating, emit edits with tools now") and the agent
+// CONTINUES instead of hogging the engine. Never suppresses thinking in
+// prompts — bounds it mechanically and hands the turn back.
+export const DEFAULT_MAX_REASONING_TOKENS = 32_768;
+export const MAX_REASONING_TOKENS = (() => {
+  const parsed = parseInt(process.env.QWEN_MAX_REASONING_TOKENS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_REASONING_TOKENS;
+})();
+
 export const EXTENSION_BONUS_TIMEOUT_MS = 600_000; // 10 min
 export const TASK_RETENTION_MS = 10_800_000; // 3 hours
 

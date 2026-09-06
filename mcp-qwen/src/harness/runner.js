@@ -223,6 +223,17 @@ export class DeepSeekAvoRunner {
           (!turnResult.toolCalls || turnResult.toolCalls.length === 0);
 
         if (isEmptyGeneration || isEmptyStop) {
+          // P7b forensics context: record WHERE in the task the death happened
+          // and WHAT the engine claimed to be doing. promptChars approximates
+          // the re-prefill size (large prompts = minutes of cold TTFT);
+          // reasoningTokens on the dead turn exposes invisible thinking loops
+          // (the P7b root cause burned 49152 reasoning tokens before dying).
+          const deathContext = {
+            turnIndex: turnsTaken,
+            promptChars: JSON.stringify(messages).length,
+            metrics: turnResult.metrics ?? null,
+            reasoningTokens: turnResult.reasoningTokens ?? 0,
+          };
           if (emptyStreamRetries < EMPTY_STREAM_RETRIES) {
             emptyStreamRetries++;
             logger.append({
@@ -232,12 +243,14 @@ export class DeepSeekAvoRunner {
               // "empty_generation" = P2b (no real finish_reason);
               // "empty_stop" = P2d (finish "stop" with zero content + zero tool calls).
               reason: isEmptyStop ? "empty_stop" : "empty_generation",
+              ...deathContext,
             });
             continue;
           }
           // Budget exhausted: the engine keeps returning empty generations.
           // Report the honest status instead of a false "completed".
           status = "engine_empty_response";
+          logger.append({ type: "engine_empty_response", ...deathContext });
           break;
         }
 
