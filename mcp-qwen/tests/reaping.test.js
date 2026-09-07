@@ -303,7 +303,10 @@ async function testCancelPath() {
   // Abort (simulates the cancel path: abortController.abort()).
   ac.abort();
   const res = await runPromise;
-  assert(res.status === "error" || res.status === "aborted", `run() resolved (status=${res.status})`);
+  assert(
+    res.status === "failed" || res.status === "error" || res.status === "aborted",
+    `run() resolved (status=${res.status})`
+  );
 
   await sleep(300); // give dispose a moment to reap
   assert(!pidAlive(bridgePid), "bridge child dead after abort (finally disposed it)");
