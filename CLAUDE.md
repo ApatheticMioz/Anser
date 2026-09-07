@@ -46,6 +46,24 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
    - Never execute manual health checks, network probes (`curl localhost:18020`), or scratch scripts prior to dispatching.
 6. **Honest Attribution**:
    - Never use "We" or claim coworker collaboration unless a `qwen_coworker` MCP call was genuinely dispatched and its completed output incorporated.
+7. **Universal UNIX LF Line-Ending Invariant (`\n`)**:
+   - All source code, test files, configs, scripts, documentation, and agent completions across this workspace MUST strictly use UNIX LF (`\n`) line endings.
+   - Under NO circumstances may an autonomous agent (Claude Code, Qwen, Gemini) write or commit files with Windows CRLF (`\r\n`) line endings (with the sole exception of legacy `.bat`/`.cmd` files where CRLF is strictly required by the legacy `cmd.exe` interpreter).
+   - All file-writing operations and code generation must normalize newlines to `\n` prior to disk flush. Any attempt to write CRLF to non-batch files will trip `LineEndingMismatchError` as an immediate dead-man fuse.
+8. **Fail-Fast, Zero-Masking Engineering Invariant**:
+   - Do not cater to fallbacks or use overly defensive engineering; errors are useful and provide valid signals.
+   - NEVER silently catch, suppress, or discard errors.
+   - NEVER mask upstream HTTP status codes (e.g. 400 Bad Request, 500 Internal Error) or wrap downstream engine errors into synthetic assistant completions.
+   - When an upstream service, parser, or subprocess fails, surface the unadulterated error status and stack trace immediately.
+9. **High-Reasoning Compute & Unaltered Deliberation (`reasoning_effort: "xhigh"`)**:
+   - Local Qwen defaults to `reasoning_effort: "xhigh"`, granting the model maximal test-time compute depth.
+   - NEVER inject artificial stop-thinking or landing directives (e.g. "wrap up now", "stop deliberating") into continuation turns. Deliberation must conclude naturally based on internal problem resolution.
+   - If token budget is exhausted during reasoning, the runtime fails fast with an explicit `reasoning_budget_exhausted` status rather than synthesizing a truncated completion.
+10. **Multi-Instance Concurrency & Live-Owner Invariant**:
+    - Multiple MCP client sessions (Claude Code and Antigravity) share the single `MAX_SEQS=1` GPU engine and `~/.qwen/` state directory.
+    - All engine boot and heal operations are serialized via atomic `O_EXCL` file locks with Rename-to-Tombstone recovery.
+    - An active slot lease is NEVER stolen while its owner PID is alive (`pidAlive(lease.pid)` is true).
+    - Stream proxy listener port (18022) is verified for `{ service: "mcp-qwen-stream-proxy" }` identity before any lifecycle signal is sent; unverified alien processes trip `PortConflictError` immediately.
 
 ---
 

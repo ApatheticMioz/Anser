@@ -25,8 +25,8 @@ ln -sf "$SOURCE_DIR/wait_qb.sh" ~/wait_qb.sh
 
 # Link global Antigravity & Claude configuration
 mkdir -p ~/.gemini/config ~/.claude ~/.gemini/antigravity-ide/mcp
-ln -sf /mnt/c/Users/Apath/.gemini/GEMINI.md ~/.gemini/GEMINI.md
-ln -sf /mnt/c/Users/Apath/.claude/CLAUDE.md ~/.claude/CLAUDE.md
+ln -sf /mnt/d/LLM_Ecosystem/GEMINI.md ~/.gemini/GEMINI.md
+ln -sf /mnt/d/LLM_Ecosystem/CLAUDE.md ~/.claude/CLAUDE.md
 
 # Symlink Antigravity IDE lazy MCP schemas & instructions from Windows canonical master
 rm -rf ~/.gemini/antigravity-ide/mcp/qwen38-local
