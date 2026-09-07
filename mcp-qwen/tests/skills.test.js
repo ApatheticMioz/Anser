@@ -24,6 +24,8 @@ import {
   listSkills,
   matchSkills,
   injectSkills,
+  extractNegatedKeywords,
+  isSkillNegated,
   MAX_SKILLS,
   MAX_BODY_CHARS,
   MAX_TOTAL_CHARS,
@@ -249,6 +251,49 @@ no closing marker here`);
     }
     assert(!threw, "loadSkills did not throw on missing dir");
     assert(Array.isArray(res) && res.length === 0, "missing dir -> empty array");
+  }
+
+  // --- Test 9: negated keyword intent filtering ---
+  console.log("\n[Test 9: negated keyword intent filtering]");
+  {
+    const negs = extractNegatedKeywords("purge all evo references, eliminate traceback, and avoid rollback");
+    assert(negs.has("evo"), "extracted negated 'evo'");
+    assert(negs.has("traceback"), "extracted negated 'traceback'");
+    assert(negs.has("rollback"), "extracted negated 'rollback'");
+
+    // Prompt contains "evo", but is negated -> evo skill must NOT be matched
+    const m = matchSkills({ prompt: "purge all evo references please", cwd: "", dir });
+    assert(!m.some((s) => s.name === "evo"), "evo skill was blacklisted by 'purge all evo'");
+
+    // Canary is not negated and matches keywords
+    const m2 = matchSkills({ prompt: "purge evo, but run canary smoke test", cwd: "", dir });
+    assert(!m2.some((s) => s.name === "evo"), "evo skill was blacklisted");
+    assert(m2.some((s) => s.name === "canary"), "canary skill was matched");
+  }
+
+  // --- Test 10: explicitSkills parameter ---
+  console.log("\n[Test 10: explicitSkills parameter]");
+  {
+    // explicitSkills bypasses keyword search
+    const m = matchSkills({ prompt: "unrelated prompt", cwd: "", dir, explicitSkills: ["canary"] });
+    assert(m.length === 1, "exactly one skill matched");
+    assert(m[0].name === "canary", "canary skill matched explicitly");
+
+    const injected = injectSkills("unrelated prompt", "", dir, ["canary"]);
+    assert(injected.includes("### canary"), "canary injected explicitly");
+  }
+
+  // --- Test 11: explicitSkills missing throws Error (fail fast) ---
+  console.log("\n[Test 11: explicitSkills missing throws Error (fail fast)]");
+  {
+    let threw = false;
+    try {
+      matchSkills({ prompt: "hi", cwd: "", dir, explicitSkills: ["ghost_skill"] });
+    } catch (err) {
+      threw = true;
+      assert(err.message.includes("ghost_skill"), "error mentions missing skill");
+    }
+    assert(threw, "matchSkills threw on non-existent explicit skill");
   }
 
   // cleanup

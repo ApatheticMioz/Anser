@@ -82,7 +82,11 @@ export function readTaskFromDisk(taskId) {
       }
       return parsed;
     }
-  } catch {}
+  } catch (err) {
+    if (err && (err.code === "EBUSY" || err.code === "EPERM")) {
+      return { transientLock: true, id: taskId };
+    }
+  }
   return null;
 }
 
@@ -314,8 +318,25 @@ export const statusHttpServer = http.createServer((req, res) => {
 
     // Disk-based task from another instance: poll disk until done
     const waitStartTime = Date.now();
+    let absentTicks = 0;
     const diskPoll = setInterval(() => {
       const current = readTaskFromDisk(taskId);
+      if (current?.transientLock) {
+        // Transient Windows file lock (EBUSY/EPERM) during worker saveTaskToDisk.
+        // Worker is actively writing; skip tick and continue polling.
+        return;
+      }
+
+      if (!current) {
+        absentTicks++;
+        // Debounce: require 3 consecutive absent ticks (6 seconds) before treating as missing/failed
+        if (absentTicks < 3) {
+          return;
+        }
+      } else {
+        absentTicks = 0;
+      }
+
       if (!current || current.done) {
         clearInterval(diskPoll);
         const err = current ? current.isError : true;

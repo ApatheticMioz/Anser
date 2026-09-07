@@ -26,11 +26,11 @@ export const MAX_TOKENS = (() => {
 })();
 
 // Reasoning-effort passthrough: read dynamically (at call time) so callers and
-// tests can toggle it per-dispatch. Returns the string value, or null when
-// unset — in which case the vLLM server default applies.
+// tests can toggle it per-dispatch. Defaults to "xhigh" per SOTA reasoning
+// test-time compute depth findings. Can be overridden via QWEN_REASONING_EFFORT.
 export function getReasoningEffort() {
   const v = process.env.QWEN_REASONING_EFFORT;
-  return v ? v : null;
+  return v ? v : "xhigh";
 }
 
 export const DEFAULT_RACE_MS = 45_000;
@@ -124,8 +124,11 @@ export const WEDGE_STATS_SILENCE_S = process.env.QWEN_WEDGE_SILENCE_S
 export const AUTO_HEAL = process.env.QWEN_AUTO_HEAL !== "0";
 export const HEAL_LOCK_FILE = path.join(TASK_DIR, ".engine_heal.lock");
 export const HEAL_LOCK_TTL_MS = 5 * 60_000;
+export const ENGINE_BOOT_LOCK_FILE = path.join(TASK_DIR, ".engine_boot.lock");
+export const ENGINE_BOOT_LOCK_TTL_MS = BOOT_TIMEOUT_MS;
 export const ENGINE_LOG_PATH = process.env.QWEN_LOG_PATH || "/tmp/mcp_launch_huge.log";
 export const WEDGE_COUNTER_FILE = path.join(TASK_DIR, ".wedge_counter.json");
+export const PROXY_MAX_BODY_BYTES = 50 * 1024 * 1024; // 50MB
 
 // Execution engine: the native Anser runner is hard-wired; there is no engine selection.
 

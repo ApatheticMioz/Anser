@@ -53,6 +53,7 @@ export function startGooseTask({
   testCommand,
   metricName,
   higherIsBetter,
+  skills,
 }) {
   // P4i: canonicalize the task cwd ONCE at the spawn boundary, through the OS
   // symlink/junction resolution layer. This is the single point where the
@@ -136,7 +137,7 @@ export function startGooseTask({
       // P9: keyword auto-inject matching skills from the packaged skills/
       // library into the instruction block. Additive and budget-capped; when
       // nothing matches the prompt is returned unchanged. Never throws.
-      const effectivePrompt = injectSkills(prompt, targetCwd);
+      const effectivePrompt = injectSkills(prompt, targetCwd, undefined, skills);
 
       let finalTaskPrompt = `Your working directory is exactly: ${targetCwd}\n\n`;
       if (evoContext) {
@@ -208,12 +209,13 @@ export function startGooseTask({
           } catch {}
         }
 
+        const isSuccess = runResult.status === "completed";
         taskEntry.done = true;
         taskEntry.finishedAt = Date.now();
-        taskEntry.status = runResult.status === "completed" ? "completed" : runResult.status;
-        taskEntry.isError = runResult.status === "error";
+        taskEntry.status = runResult.status;
+        taskEntry.isError = !isSuccess;
         taskEntry.result = {
-          isError: runResult.status === "error",
+          isError: !isSuccess,
           text: runResult.finalText,
           toolCalls: taskEntry.toolCallsCount,
           fileOps: taskEntry.fileOps,

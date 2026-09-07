@@ -39,8 +39,9 @@ export function leaseReclaimable(lease) {
   if (!lease) return true; // unreadable = crashed mid-write
   // If the claiming process is dead, reclaim the slot immediately
   if (!pidAlive(lease.pid)) return true;
-  const age = Date.now() - (lease.hb ?? lease.at ?? 0);
-  return age > SLOT_WEDGED_MS;
+  // LIVE PROCESS INVARIANT: A live process's lease is NEVER reclaimable!
+  // Prevents dual-generation collisions on the MAX_SEQS=1 engine during long tasks.
+  return false;
 }
 
 /**
@@ -76,10 +77,13 @@ export async function acquireGooseSlot(taskEntry) {
               clearInterval(refresh);
               return;
             }
+            const tmp = `${file}.tmp_${Date.now()}_${process.pid}`;
             fs.writeFileSync(
-              file,
-              JSON.stringify({ ...(cur ?? claim), pid: process.pid, hb: Date.now() })
+              tmp,
+              JSON.stringify({ ...(cur ?? claim), pid: process.pid, hb: Date.now() }),
+              "utf8"
             );
+            fs.renameSync(tmp, file);
           } catch {}
         }, SLOT_HEARTBEAT_MS);
         refresh.unref();

@@ -30,7 +30,7 @@ import assert from "node:assert";
 process.env.QWEN_MAX_CONTINUATION_TURNS = "3";
 process.env.QWEN_EMPTY_STREAM_RETRIES = "2";
 
-const { AnserRunner, CONTINUATION_DIRECTIVE, REASONING_LANDING_DIRECTIVE } =
+const { AnserRunner, CONTINUATION_DIRECTIVE } =
   await import("../src/harness/runner.js");
 const { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } = await import(
   "../src/config.js"
@@ -225,9 +225,21 @@ async function vectorC() {
     countType(logger, "continuation_injected") >= 1,
     "c: a continuation was injected after the dropped call"
   );
+  // Verify that the assistant message's malformed tool_call was sanitized to "{}"
+  // so downstream vLLM parsers do not throw JSONDecodeError on turn 2
+  const assistantMsgWithToolCall = llm._lastMessages.find(
+    (m) => m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0
+  );
+  assert.ok(assistantMsgWithToolCall, "c: assistant message with tool calls preserved in history");
+  assert.strictEqual(
+    assistantMsgWithToolCall.tool_calls[0].function.arguments,
+    "{}",
+    "c: truncated tool call arguments sanitized to '{}' in history"
+  );
+
   // Session still completes once the model re-emits cleanly.
   assert.strictEqual(res.status, "completed", "c: session completes after re-emit");
-  console.log("  [PASS] (c) length + invalid-JSON tool call -> dropped, never executed, continuation injected");
+  console.log("  [PASS] (c) length + invalid-JSON tool call -> dropped, arguments sanitized to '{}', continuation injected");
 }
 
 // ---------------------------------------------------------------------------
@@ -395,8 +407,8 @@ async function vectorG() {
 
 // ---------------------------------------------------------------------------
 // Vector (h): reasoning-only length cutoff (metrics.hadReasoning=true, zero
-// content) -> the continuation must inject REASONING_LANDING_DIRECTIVE and
-// log directive "reasoning_landing".
+// content) -> the continuation must inject clean CONTINUATION_DIRECTIVE and
+// log directive "resume" with hadReasoning=true.
 // ---------------------------------------------------------------------------
 async function vectorH() {
   const llm = makeMockLlm([
@@ -417,22 +429,108 @@ async function vectorH() {
   assert.strictEqual(conts.length, 1, "h: exactly one continuation");
   assert.strictEqual(
     conts[0].directive,
-    "reasoning_landing",
-    "h: directive must be reasoning_landing"
+    "resume",
+    "h: directive must be resume"
   );
-  // The message pushed to the LLM before the retry must be the landing text.
+  assert.strictEqual(
+    conts[0].hadReasoning,
+    true,
+    "h: hadReasoning recorded in continuation event"
+  );
   const lastMsg = llm._lastMessages?.[llm._lastMessages.length - 1];
   assert.strictEqual(
     lastMsg?.content,
-    REASONING_LANDING_DIRECTIVE,
-    "h: injected message is the landing directive text"
-  );
-  assert.notStrictEqual(
-    lastMsg?.content,
     CONTINUATION_DIRECTIVE,
-    "h: must NOT use the generic resume directive"
+    "h: injected message is clean CONTINUATION_DIRECTIVE text"
   );
-  console.log("  [PASS] (h) reasoning-length cutoff -> reasoning_landing directive injected");
+  console.log("  [PASS] (h) reasoning-length cutoff -> clean continuation injected");
+}
+
+// ---------------------------------------------------------------------------
+// Vector (i): Tool output bounding - observation exceeding 32 KB is truncated.
+// ---------------------------------------------------------------------------
+async function vectorI() {
+  const toolCall = {
+    id: "call_big_1",
+    type: "function",
+    function: {
+      name: "bash",
+      arguments: JSON.stringify({ command: "node -e \"console.log('A'.repeat(50000))\"" }),
+    },
+  };
+  const llm = makeMockLlm([
+    { content: "", toolCalls: [toolCall], finishReason: "stop" },
+    { content: "Processed observation.", finishReason: "stop" },
+  ]);
+  const logger = makeMockLogger();
+  const runner = new AnserRunner({ llm, logger });
+
+  const res = await runner.run({
+    prompt: "Run big command.",
+    sessionId: "test_i",
+    maxTurns: 5,
+  });
+
+  assert.strictEqual(res.status, "completed");
+  const toolMsg = llm._lastMessages?.find((m) => m.role === "tool" && m.tool_call_id === "call_big_1");
+  assert.ok(toolMsg, "i: tool message present in history");
+  assert.ok(
+    toolMsg.content.includes("[Observation Truncated: Tool output exceeded 32KB limit"),
+    "i: observation truncation warning injected"
+  );
+  assert.ok(
+    Buffer.byteLength(toolMsg.content, "utf8") < 35000,
+    `i: tool observation capped near 32KB (was ${Buffer.byteLength(toolMsg.content, "utf8")} bytes)`
+  );
+  console.log("  [PASS] (i) large tool observation (>32KB) -> truncated with explicit SWE-agent warning");
+}
+
+// ---------------------------------------------------------------------------
+// Vector (j): Honest failure status - [vLLM Error: ...] does not mask as completed.
+// ---------------------------------------------------------------------------
+async function vectorJ() {
+  const llm = makeMockLlm([
+    {
+      content: "\n\n[vLLM Error: This model's maximum context length is 245760 tokens.]\n\n",
+      finishReason: "stop",
+    },
+  ]);
+  const logger = makeMockLogger();
+  const runner = new AnserRunner({ llm, logger });
+
+  const res = await runner.run({
+    prompt: "Prompt that triggered error.",
+    sessionId: "test_j",
+    maxTurns: 5,
+  });
+
+  assert.strictEqual(res.status, "failed", "j: status must be 'failed', NOT 'completed'");
+  console.log("  [PASS] (j) vLLM error string in finalText -> honest status 'failed'");
+}
+
+// ---------------------------------------------------------------------------
+// Vector (k): reasoning-only length cutoffs exhausting continuation budget
+// -> terminates with honest status "reasoning_budget_exhausted" (not completed).
+// ---------------------------------------------------------------------------
+async function vectorK() {
+  const llm = makeMockLlm([
+    { content: "", toolCalls: [], finishReason: "length", hadReasoning: true },
+    { content: "", toolCalls: [], finishReason: "length", hadReasoning: true },
+    { content: "", toolCalls: [], finishReason: "length", hadReasoning: true },
+    { content: "", toolCalls: [], finishReason: "length", hadReasoning: true },
+  ]);
+  const logger = makeMockLogger();
+  const runner = new AnserRunner({ llm, logger });
+
+  const res = await runner.run({
+    prompt: "Think deeply forever.",
+    sessionId: "test_k",
+    maxTurns: 10,
+  });
+
+  assert.strictEqual(res.status, "reasoning_budget_exhausted", "k: status must be reasoning_budget_exhausted");
+  assert.ok(res.finalText.includes("ReasoningBudgetExhaustedError"), "k: finalText contains diagnostic error name");
+  console.log("  [PASS] (k) reasoning budget exhausted -> honest status 'reasoning_budget_exhausted'");
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +553,9 @@ async function main() {
     ["(f)", vectorF],
     ["(g)", vectorG],
     ["(h)", vectorH],
+    ["(i)", vectorI],
+    ["(j)", vectorJ],
+    ["(k)", vectorK],
   ];
 
   for (const [label, fn] of vectors) {

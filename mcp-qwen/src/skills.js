@@ -254,29 +254,90 @@ function keywordMatches(keyword, haystack) {
 }
 
 /**
+ * Extracts terms following negative intent keywords (e.g. purge, remove, eliminate, delete, avoid, without).
+ * Strips common stop-words like 'all', 'the', 'any'.
+ * @param {string} text
+ * @returns {Set<string>}
+ */
+export function extractNegatedKeywords(text) {
+  const negated = new Set();
+  if (!text) return negated;
+  const re = /\b(?:purge|eliminate|remove|delete|deprecate|scrub|do\s+not\s+use|avoid|without)\b(?:\s+(?:all|the|any))?\s+([a-zA-Z0-9_\-]+)/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m[1]) negated.add(m[1].toLowerCase());
+  }
+  return negated;
+}
+
+/**
+ * Checks whether a skill's name or any of its keywords match any extracted negated term.
+ * @param {{ name: string, keywords: string[] }} skill
+ * @param {Set<string>} negatedKeywords
+ * @returns {boolean}
+ */
+export function isSkillNegated(skill, negatedKeywords) {
+  if (!skill || !negatedKeywords || negatedKeywords.size === 0) return false;
+  const nameLower = (skill.name || "").toLowerCase();
+  for (const neg of negatedKeywords) {
+    if (nameLower === neg || nameLower.includes(neg)) return true;
+    if (Array.isArray(skill.keywords)) {
+      for (const kw of skill.keywords) {
+        const kwLower = String(kw || "").toLowerCase();
+        if (kwLower === neg || kwLower.includes(neg)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Find skills whose keywords match the prompt text OR the cwd path string.
  * Results are additive and budget-capped (MAX_SKILLS, MAX_BODY_CHARS,
- * MAX_TOTAL_CHARS). Never throws.
+ * MAX_TOTAL_CHARS).
  *
- * @param {{ prompt?: string, cwd?: string, dir?: string }} params
+ * If `explicitSkills` is provided as an array, keyword matching is bypassed and
+ * exactly those skills are returned (or an Error is thrown if an explicit skill
+ * does not exist).
+ *
+ * Excludes any skill whose name or keywords match terms following negative
+ * directives (e.g., "purge avo" blacklists avo skills to prevent contradictory
+ * instruction loops).
+ *
+ * @param {{ prompt?: string, cwd?: string, dir?: string, explicitSkills?: string[] }} params
  * @returns {Array<{ name: string, description: string, body: string }>}
  */
-export function matchSkills({ prompt = "", cwd = "", dir } = {}) {
-  const promptStr = String(prompt || "");
-  const cwdStr = String(cwd || "");
+export function matchSkills({ prompt = "", cwd = "", dir, explicitSkills } = {}) {
   const all = loadSkills(dir);
 
-  const matched = [];
-  for (const skill of all) {
-    if (!Array.isArray(skill.keywords) || skill.keywords.length === 0) continue;
-    const hit = skill.keywords.some(
-      (kw) => keywordMatches(kw, promptStr) || keywordMatches(kw, cwdStr)
-    );
-    if (hit) matched.push(skill);
+  let candidateSkills = [];
+
+  if (Array.isArray(explicitSkills) && explicitSkills.length > 0) {
+    const skillMap = new Map(all.map((s) => [s.name.toLowerCase(), s]));
+    for (const name of explicitSkills) {
+      const found = skillMap.get(String(name).toLowerCase());
+      if (!found) {
+        throw new Error(`Explicit skill '${name}' requested but not found`);
+      }
+      candidateSkills.push(found);
+    }
+  } else {
+    const promptStr = String(prompt || "");
+    const cwdStr = String(cwd || "");
+    const negatedKeywords = extractNegatedKeywords(promptStr);
+
+    for (const skill of all) {
+      if (!Array.isArray(skill.keywords) || skill.keywords.length === 0) continue;
+      if (isSkillNegated(skill, negatedKeywords)) continue;
+      const hit = skill.keywords.some(
+        (kw) => keywordMatches(kw, promptStr) || keywordMatches(kw, cwdStr)
+      );
+      if (hit) candidateSkills.push(skill);
+    }
   }
 
   // Cap the number of skills first.
-  const capped = matched.slice(0, MAX_SKILLS);
+  const capped = candidateSkills.slice(0, MAX_SKILLS);
 
   // Enforce the per-body and total budgets.
   const out = [];
@@ -309,10 +370,11 @@ export function matchSkills({ prompt = "", cwd = "", dir } = {}) {
  * @param {string} prompt
  * @param {string} [cwd]
  * @param {string} [dir] skills directory override (defaults to repo-root skills/)
+ * @param {string[]} [explicitSkills]
  * @returns {string}
  */
-export function injectSkills(prompt, cwd, dir) {
-  const matches = matchSkills({ prompt, cwd, dir });
+export function injectSkills(prompt, cwd, dir, explicitSkills) {
+  const matches = matchSkills({ prompt, cwd, dir, explicitSkills });
   if (matches.length === 0) return prompt;
 
   const parts = [

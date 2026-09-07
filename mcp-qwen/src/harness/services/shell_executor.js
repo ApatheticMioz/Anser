@@ -109,7 +109,7 @@ export class ShellExecutorService {
         // WSLENV, so the color-forcing vars are sanitized INSIDE the -c
         // payload: Node >= 24 honors FORCE_COLOR on piped stdout and would
         // otherwise corrupt JSON.parse'd ast-grep output and metric regexes.
-        args = ["-d", wslDistro(), "--", "bash", "-c", `EXEC_TAG="${execTag}" && unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat; cd "${posixCwd}" && ${command}`];
+        args = ["-d", wslDistro(), "--", "bash", "-c", `exec -a "${execTag}" bash -c 'unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat EXEC_TAG="${execTag}"; cd "${posixCwd}" && ${command.replace(/'/g, "'\\''")}'`];
         spawnCwd = undefined; // let WSL handle cd
       } else if (process.env.QWEN_SHELL_MODE !== "cmd" && posixShell()) {
         // POSIX shell routing (P4g): the command is handed to a real

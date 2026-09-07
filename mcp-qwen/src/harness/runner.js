@@ -48,20 +48,6 @@ export const CONTINUATION_DIRECTIVE =
   "Your previous output was cut off by the token ceiling. " +
   "Resume exactly where you stopped. Do not repeat already-emitted content.";
 
-/**
- * User-role directive injected when the token-ceiling cutoff (finish_reason:
- * "length") happened DURING server-side reasoning (thinking) - i.e. the model
- * burned its output budget deliberating and was cut off before emitting any
- * visible content or tool calls. Unlike the generic resume directive, this one
- * tells the model to STOP deliberating and immediately produce concrete,
- * visible output (content or tool calls) rather than re-entering extended
- * reasoning.
- */
-export const REASONING_LANDING_DIRECTIVE =
-  "Your reasoning was cut off by the output token ceiling. " +
-  "Stop deliberating now - wrap up immediately and emit your concrete next " +
-  "actions as visible content or tool calls (edit_file / write_file / bash). " +
-  "Do not re-enter extended reasoning.";
 
 export class AnserRunner {
   constructor(options = {}) {
@@ -307,6 +293,9 @@ export class AnserRunner {
 
         if (turnResult.content) {
           finalText = turnResult.content;
+          if (finalText.includes("[vLLM Error:") || finalText.includes("[vLLM upstream error:") || finalText.includes("[vLLM Mid-Stream Error:")) {
+            status = "failed";
+          }
         }
 
         // If no tool calls, the model concluded its turn - UNLESS the output
@@ -314,30 +303,29 @@ export class AnserRunner {
         // case the answer is truncated, so we re-prompt the model to resume.
         if (!turnResult.toolCalls || turnResult.toolCalls.length === 0) {
           if (turnResult.finishReason === "length") {
+            const hadReasoning =
+              turnResult.metrics?.hadReasoning ?? turnResult.hadReasoning ?? false;
             if (continuationsInjected < MAX_CONTINUATION_TURNS) {
               continuationsInjected++;
-              // If the cutoff happened DURING thinking (the model burned its
-              // budget on reasoning and emitted no visible content), use the
-              // reasoning-landing directive to force it to stop deliberating
-              // and emit concrete output; otherwise use the generic resume.
-              const hadReasoning =
-                turnResult.metrics?.hadReasoning ?? turnResult.hadReasoning ?? false;
-              const directive = hadReasoning
-                ? REASONING_LANDING_DIRECTIVE
-                : CONTINUATION_DIRECTIVE;
-              messages.push({ role: "user", content: directive });
+              // Provide clean continuation without artificial stop-thinking directives
+              messages.push({ role: "user", content: CONTINUATION_DIRECTIVE });
               logger.append({
                 type: "continuation_injected",
                 continuationNumber: continuationsInjected,
                 maxContinuations: MAX_CONTINUATION_TURNS,
                 reason: "length",
-                directive: hadReasoning ? "reasoning_landing" : "resume",
+                directive: "resume",
+                hadReasoning,
               });
               continue;
             }
-            // Continuation budget exhausted: the model keeps hitting the
-            // ceiling. Report the honest status instead of a false "completed".
-            status = "length_limit_reached";
+            // Continuation budget exhausted: report honest status instead of false "completed".
+            if (hadReasoning && !turnResult.content) {
+              status = "reasoning_budget_exhausted";
+              finalText = "ReasoningBudgetExhaustedError: The model exhausted the continuation reasoning budget without emitting visible actions or content.";
+            } else {
+              status = "length_limit_reached";
+            }
             break;
           }
           break;
@@ -361,9 +349,13 @@ export class AnserRunner {
           }
 
           if (argsParseFailed) {
+            // Sanitize the malformed argument string in the assistant message so downstream
+            // API parsers (vLLM's qwen3_coder / python json.loads) do not fail with HTTP 400 JSONDecodeError
+            tc.function.arguments = "{}";
+
             const notice =
-              `Tool call '${tc.function.name}' (id ${tc.id}) was dropped: its arguments ` +
-              `were truncated and could not be parsed as JSON (finish_reason: "length"). ` +
+              `ToolExecutionError: Tool '${tc.function.name}' (id ${tc.id}) was dropped: its arguments ` +
+              `were truncated mid-stream and could not be parsed as JSON (finish_reason: "length"). ` +
               `Please re-emit this tool call with complete, valid JSON arguments.`;
             messages.push({
               role: "tool",
@@ -393,11 +385,28 @@ export class AnserRunner {
 
           const toolExecution = await ctx.executeTool(tc.function.name, parsedArgs);
 
-          const toolOutputString = toolExecution.isError
+          let toolOutputString = toolExecution.isError
             ? `Error: ${toolExecution.error}`
             : typeof toolExecution.result === "string"
               ? toolExecution.result
               : JSON.stringify(toolExecution.result ?? "");
+
+          const MAX_TOOL_OUTPUT_BYTES = 32 * 1024; // 32 KB observation limit (SWE-agent standard)
+          const MAX_TOOL_OUTPUT_LINES = 1000;
+
+          if (Buffer.byteLength(toolOutputString, "utf8") > MAX_TOOL_OUTPUT_BYTES) {
+            const originalBytes = Buffer.byteLength(toolOutputString, "utf8");
+            toolOutputString =
+              toolOutputString.slice(0, MAX_TOOL_OUTPUT_BYTES) +
+              `\n\n[Observation Truncated: Tool output exceeded 32KB limit (original: ${originalBytes} bytes). Narrow your query with head/tail/grep or redirect to disk.]`;
+          } else {
+            const lines = toolOutputString.split("\n");
+            if (lines.length > MAX_TOOL_OUTPUT_LINES) {
+              toolOutputString =
+                lines.slice(0, MAX_TOOL_OUTPUT_LINES).join("\n") +
+                `\n\n[Observation Truncated: Tool output exceeded 1,000 lines (original: ${lines.length} lines). Narrow your query with head/tail/grep or redirect to disk.]`;
+            }
+          }
 
           messages.push({
             role: "tool",
@@ -425,27 +434,22 @@ export class AnserRunner {
           continuationsInjected < MAX_CONTINUATION_TURNS
         ) {
           continuationsInjected++;
-          // Same directive selection as the no-tool-calls length branch: if the
-          // cutoff happened during thinking, force the model to stop
-          // deliberating and re-emit concrete output / tool calls.
           const hadReasoning =
             turnResult.metrics?.hadReasoning ?? turnResult.hadReasoning ?? false;
-          const directive = hadReasoning
-            ? REASONING_LANDING_DIRECTIVE
-            : CONTINUATION_DIRECTIVE;
-          messages.push({ role: "user", content: directive });
+          messages.push({ role: "user", content: CONTINUATION_DIRECTIVE });
           logger.append({
             type: "continuation_injected",
             continuationNumber: continuationsInjected,
             maxContinuations: MAX_CONTINUATION_TURNS,
             reason: "length",
-            directive: hadReasoning ? "reasoning_landing" : "resume",
+            directive: "resume",
+            hadReasoning,
             droppedToolCalls: droppedTruncatedCalls,
           });
         }
       }
     } catch (err) {
-      status = "error";
+      status = "failed";
       finalText = `Anser execution error: ${err.message}`;
       logger.append({ type: "session_error", error: err.message, stack: err.stack });
     } finally {

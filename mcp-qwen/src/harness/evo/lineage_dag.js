@@ -42,6 +42,26 @@ export class LineageDag {
           for (const n of data.nodes) {
             this.nodes.set(n.id, n);
           }
+        } else if (Array.isArray(data.candidates)) {
+          // Backward compatibility migration: import legacy flat candidates
+          for (const c of data.candidates) {
+            this.nodes.set(c.candidateId, {
+              id: c.candidateId,
+              parentId: c.parentCommit || "baseline",
+              hypothesis: c.hypothesis || "",
+              filesModified: c.filesModified || [],
+              metrics: {
+                fitness: c.metricScore,
+                status: c.status?.toLowerCase() === "accepted" ? "accepted" : "rejected",
+                commitSha: c.commitSha,
+                errorLog: c.errorLog,
+              },
+              timestamp: c.timestamp || new Date().toISOString(),
+            });
+            if (c.status?.toLowerCase() === "accepted") {
+              this.currentHeadId = c.candidateId;
+            }
+          }
         }
         return;
       } catch (err) {

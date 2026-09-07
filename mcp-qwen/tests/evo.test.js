@@ -219,11 +219,10 @@ async function runTests() {
   // -------------------------------------------------------------
   console.log("[Test 6] Live vLLM Streaming & Direct Microkernel Execution...");
   {
-    // Check if vLLM endpoint is reachable (shared P11 availability probe)
-    const vllmOnline = await isEngineAvailable();
+    const vllmOnline = !process.env.TEST_OFFLINE && (await isEngineAvailable());
 
     if (!vllmOnline) {
-      console.log("  -> [SKIP] vLLM endpoint offline at :18020 (skipping live inference test)");
+      console.log("  -> [SKIP] vLLM endpoint offline or TEST_OFFLINE set (skipping live inference test)");
     } else {
       const liveDir = path.resolve(process.cwd(), ".test_live_tmp");
       fs.mkdirSync(liveDir, { recursive: true });

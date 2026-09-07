@@ -413,6 +413,44 @@ export async function killProcessTree(child, sessionId) {
 }
 
 /**
+ * Sweeps and terminates any WSL processes matching a given session or command tag.
+ * Handles both Goose sessions ("goose run --name <tag>") and tagged shell commands.
+ *
+ * @param {string} tag
+ */
+export function killTaggedWslProcessesSync(tag) {
+  if (!tag) return;
+  const id = String(tag);
+  let candidates = [];
+  try {
+    const out = runWslCommandSync(
+      `pgrep -f '${escapeRe(id)}' 2>/dev/null || true`
+    ).toString();
+    candidates = out
+      .split(/\s+/)
+      .map((s) => parseInt(s, 10))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  } catch {
+    return;
+  }
+  if (candidates.length === 0) return;
+
+  const verified = [];
+  for (const pid of candidates) {
+    try {
+      const cmd = runWslCommandSync(
+        `tr '\\0' ' ' < /proc/${pid}/cmdline 2>/dev/null || true`
+      ).toString();
+      if (cmd.includes(id)) verified.push(pid);
+    } catch {}
+  }
+  if (verified.length === 0) return;
+  try {
+    runWslCommandSync(`kill -9 ${verified.join(" ")} 2>/dev/null || true`);
+  } catch {}
+}
+
+/**
  * Synchronous variant of killProcessTree for the process-shutdown path
  * (index.js cleanup), where awaiting is not possible. Same anchored sweep,
  * same verification + escalation, but blocking.
@@ -423,7 +461,7 @@ export function killProcessTreeSync(child, tag) {
   const result = { killed: false, escalations: 0 };
 
   if (tag) {
-    killGooseSessionSync(tag);
+    killTaggedWslProcessesSync(tag);
   }
 
   const pid = child?.pid;

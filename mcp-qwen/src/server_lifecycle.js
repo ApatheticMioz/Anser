@@ -12,6 +12,8 @@ import {
   AUTO_HEAL,
   HEAL_LOCK_FILE,
   HEAL_LOCK_TTL_MS,
+  ENGINE_BOOT_LOCK_FILE,
+  ENGINE_BOOT_LOCK_TTL_MS,
   ENGINE_LOG_PATH,
   WEDGE_COUNTER_FILE,
 } from "./config.js";
@@ -47,6 +49,82 @@ export function withBootMutex(fn) {
     () => {}
   );
   return result;
+}
+
+/**
+ * Atomically acquires an exclusive lockfile using O_EXCL (openSync 'wx').
+ * If the lockfile exists:
+ *   - Reads existing metadata.
+ *   - If active (age < ttlMs), returns { acquired: false, heldBy: cur }.
+ *   - If stale (age >= ttlMs), atomically renames to a PID-tagged tombstone,
+ *     unlinks the tombstone, and retries openSync("wx") once.
+ *
+ * @param {string} lockPath
+ * @param {number} ttlMs
+ * @param {object} payload
+ * @returns {{ acquired: boolean, heldBy?: object }}
+ */
+export function tryAcquireExclusiveLock(lockPath, ttlMs, payload) {
+  try {
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  } catch {}
+
+  const writePayload = (fd) => {
+    fs.writeSync(fd, JSON.stringify({ ...payload, at: Date.now(), pid: process.pid }));
+    fs.closeSync(fd);
+  };
+
+  try {
+    const fd = fs.openSync(lockPath, "wx");
+    writePayload(fd);
+    return { acquired: true };
+  } catch (err) {
+    if (err.code !== "EEXIST") {
+      return { acquired: false, error: err.message };
+    }
+  }
+
+  let cur = null;
+  try {
+    cur = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  } catch {}
+
+  const age = cur?.at ? Date.now() - cur.at : Infinity;
+  if (cur && age < ttlMs) {
+    return { acquired: false, heldBy: cur };
+  }
+
+  // Stale recovery: Atomic Rename-to-Tombstone
+  const tombstone = `${lockPath}.stale_${Date.now()}_${process.pid}`;
+  try {
+    fs.renameSync(lockPath, tombstone);
+    fs.rmSync(tombstone, { force: true });
+  } catch {}
+
+  try {
+    const fd = fs.openSync(lockPath, "wx");
+    writePayload(fd);
+    return { acquired: true };
+  } catch {
+    return { acquired: false, heldBy: cur };
+  }
+}
+
+/**
+ * Releases an exclusive lockfile only if owned by this process.
+ * @param {string} lockPath
+ */
+export function releaseExclusiveLock(lockPath) {
+  try {
+    const cur = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    if (!cur || cur.pid === process.pid) {
+      fs.rmSync(lockPath, { force: true });
+    }
+  } catch {
+    try {
+      fs.rmSync(lockPath, { force: true });
+    } catch {}
+  }
 }
 
 export async function serverInfo() {
@@ -194,7 +272,9 @@ export function bumpWedgeCounter(reason) {
     cur.lastAt = Date.now();
     cur.lastReason = String(reason ?? "").slice(0, 200);
     fs.mkdirSync(path.dirname(WEDGE_COUNTER_FILE), { recursive: true });
-    fs.writeFileSync(WEDGE_COUNTER_FILE, JSON.stringify(cur));
+    const tmp = `${WEDGE_COUNTER_FILE}.tmp_${Date.now()}_${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(cur), "utf8");
+    fs.renameSync(tmp, WEDGE_COUNTER_FILE);
   } catch {}
 }
 
@@ -258,16 +338,6 @@ export async function engineWedgeState() {
 }
 
 export async function healWedgedEngine(statsAgeSec) {
-  let lock = null;
-  try {
-    lock = JSON.parse(fs.readFileSync(HEAL_LOCK_FILE, "utf8"));
-  } catch {}
-  if (lock && Date.now() - lock.at < HEAL_LOCK_TTL_MS) {
-    return {
-      healed: false,
-      note: `heal already started ${Math.round((Date.now() - lock.at) / 1000)}s ago by pid ${lock.pid}; boot in progress`,
-    };
-  }
   // HEAL BACKSTOP: refuse to stop/reboot the engine while live work is in
   // flight (in-memory running/queued tasks, or a disk task whose owner pid is
   // alive with a recent heartbeat). A reboot here would kill the in-flight
@@ -279,15 +349,26 @@ export async function healWedgedEngine(statsAgeSec) {
         return { healed: false, note: "tasks in flight; heal refused" };
       }
     } catch {
-      // Gatekeeper error: fail safe — do not reboot a possibly-busy engine.
       return { healed: false, note: "tasks in flight; heal refused" };
     }
   }
-  try {
-    fs.mkdirSync(TASK_DIR, { recursive: true });
-    fs.writeFileSync(HEAL_LOCK_FILE, JSON.stringify({ at: Date.now(), pid: process.pid, statsAgeSec }));
-    bumpWedgeCounter(`stats_age=${statsAgeSec}s`);
-  } catch {}
+
+  const lockResult = tryAcquireExclusiveLock(HEAL_LOCK_FILE, HEAL_LOCK_TTL_MS, {
+    pid: process.pid,
+    statsAgeSec,
+  });
+
+  if (!lockResult.acquired) {
+    const lock = lockResult.heldBy;
+    const ago = lock?.at ? Math.round((Date.now() - lock.at) / 1000) : "unknown";
+    const pid = lock?.pid ?? "unknown";
+    return {
+      healed: false,
+      note: `heal already started ${ago}s ago by pid ${pid}; boot in progress`,
+    };
+  }
+
+  bumpWedgeCounter(`stats_age=${statsAgeSec}s`);
   await stopServer();
   const res = await ensureServerRunning();
   resetEngineHealthCache();
@@ -374,14 +455,17 @@ async function realSpawnStreamProxy() {
  * @returns {Promise<number|null>}
  */
 async function findStreamProxyListenerPid() {
-  // 1. Probe /health for a pid (the proxy may be alive but not healthy).
+  // 1. Probe /health for a verified pid.
   try {
     const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, {
       signal: AbortSignal.timeout(1000),
     });
-    const body = await res.text();
-    const j = JSON.parse(body);
-    if (j && Number.isFinite(j.pid) && j.pid > 0) return j.pid;
+    if (res.ok) {
+      const j = await res.json();
+      if (j && j.service === "mcp-qwen-stream-proxy" && Number.isFinite(j.pid) && j.pid > 0) {
+        return { pid: j.pid, verified: true };
+      }
+    }
   } catch {}
   // 2. Fall back to `ss -ltnp` filtered to the port.
   try {
@@ -389,7 +473,17 @@ async function findStreamProxyListenerPid() {
       `ss -ltnp 'sport = :${STREAM_PROXY_PORT}' 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true`
     );
     const pid = parseInt(stdout.trim(), 10);
-    if (Number.isFinite(pid) && pid > 0) return pid;
+    if (Number.isFinite(pid) && pid > 0) {
+      try {
+        const { stdout: cmdline } = await runWslCommand(
+          `tr '\\0' ' ' < /proc/${pid}/cmdline 2>/dev/null || true`
+        );
+        if (cmdline.includes("stream_proxy.js")) {
+          return { pid, verified: true };
+        }
+      } catch {}
+      return { pid, verified: false };
+    }
   } catch {}
   return null;
 }
@@ -417,11 +511,15 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
     if (attempt === 0) await new Promise((r) => setTimeout(r, 200));
   }
 
-  // 2. TARGETED pre-spawn cleanup: kill the current listener on the port by
-  //    its specific pid (never a broad `pkill -f 'stream_proxy.js'`).
-  //    Best-effort; log what we did.
-  const listenerPid = await findStreamProxyListenerPid();
-  if (listenerPid) {
+  // 2. TARGETED pre-spawn cleanup: kill the current listener on the port ONLY if verified.
+  const listenerInfo = await findStreamProxyListenerPid();
+  if (listenerInfo) {
+    if (!listenerInfo.verified) {
+      throw new Error(
+        `PortConflictError: Port ${STREAM_PROXY_PORT} is occupied by unverified process pid ${listenerInfo.pid}. Refusing to kill non-proxy process.`
+      );
+    }
+    const listenerPid = listenerInfo.pid;
     try {
       if (IS_WINDOWS) {
         await runWslCommand(`kill -9 ${listenerPid} 2>/dev/null || true`);
@@ -431,7 +529,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
         } catch {}
       }
       process.stderr.write(
-        `[stream-proxy] pre-spawn cleanup: killed listener pid ${listenerPid} on port ${STREAM_PROXY_PORT}\n`
+        `[stream-proxy] pre-spawn cleanup: killed verified listener pid ${listenerPid} on port ${STREAM_PROXY_PORT}\n`
       );
       await new Promise((r) => setTimeout(r, 300));
     } catch (err) {
@@ -489,21 +587,47 @@ export async function ensureServerRunning() {
     }
     return { switched: false, status: "already_running" };
   }
-  await wslRun(
-    `cd ~/qwen-serving && nohup bash launchers/start_huge.sh > ${ENGINE_LOG_PATH} 2>&1 < /dev/null & disown; sleep 1; true`
-  );
-  const deadline = Date.now() + BOOT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, BOOT_POLL_MS));
-    const now = await currentMode();
-    if (now) {
-      await ensureStreamProxyRunning();
-      await warmEngine();
-      resetEngineHealthCache();
-      return { switched: true, status: "started" };
+
+  // Cross-process atomic boot lock: only ONE instance executes the launcher script.
+  const lock = tryAcquireExclusiveLock(ENGINE_BOOT_LOCK_FILE, ENGINE_BOOT_LOCK_TTL_MS, {
+    pid: process.pid,
+    action: "booting_huge",
+  });
+
+  if (!lock.acquired) {
+    // Secondary instance: wait for primary instance to finish booting.
+    const deadline = Date.now() + BOOT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, BOOT_POLL_MS));
+      const now = await currentMode();
+      if (now) {
+        await ensureStreamProxyRunning();
+        resetEngineHealthCache();
+        return { switched: true, status: "started_by_peer" };
+      }
     }
+    throw new Error(`Timed out waiting for peer vLLM server to boot (${BOOT_TIMEOUT_MS}ms)`);
   }
-  throw new Error(`Timed out waiting for vLLM server to boot (${BOOT_TIMEOUT_MS}ms)`);
+
+  try {
+    await wslRun(
+      `cd ~/qwen-serving && nohup bash launchers/start_huge.sh > ${ENGINE_LOG_PATH} 2>&1 < /dev/null & disown; sleep 1; true`
+    );
+    const deadline = Date.now() + BOOT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, BOOT_POLL_MS));
+      const now = await currentMode();
+      if (now) {
+        await ensureStreamProxyRunning();
+        await warmEngine();
+        resetEngineHealthCache();
+        return { switched: true, status: "started" };
+      }
+    }
+    throw new Error(`Timed out waiting for vLLM server to boot (${BOOT_TIMEOUT_MS}ms)`);
+  } finally {
+    releaseExclusiveLock(ENGINE_BOOT_LOCK_FILE);
+  }
 }
 
 export async function stopServer() {

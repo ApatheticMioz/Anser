@@ -13,6 +13,7 @@ import {
   STREAM_PROXY_PORT,
   VLLM_PORT,
   MAX_TOKENS,
+  MAX_LEN_HUGE,
   getReasoningEffort,
   STREAM_IDLE_TIMEOUT_MS,
   MAX_REASONING_TOKENS,
@@ -72,12 +73,25 @@ export class VllmProviderService {
   }) {
     const t0 = Date.now();
 
+    // Dynamic headroom clamping against MAX_LEN_HUGE (245,760)
+    const promptChars = JSON.stringify(messages).length + (tools && tools.length > 0 ? JSON.stringify(tools).length : 0);
+    const estimatedPromptTokens = Math.ceil(promptChars / 3.5);
+    const maxPossibleHeadroom = Math.max(0, MAX_LEN_HUGE - estimatedPromptTokens - 128);
+
+    if (maxPossibleHeadroom < 1024) {
+      throw new Error(
+        `ContextExhaustedError: Prompt consumes ~${estimatedPromptTokens} tokens, leaving insufficient headroom (<1024) under model context limit (${MAX_LEN_HUGE}).`
+      );
+    }
+
+    const clampedMaxTokens = Math.min(maxTokens, maxPossibleHeadroom);
+
     const payload = {
       model: this.model,
       messages,
       stream: true,
       temperature,
-      max_tokens: maxTokens,
+      max_tokens: clampedMaxTokens,
     };
 
     if (tools && tools.length > 0) {
@@ -205,6 +219,7 @@ export class VllmProviderService {
       if (typeof idleTimer.unref === "function") idleTimer.unref();
     };
 
+    let currentSseEvent = null;
     try {
       armIdle();
       while (true) {
@@ -237,14 +252,38 @@ export class VllmProviderService {
           // is alive and producing; reset the idle watchdog.
           armIdle();
 
+          if (trimmed.startsWith("event: ")) {
+            currentSseEvent = trimmed.slice(7).trim();
+            continue;
+          }
+
           if (trimmed === "data: [DONE]") {
             break;
           }
 
           if (trimmed.startsWith("data: ")) {
             const jsonStr = trimmed.slice(6);
+            if (currentSseEvent === "error") {
+              let errMsg = jsonStr;
+              try {
+                const parsedErr = JSON.parse(jsonStr);
+                errMsg = parsedErr.error?.message || parsedErr.message || jsonStr;
+              } catch {}
+              throw new Error(`vLLM upstream SSE error: ${errMsg}`);
+            }
+            currentSseEvent = null;
+
             try {
               const chunk = JSON.parse(jsonStr);
+              if (chunk.error && !chunk.choices) {
+                const errMsg = chunk.error.message || JSON.stringify(chunk.error);
+                throw new Error(`vLLM upstream error: ${errMsg}`);
+              }
+              if (chunk.id === "chatcmpl-stream-err") {
+                const errMsg = chunk.choices?.[0]?.delta?.content || "vLLM stream error";
+                throw new Error(`vLLM stream error: ${errMsg}`);
+              }
+
               const choice = chunk.choices?.[0];
               if (!choice) continue;
 

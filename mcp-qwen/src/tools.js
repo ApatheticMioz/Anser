@@ -104,6 +104,10 @@ export function registerTools(server) {
           .describe(
             "Task timeout in ms (default 14,400,000ms (4 hours), minimum 600,000ms (10 min) - budgets are floored because a 27B model on consumer silicon routinely needs tens of minutes)"
           ),
+        skills: z
+          .array(z.string())
+          .optional()
+          .describe("Explicit list of skill names to inject (bypasses keyword auto-matching)"),
       },
     },
     async ({
@@ -116,6 +120,7 @@ export function registerTools(server) {
       metric_name,
       higher_is_better,
       timeout_ms,
+      skills,
     }) => {
       let raceHandle;
       try {
@@ -145,6 +150,7 @@ export function registerTools(server) {
         testCommand: test_command,
         metricName: metric_name,
         higherIsBetter: higher_is_better,
+        skills,
       });
 
       const raceTimer = new Promise((resolve) => {
@@ -161,7 +167,7 @@ export function registerTools(server) {
       }
 
       const curlBin = IS_WINDOWS ? "curl.exe" : "curl";
-      const waitCmd = `${curlBin} -s http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
+      const waitCmd = `${curlBin} -fS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
       const elapsedSec = Math.round(RACE_MS / 1000);
       const responseText = [
         `### Qwen Task Dispatched (Background Execution)`,
@@ -175,6 +181,7 @@ export function registerTools(server) {
         `\`\`\`bash`,
         `${waitCmd}`,
         `\`\`\``,
+        `> **Chain Invariant**: When chaining sequential task waits, always use \`&&\` (stop on error), never \`;\`.`,
         ``,
         `Or inspect status via tool: \`qwen_task(action: "status", task_id: "${taskId}")\`.`,
       ];
@@ -299,8 +306,8 @@ export function registerTools(server) {
             isError: task.isError,
           };
         }
-        const elapsed_s = Math.round((Date.now() - task.createdAt) / 1000);
-        const hint = `\n\nWait command (blocks at $0 until done):\n\`curl -s http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``;
+        const curlBin = IS_WINDOWS ? "curl.exe" : "curl";
+        const hint = `\n\nWait command (blocks at $0 until done):\n\`${curlBin} -fS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``;
         if (task.status === "queued") {
           const holders = listGooseSlots().map((l) => l.taskId ?? `pid ${l.pid}`);
           const heldBy = holders.length ? ` Currently held by: ${holders.join(", ")}.` : "";

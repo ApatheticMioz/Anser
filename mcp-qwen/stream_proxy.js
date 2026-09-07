@@ -78,26 +78,6 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
     },
   };
 
-  // For streaming requests, send 200 OK headers immediately and start proactive keep-alive pings.
-  // This keeps the TCP socket active and prevents Goose/reqwest from timing out with
-  // "Stream decode error: error decoding response body" during long 30-45s vLLM prompt prefills.
-  if (isStreamRequest) {
-    res.writeHead(200, {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-    });
-    try {
-      res.write(": keep-alive\n\n");
-    } catch {}
-
-    pingInterval = setInterval(() => {
-      try {
-        res.write(": keep-alive\n\n");
-      } catch {}
-    }, 5000);
-  }
-
   const upstreamUrl = `http://127.0.0.1:${UPSTREAM_PORT}${req.url}`;
   const upstreamReq = http.request(
     upstreamUrl,
@@ -114,6 +94,33 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
       if (!isEventStream) {
         res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
         upstreamRes.pipe(res);
+        return;
+      }
+
+      // If upstream returned an HTTP error (e.g. 400 or 500), forward status and error body directly
+      if (upstreamRes.statusCode >= 400) {
+        let errBody = "";
+        const expectedLen = parseInt(upstreamRes.headers["content-length"] || "0", 10);
+        function emitError() {
+          if (hasDone) return;
+          hasDone = true;
+          if (pingInterval) clearInterval(pingInterval);
+          if (!res.headersSent) {
+            res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+            res.end(errBody);
+          } else {
+            // Mid-stream error: emit explicit SSE error event and end
+            res.end(`event: error\ndata: ${errBody}\n\n`);
+          }
+          upstreamReq.destroy();
+        }
+        upstreamRes.on("data", (c) => {
+          errBody += c.toString("utf8");
+          if (expectedLen > 0 && Buffer.byteLength(errBody, "utf8") >= expectedLen) {
+            emitError();
+          }
+        });
+        upstreamRes.on("end", emitError);
         return;
       }
 
@@ -135,48 +142,6 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
             res.write(": keep-alive\n\n");
           } catch {}
         }, 5000);
-      }
-
-      // If upstream returned an HTTP error (e.g. 400 or 500), intercept and convert to a clean SSE chunk
-      if (upstreamRes.statusCode >= 400) {
-        let errBody = "";
-        const expectedLen = parseInt(upstreamRes.headers["content-length"] || "0", 10);
-        function emitError() {
-          if (hasDone) return;
-          hasDone = true;
-          if (pingInterval) clearInterval(pingInterval);
-          let errMsg = `HTTP ${upstreamRes.statusCode}`;
-          try {
-            const parsed = JSON.parse(errBody);
-            errMsg = parsed.error?.message || parsed.message || errBody;
-          } catch {
-            errMsg = errBody || errMsg;
-          }
-          const safeChunk = {
-            id: "chatcmpl-stream-err",
-            object: "chat.completion.chunk",
-            created: Math.floor(Date.now() / 1000),
-            model: "qwen3.8-27b",
-            choices: [
-              {
-                index: 0,
-                delta: { content: `\n\n[vLLM Error: ${errMsg}]\n\n` },
-                finish_reason: "stop",
-              },
-            ],
-          };
-          res.write(`data: ${JSON.stringify(safeChunk)}\n\ndata: [DONE]\n\n`);
-          res.end();
-          upstreamReq.destroy();
-        }
-        upstreamRes.on("data", (c) => {
-          errBody += c.toString("utf8");
-          if (expectedLen > 0 && Buffer.byteLength(errBody, "utf8") >= expectedLen) {
-            emitError();
-          }
-        });
-        upstreamRes.on("end", emitError);
-        return;
       }
 
       const decoder = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
@@ -215,22 +180,11 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
                 const parsed = JSON.parse(jsonPayload);
                 if (parsed.error && !parsed.choices) {
                   const errMsg = parsed.error.message || JSON.stringify(parsed.error);
-                  const safeChunk = {
-                    id: "chatcmpl-stream-err",
-                    object: "chat.completion.chunk",
-                    created: Math.floor(Date.now() / 1000),
-                    model: "qwen3.8-27b",
-                    choices: [
-                      {
-                        index: 0,
-                        delta: { content: `\n\n[vLLM Mid-Stream Warning: ${errMsg}]\n\n` },
-                        finish_reason: "stop",
-                      },
-                    ],
-                  };
-                  res.write(`data: ${JSON.stringify(safeChunk)}\n\ndata: [DONE]\n\n`);
+                  if (pingInterval) clearInterval(pingInterval);
                   hasDone = true;
-                  continue;
+                  res.end(`event: error\ndata: ${JSON.stringify(parsed)}\n\n`);
+                  upstreamReq.destroy();
+                  return;
                 }
 
                 // Check for degenerate runaway repetition in token deltas (content or reasoning).
@@ -288,10 +242,6 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
             hasDone = true;
           }
         }
-        if (!hasDone) {
-          res.write("data: [DONE]\n\n");
-          hasDone = true;
-        }
         res.end();
       });
 
@@ -300,24 +250,11 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
         if (pingInterval) clearInterval(pingInterval);
         try {
           if (!hasDone) {
-            const errMsg = err ? (err.message || String(err)) : "upstream stream error";
-            const safeChunk = {
-              id: "chatcmpl-stream-err",
-              object: "chat.completion.chunk",
-              created: Math.floor(Date.now() / 1000),
-              model: "qwen3.8-27b",
-              choices: [
-                {
-                  index: 0,
-                  delta: { content: `\n\n[vLLM Upstream Stream Interrupted: ${errMsg}]\n\n` },
-                  finish_reason: "stop",
-                },
-              ],
-            };
-            res.write(`data: ${JSON.stringify(safeChunk)}\n\ndata: [DONE]\n\n`);
             hasDone = true;
+            res.end(`event: error\ndata: ${JSON.stringify({ error: { message: errMsg, type: "upstream_error" } })}\n\n`);
+          } else {
+            res.end();
           }
-          res.end();
         } catch {}
       });
 
@@ -337,22 +274,11 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
     if (isStreamRequest) lifecycle.log(`connect-error(${err ? err.message : "unknown"})`);
     if (pingInterval) clearInterval(pingInterval);
     if (!res.headersSent) {
-      if (isStreamRequest) {
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache, no-transform",
-          connection: "keep-alive",
-        });
-        res.write(`data: {"id":"chatcmpl-err","object":"chat.completion.chunk","created":${Math.floor(Date.now()/1000)},"model":"qwen3.8-27b","choices":[{"index":0,"delta":{"content":"\\n\\n[vLLM Connection Error: ${err.message}]\\n\\n"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`);
-        res.end();
-      } else {
-        res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "vLLM upstream connection error", details: err.message }));
-      }
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: `vLLM upstream connection error: ${err.message}`, type: "upstream_connection_error" } }));
     } else {
       try {
-        res.write(`data: {"id":"chatcmpl-err","object":"chat.completion.chunk","created":${Math.floor(Date.now()/1000)},"model":"qwen3.8-27b","choices":[{"index":0,"delta":{"content":"\\n\\n[vLLM Upstream Connection Error: ${err.message}]\\n\\n"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`);
-        res.end();
+        res.end(`event: error\ndata: ${JSON.stringify({ error: { message: err.message, type: "upstream_connection_error" } })}\n\n`);
       } catch {}
     }
   });
@@ -371,6 +297,7 @@ const server = http.createServer((req, res) => {
     return res.end(
       JSON.stringify({
         status: "ok",
+        service: "mcp-qwen-stream-proxy",
         upstream_port: UPSTREAM_PORT,
         proxy_port: PROXY_PORT,
         pid: process.pid,
@@ -381,8 +308,32 @@ const server = http.createServer((req, res) => {
   // Deep sanitize incoming chat completions requests to guard against multimodal image crashes
   if (req.method === "POST" && req.url.startsWith("/v1/chat/completions")) {
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
+    let byteCount = 0;
+    const MAX_BODY_BYTES = 50 * 1024 * 1024; // 50MB
+    let exceeded = false;
+
+    req.on("data", (chunk) => {
+      if (exceeded) return;
+      byteCount += chunk.length;
+      if (byteCount > MAX_BODY_BYTES) {
+        exceeded = true;
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: `Payload Too Large: request body exceeded ${MAX_BODY_BYTES} bytes limit.`,
+              type: "payload_too_large",
+              code: 413,
+            },
+          })
+        );
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
+      if (exceeded) return;
       const rawBody = Buffer.concat(chunks);
       try {
         const bodyStr = rawBody.toString("utf8");

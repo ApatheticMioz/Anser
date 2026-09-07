@@ -209,13 +209,25 @@ async function vectorE() {
   );
   assert.strictEqual(withEffort.hasKwargs, true, "e: chat_template_kwargs present when set");
 
+  const withHigh = runChildProbe({ QWEN_REASONING_EFFORT: "high" });
+  assert.strictEqual(
+    withHigh.effort,
+    "high",
+    "e: QWEN_REASONING_EFFORT=high forwarded as chat_template_kwargs.reasoning_effort"
+  );
+
   const without = runChildProbe({ QWEN_REASONING_EFFORT: "" });
   assert.strictEqual(
     without.hasKwargs,
-    false,
-    "e: no chat_template_kwargs key when env unset"
+    true,
+    "e: chat_template_kwargs present by default"
   );
-  console.log("  [PASS] (e) reasoning-effort passthrough (set -> forwarded, unset -> absent)");
+  assert.strictEqual(
+    without.effort,
+    "xhigh",
+    "e: reasoning_effort defaults to xhigh when unset"
+  );
+  console.log("  [PASS] (e) reasoning-effort passthrough (default -> xhigh, override -> forwarded)");
 }
 
 // ---------------------------------------------------------------------------
