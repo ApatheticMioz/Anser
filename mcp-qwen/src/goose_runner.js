@@ -27,6 +27,42 @@ import { EvoLineageEngine } from "./evo_engine.js";
 import { AnserRunner } from "./harness/runner.js";
 import { injectSkills } from "./skills.js";
 
+/**
+ * Pure predicate: does a runner status represent a successful task completion?
+ *
+ * The Anser runner reports an honest status taxonomy. A task is a SUCCESS when
+ * the model produced a complete deliverable:
+ *   - "completed"         — clean stop, never exhausted the continuation budget.
+ *   - "completed_ceiling" — the model hit the token ceiling the maximum number
+ *                           of times (continuation budget exhausted) but still
+ *                           produced a complete, non-empty deliverable. This is
+ *                           a SUCCESS, not a failure: the work is done, it just
+ *                           ran out of room.
+ *
+ * Every other status is a FAILURE (isError = true):
+ *   - "failed"                    — the runner's outer catch (a real upstream
+ *                                   error thrown by the provider, a tool crash,
+ *                                   or an aborted fetch).
+ *   - "engine_empty_response"     — the engine kept returning empty generations.
+ *   - "reasoning_budget_exhausted"— the model burned the whole budget on
+ *                                   thinking and emitted no visible content.
+ *   - "length_limit_reached"      — the model hit the ceiling and produced no
+ *                                   usable content.
+ *   - "turn_limit_reached"        — the maxTurns cap was hit.
+ *   - "aborted"                   — the client cancelled the run.
+ *   - unknown / null / undefined  — fail closed: treat as an error.
+ *
+ * This is the single source of truth for the status -> isError mapping used by
+ * the task-completion path in startGooseTask. It is a pure function so it can
+ * be unit-tested offline without spawning a live engine.
+ *
+ * @param {string|undefined|null} status
+ * @returns {boolean}
+ */
+export function isSuccessStatus(status) {
+  return status === "completed" || status === "completed_ceiling";
+}
+
 export function resolveSessionId(cwd, requestedSessionId) {
   if (requestedSessionId && requestedSessionId.trim()) {
     return requestedSessionId.trim();
@@ -209,7 +245,7 @@ export function startGooseTask({
           } catch {}
         }
 
-        const isSuccess = runResult.status === "completed";
+        const isSuccess = isSuccessStatus(runResult.status);
         taskEntry.done = true;
         taskEntry.finishedAt = Date.now();
         taskEntry.status = runResult.status;

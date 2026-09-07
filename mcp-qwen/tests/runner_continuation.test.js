@@ -147,38 +147,70 @@ async function vectorA() {
 }
 
 // ---------------------------------------------------------------------------
-// Vector (b): "length" ALWAYS -> terminates at the continuation cap.
+// Vector (b): "length" ALWAYS -> terminates at the continuation cap with an
+// HONEST terminal status, in both variants:
+//   (b1) every turn emits non-empty usable content -> "completed_ceiling"
+//        (a complete deliverable that merely ran out of room — a SUCCESS);
+//   (b2) every turn emits NO content and no reasoning -> "length_limit_reached"
+//        (the ceiling was hit with nothing usable produced — a FAILURE).
 // ---------------------------------------------------------------------------
 async function vectorB() {
-  const llm = makeMockLlm([
+  // (b1) non-empty content every turn.
+  const llm1 = makeMockLlm([
     { content: "truncated...", finishReason: "length" },
   ]); // always returns the same "length" turn
-  const logger = makeMockLogger();
-  const runner = new AnserRunner({ llm, logger });
+  const logger1 = makeMockLogger();
+  const runner1 = new AnserRunner({ llm: llm1, logger: logger1 });
 
-  const res = await runner.run({
+  const res1 = await runner1.run({
     prompt: "Keep going forever.",
-    sessionId: "test_b",
+    sessionId: "test_b1",
     maxTurns: 1000, // high so the cap, not maxTurns, governs
   });
 
   assert.strictEqual(
-    res.status,
-    "length_limit_reached",
-    "b: status should be length_limit_reached"
+    res1.status,
+    "completed_ceiling",
+    "b1: always-length with non-empty content must be completed_ceiling (success), NOT length_limit_reached"
   );
   assert.strictEqual(
-    countType(logger, "continuation_injected"),
+    countType(logger1, "continuation_injected"),
     MAX_CONTINUATION_TURNS,
-    "b: exactly MAX_CONTINUATION_TURNS continuations injected"
+    "b1: exactly MAX_CONTINUATION_TURNS continuations injected"
   );
   // Bounded: turns = cap + 1 (the final turn that hits the cap and breaks).
   assert.ok(
-    res.turnsTaken <= MAX_CONTINUATION_TURNS + 1,
-    "b: turn count must be bounded by the continuation cap"
+    res1.turnsTaken <= MAX_CONTINUATION_TURNS + 1,
+    "b1: turn count must be bounded by the continuation cap"
+  );
+  assert.ok(
+    res1.finalText.trim() !== "",
+    "b1: the deliverable content is preserved"
   );
   console.log(
-    `  [PASS] (b) always-length -> length_limit_reached at cap (${res.turnsTaken} turns, ${MAX_CONTINUATION_TURNS} continuations)`
+    `  [PASS] (b1) always-length non-empty -> completed_ceiling at cap (${res1.turnsTaken} turns, ${MAX_CONTINUATION_TURNS} continuations)`
+  );
+
+  // (b2) empty content, no reasoning, every turn — the pure failure path.
+  const llm2 = makeMockLlm([
+    { content: "", toolCalls: [], finishReason: "length", hadReasoning: false },
+  ]);
+  const logger2 = makeMockLogger();
+  const runner2 = new AnserRunner({ llm: llm2, logger: logger2 });
+
+  const res2 = await runner2.run({
+    prompt: "Keep going forever (empty).",
+    sessionId: "test_b2",
+    maxTurns: 1000,
+  });
+
+  assert.strictEqual(
+    res2.status,
+    "length_limit_reached",
+    "b2: always-length with NO content and NO reasoning must stay length_limit_reached (honest failure)"
+  );
+  console.log(
+    `  [PASS] (b2) always-length empty (no reasoning) -> length_limit_reached (${res2.turnsTaken} turns)`
   );
 }
 
@@ -486,12 +518,30 @@ async function vectorI() {
 }
 
 // ---------------------------------------------------------------------------
-// Vector (j): Honest failure status - [vLLM Error: ...] does not mask as completed.
+// Vector (j): The model QUOTES a legacy vLLM error marker in its prose.
+//
+// The old runner text-matched the model's OUTPUT for "[vLLM Error:" /
+// "[vLLM upstream error:" / "[vLLM Mid-Stream Error:" and forced status to
+// "failed". That was the F4 false-failure defect: real upstream errors are
+// emitted by stream_proxy as `event: error` SSE frames which provider_vllm
+// THROWS on (landing in the runner's outer catch, which already sets
+// status="failed" and overwrites finalText with a diagnostic). So the
+// text-match detected NOTHING real and only false-positived when the model
+// legitimately quoted the marker in prose (e.g. documenting an issue).
+//
+// The text-match is now DELETED. A clean "stop" turn whose content merely
+// CONTAINS the literal marker string must yield "completed", NOT "failed".
 // ---------------------------------------------------------------------------
 async function vectorJ() {
   const llm = makeMockLlm([
     {
-      content: "\n\n[vLLM Error: This model's maximum context length is 245760 tokens.]\n\n",
+      // The model is documenting issue #2 and QUOTES the legacy marker in
+      // prose. This is a clean "stop" turn with real content.
+      content:
+        "Root cause of issue #2: the stream proxy emits `event: error` frames. " +
+        "The legacy text-match looked for the string [vLLM Error: in the model's " +
+        "output, but that only false-positives when the model quotes it, as here. " +
+        "Real errors are thrown by the provider and land in the outer catch.",
       finishReason: "stop",
     },
   ]);
@@ -499,13 +549,23 @@ async function vectorJ() {
   const runner = new AnserRunner({ llm, logger });
 
   const res = await runner.run({
-    prompt: "Prompt that triggered error.",
+    prompt: "Document issue #2.",
     sessionId: "test_j",
     maxTurns: 5,
   });
 
-  assert.strictEqual(res.status, "failed", "j: status must be 'failed', NOT 'completed'");
-  console.log("  [PASS] (j) vLLM error string in finalText -> honest status 'failed'");
+  // The quoted marker must NOT force a failure. The clean stop turn completes.
+  assert.strictEqual(
+    res.status,
+    "completed",
+    "j: a clean stop turn that QUOTES the legacy marker must be 'completed', NOT 'failed'"
+  );
+  // The quoted marker is preserved verbatim in the deliverable.
+  assert.ok(
+    res.finalText.includes("[vLLM Error:"),
+    "j: the quoted marker is preserved in finalText"
+  );
+  console.log("  [PASS] (j) quoted [vLLM Error: marker in prose -> 'completed' (no false failure)");
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +594,72 @@ async function vectorK() {
 }
 
 // ---------------------------------------------------------------------------
+// Vector (l): "length" ALWAYS, but every continuation still emits NON-EMPTY
+// content, and the FINAL turn is a clean "stop" with non-empty content, at the
+// continuation cap. The model hit the ceiling the maximum number of times but
+// produced a complete deliverable -> honest status "completed_ceiling" (a
+// SUCCESS), NOT "length_limit_reached" (a failure) and NOT a false "completed".
+//
+// This is the F4 fix: a complete deliverable that merely ran out of room must
+// not be mislabelled as a failure, and a length-truncated run must not end as
+// a plain "completed" with empty output.
+// ---------------------------------------------------------------------------
+async function vectorL() {
+  // The model keeps hitting the token ceiling (finish_reason "length") and each
+  // such turn still emits NON-EMPTY content, until the continuation budget is
+  // exhausted (exactly MAX_CONTINUATION_TURNS continuations injected). The FINAL
+  // turn is a clean "stop" with non-empty content. Because the budget was
+  // exhausted and the deliverable is complete, the honest status is
+  // "completed_ceiling" (a success), NOT "length_limit_reached" (a failure) and
+  // NOT a false "completed".
+  //
+  // With MAX_CONTINUATION_TURNS = 3 the script is: 3 "length" turns (each
+  // non-empty) then 1 "stop" turn (non-empty). The "stop" turn is the one that
+  // triggers the break, via the clean-stop branch (continuationsInjected >= cap).
+  const llm = makeMockLlm([
+    { content: "Section one. ", finishReason: "length" },
+    { content: "Section two. ", finishReason: "length" },
+    { content: "Section three. ", finishReason: "length" },
+    { content: "Section four concludes the deliverable.", finishReason: "stop" },
+  ]);
+  const logger = makeMockLogger();
+  const runner = new AnserRunner({ llm, logger });
+
+  const res = await runner.run({
+    prompt: "Write a long four-section report.",
+    sessionId: "test_l",
+    maxTurns: 1000, // high so the continuation cap, not maxTurns, governs
+  });
+
+  // The model hit the ceiling the maximum number of times (budget exhausted)
+  // but produced a complete, non-empty deliverable -> completed_ceiling.
+  assert.strictEqual(
+    res.status,
+    "completed_ceiling",
+    "l: status must be 'completed_ceiling' (complete deliverable, ceiling exhausted), NOT 'length_limit_reached'"
+  );
+  // The deliverable is complete and non-empty.
+  assert.ok(
+    res.finalText.trim() !== "",
+    "l: finalText must be non-empty (a complete deliverable)"
+  );
+  assert.ok(
+    res.finalText.includes("Section four concludes the deliverable."),
+    "l: finalText contains the final (stop) content"
+  );
+  // The continuation budget was fully exhausted: exactly MAX_CONTINUATION_TURNS
+  // continuations were injected before the final clean stop.
+  assert.strictEqual(
+    countType(logger, "continuation_injected"),
+    MAX_CONTINUATION_TURNS,
+    "l: exactly MAX_CONTINUATION_TURNS continuations injected"
+  );
+  console.log(
+    `  [PASS] (l) always-length (non-empty) then stop at cap -> 'completed_ceiling' (${res.turnsTaken} turns, ${MAX_CONTINUATION_TURNS} continuations)`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Run all vectors.
 // ---------------------------------------------------------------------------
 async function main() {
@@ -556,6 +682,7 @@ async function main() {
     ["(i)", vectorI],
     ["(j)", vectorJ],
     ["(k)", vectorK],
+    ["(l)", vectorL],
   ];
 
   for (const [label, fn] of vectors) {

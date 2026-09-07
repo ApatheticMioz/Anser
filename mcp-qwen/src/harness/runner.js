@@ -77,7 +77,9 @@ export class AnserRunner {
    * @returns {Promise<{
    *   finalText: string,
    *   turnsTaken: number,
-   *   status: 'completed' | 'aborted' | 'turn_limit_reached',
+   *   status: 'completed' | 'completed_ceiling' | 'aborted' | 'turn_limit_reached'
+    *     | 'failed' | 'engine_empty_response' | 'reasoning_budget_exhausted'
+    *     | 'length_limit_reached',
    *   durationMs: number,
    *   totalCompletionTokens: number,
    *   sessionId: string
@@ -293,9 +295,6 @@ export class AnserRunner {
 
         if (turnResult.content) {
           finalText = turnResult.content;
-          if (finalText.includes("[vLLM Error:") || finalText.includes("[vLLM upstream error:") || finalText.includes("[vLLM Mid-Stream Error:")) {
-            status = "failed";
-          }
         }
 
         // If no tool calls, the model concluded its turn - UNLESS the output
@@ -319,14 +318,33 @@ export class AnserRunner {
               });
               continue;
             }
-            // Continuation budget exhausted: report honest status instead of false "completed".
-            if (hadReasoning && !turnResult.content) {
+            // Continuation budget exhausted: report an honest status instead of a
+            // false "completed". If the model produced a complete deliverable
+            // (non-empty finalText) despite hitting the ceiling, that is
+            // "completed_ceiling" — a successful run that merely ran out of room,
+            // NOT a failure. Only when nothing usable was produced do we fall
+            // through to the honest failure statuses.
+            if (finalText.trim() !== "") {
+              status = "completed_ceiling";
+            } else if (hadReasoning) {
               status = "reasoning_budget_exhausted";
               finalText = "ReasoningBudgetExhaustedError: The model exhausted the continuation reasoning budget without emitting visible actions or content.";
             } else {
               status = "length_limit_reached";
             }
             break;
+          }
+          // The model concluded its turn with a clean "stop" (or other non-length
+          // finish reason). If it had to hit the token ceiling the maximum number
+          // of times (continuation budget at the cap) before finally completing,
+          // that is "completed_ceiling" — a complete deliverable that only finished
+          // after exhausting the continuation budget. A clean "stop" that never
+          // exhausted the continuation budget is a plain "completed".
+          if (
+            continuationsInjected >= MAX_CONTINUATION_TURNS &&
+            finalText.trim() !== ""
+          ) {
+            status = "completed_ceiling";
           }
           break;
         }
