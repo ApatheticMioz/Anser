@@ -29,7 +29,9 @@ export class EvoOperator {
     this.shell = options.shell;
     this.snapshotsDir = path.join(this.workspaceRoot, ".evo", "snapshots");
 
-    this.dag = new LineageDag({ workspaceRoot: this.workspaceRoot });
+    // FX4 (D4): share the per-workspace singleton DAG with EvoLineageEngine so
+    // both writers merge into one graph instead of clobbering each other.
+    this.dag = LineageDag.forWorkspace(this.workspaceRoot);
     this.evaluator = new ClosedLoopEvaluator({ shell: this.shell });
     this.watchdog = new EvoWatchdog(options.watchdogOptions || {});
 

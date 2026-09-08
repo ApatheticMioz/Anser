@@ -6,16 +6,34 @@ import { LineageDag } from "./harness/evo/lineage_dag.js";
 const execFileAsync = promisify(execFile);
 
 /**
+ * D1: honest status mapping for the legacy `state` view. Never fabricates a
+ * failure: only a genuinely rejected candidate is FAILED; neutral/pending/
+ * unknown map to their honest names.
+ */
+function mapStatusToLegacy(status) {
+  const s = typeof status === "string" ? status.trim().toLowerCase() : "";
+  if (s === "accepted") return "ACCEPTED";
+  if (s === "rejected") return "FAILED";
+  if (s === "pending") return "PENDING";
+  if (s === "neutral") return "NEUTRAL";
+  return "UNKNOWN";
+}
+
+/**
  * Evo Lineage Engine (Aug 2026 SOTA Specification)
  * 
  * Delegates to the unified LineageDag engine to guarantee atomic persistence,
  * single-writer synchronization, and graph-based candidate tracking.
+ *
+ * FX4 (D4): the DAG is a per-workspace SINGLETON (LineageDag.forWorkspace) so
+ * this engine and the EvoOperator share one in-memory graph and one
+ * read-modify-write persist path — no more last-writer-wins clobbering.
  */
 export class EvoLineageEngine {
   constructor(cwd) {
     this.cwd = cwd;
     this.evoDir = path.join(cwd, ".evo");
-    this.dag = new LineageDag({ workspaceRoot: cwd });
+    this.dag = LineageDag.forWorkspace(cwd);
   }
 
   async init() {
@@ -34,7 +52,9 @@ export class EvoLineageEngine {
         hypothesis: n.hypothesis,
         filesModified: n.filesModified,
         metricScore: n.metrics?.fitness ?? n.metrics?.score ?? null,
-        status: n.metrics?.status === "accepted" ? "ACCEPTED" : "FAILED",
+        // D1: honest status — never fabricate a failure for a neutral/pending/
+        // unknown candidate.
+        status: mapStatusToLegacy(n.metrics?.status),
         timestamp: n.timestamp,
         errorLog: n.metrics?.errorLog ?? null,
       }));
@@ -50,12 +70,18 @@ export class EvoLineageEngine {
     };
   }
 
+  /**
+   * D2: returns the current git commit SHA, or null when it genuinely cannot
+   * be determined (no git repo, git unavailable, or a non-zero exit). Callers
+   * must treat null as "unknown" — never as a fabricated commit hash.
+   */
   async getCurrentCommit() {
     try {
       const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: this.cwd });
-      return stdout.trim();
+      const sha = stdout.trim();
+      return sha || null;
     } catch {
-      return "uncommitted_init";
+      return null;
     }
   }
 
@@ -133,6 +159,9 @@ export class EvoLineageEngine {
     const passed =
       exitCode !== undefined ? exitCode === 0 : callerStatus !== "FAILED";
     const candidateId = `cand_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    // D2: getCurrentCommit() returns null when the commit is genuinely unknown
+    // (no repo / git unavailable). Record that as an honest null parentage —
+    // never a fabricated commit hash.
     const currentCommit = await this.getCurrentCommit();
 
     const best = this.dag.getBestCandidate();
