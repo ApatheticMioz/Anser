@@ -22,7 +22,7 @@ import {
   readWedgeCounter,
   setHealGatekeeper,
 } from "./server_lifecycle.js";
-import { listGooseSlots } from "./semaphore.js";
+import { listGooseSlots, releaseGooseSlot } from "./semaphore.js";
 import {
   tasks,
   listTasksFromDisk,
@@ -296,10 +296,18 @@ export function registerTools(server) {
       }
 
       if (action === "status") {
+        // FX3-A (F2): compute elapsed seconds ONCE before the branch dispatch.
+        // The DONE branch previously used a camelCase `elapsedS` while the
+        // QUEUED/EXECUTING branches referenced an undeclared snake_case
+        // `elapsed_s` -> ReferenceError for any non-done task. A not-done task
+        // has finishedAt=null, so this resolves to now - (startedAt ||
+        // createdAt): queued -> now - createdAt (time waiting), executing ->
+        // now - startedAt (time running). The DONE branch keeps the identical
+        // formula and value.
+        const elapsedS = Math.round(
+          ((task.finishedAt || Date.now()) - (task.startedAt || task.createdAt)) / 1000
+        );
         if (task.done) {
-          const elapsedS = Math.round(
-            ((task.finishedAt || Date.now()) - (task.startedAt || task.createdAt)) / 1000
-          );
           const header = `[qwen task] id=${task.id} status=${task.status} elapsed_s=${elapsedS} isError=${task.isError}`;
           return {
             content: [{ type: "text", text: `${header}\n${task.result?.text || "Task completed."}` }],
@@ -315,7 +323,7 @@ export function registerTools(server) {
             content: [
               {
                 type: "text",
-                text: `Task \`${task_id}\` is QUEUED for a global goose slot (${elapsed_s}s waiting; MAX_CONCURRENT_GOOSE=${MAX_CONCURRENT_GOOSE} machine-wide).${heldBy}${hint}`,
+                text: `Task \`${task_id}\` is QUEUED for a global goose slot (${elapsedS}s waiting; MAX_CONCURRENT_GOOSE=${MAX_CONCURRENT_GOOSE} machine-wide).${heldBy}${hint}`,
               },
             ],
             isError: false,
@@ -325,7 +333,7 @@ export function registerTools(server) {
           content: [
             {
               type: "text",
-              text: `Task \`${task_id}\` is actively EXECUTING (${elapsed_s}s elapsed, ${task.toolCallsCount || 0} tool calls made).${hint}`,
+              text: `Task \`${task_id}\` is actively EXECUTING (${elapsedS}s elapsed, ${task.toolCallsCount || 0} tool calls made).${hint}`,
             },
           ],
           isError: false,
@@ -349,6 +357,14 @@ export function registerTools(server) {
             try {
               memTask.abortController.abort();
             } catch {}
+          }
+          // FX5-A (D6): release the goose slot immediately. For a wedged
+          // task the runner's finally never fires (the fn never returns), so
+          // the slot must be freed here. releaseGooseSlot is idempotent — a
+          // cancel landing after natural completion is a no-op.
+          if (memTask.slot) {
+            releaseGooseSlot(memTask.slot);
+            memTask.slot = null;
           }
           memTask.status = "cancelled";
           memTask.done = true;
@@ -558,23 +574,36 @@ export function registerTools(server) {
           };
         }
         await cancelAllTasks("server stopped by user");
-        await stopServer();
+        // FX5-B (D7): report the HONEST stop result. stopServer() now returns
+        // {stopped:false, reason:"engine_still_responding"} when the engine
+        // survives the grace window, so we surface that instead of fabricating
+        // a "stopped" success.
+        const stopRes = await stopServer();
         resetEngineHealthCache();
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify(
-                {
-                  status: "stopped",
-                  message: "vLLM server stopped and all active/queued tasks cancelled.",
-                  forced: !!force,
-                },
+                stopRes.stopped
+                  ? {
+                      status: "stopped",
+                      message: "vLLM server stopped and all active/queued tasks cancelled.",
+                      forced: !!force,
+                    }
+                  : {
+                      status: "stop_failed",
+                      message:
+                        "All active/queued tasks were cancelled, but the vLLM engine is still responding after the stop grace window.",
+                      reason: stopRes.reason,
+                      forced: !!force,
+                    },
                 null,
                 2
               ),
             },
           ],
+          isError: !stopRes.stopped,
         };
       }
       } catch (err) {

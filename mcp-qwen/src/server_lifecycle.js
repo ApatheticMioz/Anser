@@ -637,12 +637,22 @@ export async function ensureServerRunning() {
 
 export async function stopServer() {
   await wslRun(`cd ~/qwen-serving && bash launchers/stop_server.sh 2>/dev/null || true`);
+  let mode = null;
   for (let i = 0; i < 10; i++) {
     await new Promise((r) => setTimeout(r, 500));
-    const mode = await currentMode();
+    mode = await currentMode();
     if (!mode) return { stopped: true };
   }
-  return { stopped: true };
+  // FX5-B (D7): the 5s grace window elapsed but the engine STILL responds.
+  // This is a real failure, not a success — report it honestly instead of
+  // fabricating {stopped:true}. The probe is the same currentMode() the loop
+  // already uses (a /models fetch against the engine port), so this is a
+  // genuine liveness check, not a guess.
+  return {
+    stopped: false,
+    reason: "engine_still_responding",
+    mode,
+  };
 }
 
 let metricsCache = { at: 0, data: null };

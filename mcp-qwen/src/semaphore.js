@@ -106,16 +106,41 @@ export async function acquireGooseSlot(taskEntry) {
 
 /**
  * Releases a held goose slot lease.
+ *
+ * FX5-A (D6): this is now IDEMPOTENT and returns a distinguishable result
+ * instead of throwing, so a cancel that lands after natural completion (or a
+ * double-release from runQueued's finally AND a cancel path) is a harmless
+ * no-op. The atomic-heartbeat design (O_EXCL claim, heartbeat refresh,
+ * ownership-guarded unlink) is untouched.
+ *
+ * @returns {{released: boolean, reason?: string}}
+ *   - {released:true}  we freed a lease we owned (or a dead/unreadable one).
+ *   - {released:false, reason:"no_slot"}         no handle passed in.
+ *   - {released:false, reason:"already_released"} this handle was already
+ *     released (idempotent no-op).
+ *   - {released:false, reason:"not_ours"}        another LIVE instance owns
+ *     the lease; we never delete it (P15 multi-instance invariant).
+ *   - {released:false, reason:"release_failed"} the unlink threw; the handle
+ *     is NOT marked released so a later call may retry.
  */
 export function releaseGooseSlot(slot) {
-  if (!slot) return;
+  if (!slot) return { released: false, reason: "no_slot" };
+  if (slot.released) return { released: false, reason: "already_released" };
   clearInterval(slot.refresh);
   try {
     const cur = readLease(slot.file);
     if (!cur || cur.pid === process.pid || !pidAlive(cur.pid)) {
       fs.rmSync(slot.file, { force: true });
+      slot.released = true;
+      return { released: true };
     }
-  } catch {}
+    // Another LIVE instance owns this lease — never delete it (P15).
+    slot.released = true;
+    return { released: false, reason: "not_ours" };
+  } catch {
+    // Do NOT mark released on failure so a later call can retry the unlink.
+    return { released: false, reason: "release_failed" };
+  }
 }
 
 /**
@@ -167,8 +192,14 @@ export async function runQueued(fn, taskEntry, onStart) {
       }
     );
   }
+  // FX5-A (D6): record the live slot handle on the task entry so a cancel
+  // path (tools.js `cancel`, the HTTP /task/:id/cancel, or cancelAllTasks)
+  // can release the slot immediately instead of waiting for natural
+  // completion. Cleared in the finally below once the slot is released.
+  if (taskEntry) taskEntry.slot = slot;
   if (taskEntry?.done || taskEntry?.status === "cancelled") {
     releaseGooseSlot(slot);
+    if (taskEntry) taskEntry.slot = null;
     return (
       taskEntry?.result ?? {
         isError: true,
@@ -187,5 +218,6 @@ export async function runQueued(fn, taskEntry, onStart) {
     return await fn();
   } finally {
     releaseGooseSlot(slot);
+    if (taskEntry) taskEntry.slot = null;
   }
 }

@@ -8,7 +8,12 @@ import {
   DEFAULT_TIMEOUT_MS,
   INACTIVITY_TIMEOUT_MS,
 } from "./config.js";
-import { pidAlive, listGooseSlots, clearReclaimableGooseSlots } from "./semaphore.js";
+import {
+  pidAlive,
+  listGooseSlots,
+  clearReclaimableGooseSlots,
+  releaseGooseSlot,
+} from "./semaphore.js";
 import { killProcessTree, killGooseSessionSync } from "./wsl_bridge.js";
 
 try {
@@ -182,6 +187,13 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
           task.abortController.abort();
         } catch {}
         task.abortController = null;
+      }
+      // FX5-A (D6): release the task's goose slot immediately on cancel.
+      // releaseGooseSlot is idempotent, so a cancel landing after natural
+      // completion (slot already freed by runQueued's finally) is a no-op.
+      if (task.slot) {
+        releaseGooseSlot(task.slot);
+        task.slot = null;
       }
       task.status = "cancelled";
       task.done = true;
@@ -421,6 +433,12 @@ export const statusHttpServer = http.createServer((req, res) => {
             task.abortController.abort();
           } catch {}
         }
+        // FX5-A (D6): release the task's goose slot immediately on cancel
+        // (idempotent — a cancel after natural completion is a no-op).
+        if (task.slot) {
+          releaseGooseSlot(task.slot);
+          task.slot = null;
+        }
         task.status = "cancelled";
         task.done = true;
         task.isError = true;
@@ -482,6 +500,211 @@ statusHttpServer.on("error", (err) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// FX3-B (F1) — status-server keeper re-election
+// ---------------------------------------------------------------------------
+//
+// The status server is a single machine-wide coordinator on STATUS_PORT.
+// Exactly one process (the "keeper") owns the port; every other process is a
+// "follower". At boot, initStatusServer() does a ONE-SHOT listen: the first
+// process to win the port becomes keeper, the rest become followers.
+//
+// The defect (F1): a follower that lost the boot race set statusServerOwned=
+// false FOREVER. If the keeper process later exited, the port went dark
+// permanently while task dispatches kept advertising a wait_command URL on it
+// (live-observed). The fix is a re-election protocol, in the same honest-
+// signal style as the stream proxy's identity verification:
+//
+//   * The /health endpoint already self-identifies:
+//       {"status":"ok","service":"mcp-qwen-status","port":STATUS_PORT}
+//     so a follower can tell OUR service from a foreign one.
+//   * A follower periodically probes /health. If the port is DARK (connection
+//     refused / timeout), the follower attempts to re-listen. If the responder
+//     is OUR identity, it stays a follower. If the responder is a FOREIGN
+//     identity, it stays a follower and reports loudly — it never fights a
+//     foreign process for the port (stream-proxy PortConflictError doctrine).
+//   * The re-listen is a SINGLE atomic listen() call. The OS grants the port
+//     to exactly one process, so with N client processes at most one wins the
+//     election; the losers get EADDRINUSE and remain followers. This is the
+//     thundering-herd guard: no lockfile, no coordination channel — the port
+//     itself is the atomic arbiter.
+//
+//   This is NOT a fallback. A failed re-listen (EADDRINUSE) is an honest
+//   "someone else owns the port" signal, and we keep polling — the election
+//   protocol working as designed. We never fabricate ownership: statusServer-
+//   Owned becomes true ONLY when our own listen() callback fires.
+//
+// The OWNER path is unchanged: initStatusServer() still does the one-shot
+// boot listen, and a process that wins at boot never runs the election.
+
+// The identity our /health endpoint advertises. A responder with this exact
+// service string is a healthy keeper of OUR service; anything else is foreign.
+export const STATUS_SERVICE_IDENTITY = "mcp-qwen-status";
+
+// How often a follower re-probes the port. ~60s keeps the test suite fast
+// (tests inject a shorter interval) while bounding real-world dark-port
+// recovery to a minute.
+const STATUS_ELECTION_INTERVAL_MS = 60_000;
+// Per-probe fetch timeout. A dark port (connection refused) fails fast; this
+// only bounds a half-open / black-holed socket.
+const STATUS_ELECTION_PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Pure election decision. Given the raw /health body (or null when the port
+ * is dark / the probe failed) and whether we currently own the port, decide
+ * what to do. Exported as a pure function so it can be unit-tested without
+ * any socket or timer.
+ *
+ * @param {object|null} healthBody parsed /health JSON, or null when dark.
+ * @param {boolean} owned whether this process currently owns the port.
+ * @returns {"stay"|"takeover"|"foreign"}
+ *   "stay"     = keep the current role (owner, or our live keeper holds it);
+ *   "takeover" = the port is dark — attempt re-listen;
+ *   "foreign"  = a non-Anser process holds the port — never fight it; report
+ *                loudly and stay a follower.
+ */
+export function decideElection(healthBody, owned) {
+  // Owner path: never re-elect. The one-shot boot listen is the owner's
+  // contract; it is left exactly as-is.
+  if (owned) return "stay";
+  // Follower: a dark port (null) means the keeper is gone — take over.
+  if (healthBody === null) return "takeover";
+  // A healthy responder with OUR identity is a live keeper — stay follower.
+  if (healthBody && healthBody.service === STATUS_SERVICE_IDENTITY) return "stay";
+  // A FOREIGN service occupies the port. We never fight a foreign process
+  // for the port (same doctrine as the stream proxy's PortConflictError on
+  // unverified alien listeners): the tick reports it loudly and stays a
+  // follower, re-probing so we can take over the moment the port frees.
+  return "foreign";
+}
+
+/**
+ * Probe the status port's /health endpoint. Returns the parsed JSON body, or
+ * null when the port is dark (connection refused / timeout / non-2xx /
+ * unparseable). Never throws.
+ *
+ * @param {number} [port] defaults to STATUS_PORT.
+ * @param {number} [timeoutMs] defaults to STATUS_ELECTION_PROBE_TIMEOUT_MS.
+ * @returns {Promise<object|null>}
+ */
+export async function probeStatusHealth(port = STATUS_PORT, timeoutMs = STATUS_ELECTION_PROBE_TIMEOUT_MS) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    const body = JSON.parse(text);
+    return body && typeof body === "object" ? body : null;
+  } catch {
+    // Connection refused / timeout / bad JSON: the port is dark for our
+    // purposes. This is a real signal (keeper gone), not an error to swallow.
+    return null;
+  }
+}
+
+/**
+ * Attempt a single atomic re-listen on the status port. Returns true if this
+ * process won the election (became keeper), false if the port is still held
+ * by someone else (EADDRINUSE) or the listen failed for another reason.
+ *
+ * The listen() call is the atomic arbiter: the OS grants the port to exactly
+ * one process, so concurrent callers cannot both win.
+ *
+ * @param {number} [port] defaults to STATUS_PORT.
+ * @returns {Promise<boolean>}
+ */
+export function attemptStatusReListen(port = STATUS_PORT) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let onErr = null;
+    const done = (won) => {
+      if (settled) return;
+      settled = true;
+      if (onErr) statusHttpServer.removeListener("error", onErr);
+      resolve(won);
+    };
+    try {
+      onErr = (err) => {
+        if (err && err.code === "EADDRINUSE") {
+          done(false); // someone else owns it — remain follower
+        } else {
+          // A non-EADDRINUSE error: do not claim ownership. Log it (honest
+          // signal) and stay a follower; the next tick will re-probe.
+          console.error("[status-election] re-listen error:", err);
+          done(false);
+        }
+      };
+      statusHttpServer.once("error", onErr);
+      statusHttpServer.listen(port, "127.0.0.1", () => {
+        statusServerOwned = true; // we won the election — we are keeper
+        done(true);
+      });
+    } catch (err) {
+      if (err && err.code === "EADDRINUSE") {
+        done(false);
+      } else {
+        console.error("[status-election] re-listen threw:", err);
+        done(false);
+      }
+    }
+  });
+}
+
+/**
+ * Start the follower re-election loop. Only meaningful when this process is
+ * a follower (statusServerOwned === false after the boot listen). The timer
+ * is .unref()ed so it never keeps the process alive.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.intervalMs] probe interval (default 60s).
+ * @param {number} [opts.port] status port (default STATUS_PORT).
+ * @returns {NodeJS.Timeout|null} the unref'd interval, or null if we are
+ *   already the owner (nothing to elect).
+ */
+export function startStatusServerElection({
+  intervalMs = STATUS_ELECTION_INTERVAL_MS,
+  port = STATUS_PORT,
+} = {}) {
+  // Owner path: nothing to do. The one-shot boot listen already won.
+  if (statusServerOwned) return null;
+
+  const tick = async () => {
+    // If we became owner some other way (or a prior tick won), stop.
+    if (statusServerOwned) {
+      clearInterval(timer);
+      return;
+    }
+    const body = await probeStatusHealth(port);
+    const verdict = decideElection(body, statusServerOwned);
+    if (verdict === "takeover") {
+      const won = await attemptStatusReListen(port);
+      if (won) {
+        clearInterval(timer); // we are keeper now — stop the election loop
+      }
+      // If we did not win, remain a follower and let the next tick re-probe.
+    } else if (verdict === "foreign") {
+      // Honest, recurring signal (follower-only, unref'd timer): a non-Anser
+      // process holds the status port. We do not fight it; each tick says so
+      // until the situation resolves.
+      console.error(
+        `[status-election] foreign service on 127.0.0.1:${port} (service=${body && body.service}): not ours; staying follower`
+      );
+    }
+  };
+
+  const timer = setInterval(() => {
+    // Fire-and-forget each tick; a slow probe must not block the next.
+    tick().catch((err) => {
+      // A probe/listen failure is a real signal, not a crash. Log it and
+      // keep the election alive on the next tick.
+      console.error("[status-election] tick error:", err);
+    });
+  }, intervalMs);
+  timer.unref(); // never hold the process open
+  return timer;
+}
+
 export function initStatusServer() {
   try {
     statusHttpServer.listen(STATUS_PORT, "127.0.0.1", () => {
@@ -491,6 +714,13 @@ export function initStatusServer() {
     if (err.code === "EADDRINUSE") {
       statusServerOwned = false;
     }
+  }
+  // FX3-B (F1): if the boot listen did NOT win the port (we are a follower),
+  // start the re-election loop so we can take over the status port if the
+  // current keeper later exits. The owner path (statusServerOwned true) is
+  // left exactly as-is — startStatusServerElection returns null for it.
+  if (!statusServerOwned) {
+    startStatusServerElection();
   }
   setInterval(cleanOldTasks, 300_000).unref();
 }
