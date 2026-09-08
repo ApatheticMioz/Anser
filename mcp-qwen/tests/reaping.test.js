@@ -33,7 +33,7 @@ process.env.STREAM_PROXY_PORT = "18999";
 const { ensureStreamProxyRunning, setStreamProxySpawner } = await import(
   "../src/server_lifecycle.js"
 );
-const { killProcessTree, runWslCommand } = await import("../src/wsl_bridge.js");
+const { killProcessTree, runWslCommand, toPosixWslPath } = await import("../src/wsl_bridge.js");
 const { pidAlive } = await import("../src/semaphore.js");
 const { getLiveBridgePids } = await import(
   "../src/harness/services/mcp_bridge.js"
@@ -150,7 +150,7 @@ async function testAnchoredPattern() {
   // Strip CR so the script is clean LF for WSL bash (the test file itself is
   // CRLF on the Windows drive).
   fs.writeFileSync(scriptPath, script.replace(/\r\n/g, "\n"), "utf8");
-  const wslScriptPath = `/mnt/d/LLM_Ecosystem/mcp-qwen/_p10_reaping_script.sh`;
+  const wslScriptPath = toPosixWslPath(scriptPath);
   try {
     const { stdout } = await runWslCommand(`bash ${wslScriptPath}`);
     const killed = /KILLED \d+ :: goose run --name p10test_target( |$)/.test(stdout);

@@ -103,9 +103,9 @@ export const SLOT_POLL_MS = 1_000;
 
 export const QWEN_STATE_DIR = process.env.QWEN_STATE_DIR || (() => {
   if (IS_WINDOWS) return path.join(os.homedir(), ".qwen");
-  const winHomeWsl = winHomeWsl();
-  if (winHomeWsl) {
-    const winUserHomeQwen = path.join(winHomeWsl, ".qwen");
+  const winHomeWslPath = winHomeWsl();
+  if (winHomeWslPath) {
+    const winUserHomeQwen = path.join(winHomeWslPath, ".qwen");
     try {
       if (fs.existsSync(winUserHomeQwen)) return winUserHomeQwen;
     } catch {}

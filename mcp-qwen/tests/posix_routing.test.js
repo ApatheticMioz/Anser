@@ -98,30 +98,36 @@ async function main() {
     });
 
     // (a3) QWEN_POSIX_SHELL override honored.
+    // The override path must be a REAL, probe-passing shell on the current
+    // platform: a Windows Git-Bash path on win32, a POSIX path elsewhere.
+    // (The original hardcoded a Windows path, which does not exist on Linux
+    // and so failed the probe, falling through to the PATH bash.)
     _resetPosixShellCache();
     setPosixShellProbeCandidate(null);
-    await withEnv(
-      { QWEN_POSIX_SHELL: "C:\\Program Files\\Git\\bin\\bash.exe" },
-      () => {
-        const p = posixShell();
-        assertOk(
-          p === "C:\\Program Files\\Git\\bin\\bash.exe",
-          `QWEN_POSIX_SHELL override honored (got: ${p})`
-        );
-      }
-    );
+    const overridePath = IS_WINDOWS
+      ? "C:\\Program Files\\Git\\bin\\bash.exe"
+      : "/usr/bin/bash";
+    await withEnv({ QWEN_POSIX_SHELL: overridePath }, () => {
+      const p = posixShell();
+      assertOk(
+        p === overridePath,
+        `QWEN_POSIX_SHELL override honored (got: ${p})`
+      );
+    });
 
     // (a4) Bogus QWEN_POSIX_SHELL path -> null (probe guards).
     // Inject a failing probe so NO candidate (env, Git Bash, PATH) can pass.
+    // The bogus path is platform-shaped (Windows path on win32, POSIX path
+    // elsewhere) but is guaranteed non-existent on either.
     _resetPosixShellCache();
     setPosixShellProbeCandidate(() => false);
-    await withEnv(
-      { QWEN_POSIX_SHELL: "C:\\bogus\\nonexistent\\bash.exe" },
-      () => {
-        const p = posixShell();
-        assertOk(p === null, `bogus QWEN_POSIX_SHELL path -> null (got: ${p})`);
-      }
-    );
+    const bogusPath = IS_WINDOWS
+      ? "C:\\bogus\\nonexistent\\bash.exe"
+      : "/bogus/nonexistent/bash";
+    await withEnv({ QWEN_POSIX_SHELL: bogusPath }, () => {
+      const p = posixShell();
+      assertOk(p === null, `bogus QWEN_POSIX_SHELL path -> null (got: ${p})`);
+    });
     setPosixShellProbeCandidate(null); // restore real probe
     _resetPosixShellCache();
   }

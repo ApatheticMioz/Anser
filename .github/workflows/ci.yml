@@ -1,0 +1,90 @@
+# ============================================================================
+# Anser — Continuous Integration
+# ============================================================================
+# Cross-platform test gate for the mcp-qwen (Anser) microkernel.
+#
+# Matrix: Node 20 & 22 × ubuntu-latest & windows-latest (4 jobs).
+#
+# NOTE on commands:
+#   There is NO root package.json — the only package.json lives in mcp-qwen/.
+#   So the Lead Architect's proposed `npm test` (at repo root) would fail with
+#   "ENOENT: no package.json". The correct invocations use --prefix mcp-qwen:
+#     - `npm run test --prefix mcp-qwen`      (31 suites, fast fail-fast gate)
+#     - `npm run test:all --prefix mcp-qwen`  (36 suites, full gate / superset)
+#   `test` is a strict subset of `test:all`; we run both so a fast subset
+#   failure is reported before the longer full gate, and the full gate is the
+#   authoritative pass/fail signal.
+#
+# `npm ci` (not `npm install`) is used for deterministic installs from
+# package-lock.json. This is REQUIRED for the platform-specific @ast-grep
+# optional dependencies (napi/cli) to resolve the correct native binary for
+# the runner OS (linux-x64-gnu/musl on Ubuntu, win32-x64-msvc on Windows).
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same ref to keep the queue snappy.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test · Node ${{ matrix.node-version }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      # Don't fail-fast: we want all 4 matrix cells to report independently so
+      # a single platform/Node failure doesn't mask the others.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node-version: [20, 22]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          # The lock file lives in the mcp-qwen/ subdirectory (no root
+          # package.json), so point the cache at that path explicitly.
+          cache-dependency-path: mcp-qwen/package-lock.json
+
+      - name: Install dependencies (npm ci)
+        working-directory: mcp-qwen
+        run: npm ci
+
+      - name: Report environment
+        run: |
+          echo "=============================================="
+          echo " CI environment"
+          echo "   OS:        ${{ runner.os }} (${{ runner.arch }})"
+          echo "   Node:      $(node --version)"
+          echo "   npm:       $(npm --version)"
+          echo "   platform:  $(node -p 'process.platform')"
+          echo "=============================================="
+
+      - name: Run test (31-suite fast gate)
+        working-directory: mcp-qwen
+        run: npm run test
+
+      - name: Run test:all (36-suite full gate)
+        working-directory: mcp-qwen
+        run: npm run test:all
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=============================================="
+          echo " Anser test gate complete on ${{ runner.os }} / Node ${{ matrix.node-version }}"
+          echo "=============================================="

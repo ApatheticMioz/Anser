@@ -1,0 +1,64 @@
+# ============================================================================
+# Feature Request — Anser (The Universal 245K Agent Microkernel for Local LLMs)
+# ============================================================================
+name: "✨ Feature Request"
+description: "Propose a new capability, improvement, or change to the Anser microkernel."
+title: "[Feature] "
+labels: ["enhancement", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an idea! Please describe the **problem** you're
+        trying to solve and the **outcome** you want. The more concrete, the
+        easier it is to scope.
+  - type: checkboxes
+    id: precondition
+    attributes:
+      label: Precondition
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: I am proposing a feature, not reporting a bug.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: What problem does this solve? What is painful or missing today?
+      placeholder: "e.g. There is no way to cap total reasoning tokens across a multi-turn task, so a single runaway turn can hog the engine."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe the solution you'd like. How should it behave?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative approaches you've thought of, and why the proposed one is better.
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope & Impact
+      description: |
+        Which part of Anser does this touch? (e.g. microkernel, MCP server,
+        sandbox, evo lineage, stream proxy, platform/WSL bridge, CI)
+        Is it a breaking change? Does it affect the 245K context budget or
+        the zero-trust sandbox model?
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Context
+      description: Links, prior art, or anything else that helps.
+    validations:
+      required: false

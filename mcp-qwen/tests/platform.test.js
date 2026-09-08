@@ -214,9 +214,15 @@ function assertOk(cond, name) {
   try {
     delete process.env.QWEN_STREAM_PROXY_PATH;
     const p = streamProxyPath();
+    // Portable expectation: derive the expected path the same way the
+    // implementation does (toPosixWslPath of the repo root), so the assertion
+    // holds on ANY checkout location (Windows D:\, WSL /mnt/d, or a Linux CI
+    // runner under /home/runner/work/...). The original hardcoded /mnt/d/...
+    // form only held on this specific machine and broke Linux CI.
+    const expected = `${toPosixWslPath(REPO_ROOT)}/stream_proxy.js`;
     assertOk(
-      p === "/mnt/d/LLM_Ecosystem/mcp-qwen/stream_proxy.js",
-      `streamProxyPath() === /mnt/d/.../stream_proxy.js (got ${p})`
+      p === expected,
+      `streamProxyPath() === ${expected} (got ${p})`
     );
     // Prove it is derived from import.meta.url, not process.cwd(): change cwd
     // and confirm the value is unchanged.

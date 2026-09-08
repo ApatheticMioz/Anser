@@ -1,0 +1,89 @@
+# ============================================================================
+# Bug Report — Anser (The Universal 245K Agent Microkernel for Local LLMs)
+# ============================================================================
+name: "🐛 Bug Report"
+description: "Report a reproducible defect in the Anser microkernel, MCP server, or tooling."
+title: "[Bug] "
+labels: ["bug", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report. Please complete as much of the template
+        as you can — **reproducible steps and the exact error output** are what
+        let us triage fast. If you're unsure whether it's a bug, file it anyway;
+        we'll re-label if needed.
+  - type: checkboxes
+    id: precondition
+    attributes:
+      label: Precondition
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: I am reporting a bug, not a feature request or a question.
+          required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A one- or two-sentence description of the defect.
+      placeholder: "e.g. `apply_patch` throws `GitApplyError` on a patch with CRLF line endings on Windows."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Numbered, minimal steps to reproduce the defect.
+      placeholder: |
+        1. Run `npm run test:all --prefix mcp-qwen`
+        2. Observe the failure in `tests/...`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened. Paste the **exact** error / stack trace.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: |
+        Fill in what you know. The Anser microkernel is cross-platform
+        (Windows host + WSL engine, or native Linux), so this matters a lot.
+      placeholder: |
+        - OS: (e.g. Windows 11 / Ubuntu 22.04 WSL / macOS)
+        - Node: (e.g. v20.x / v22.x)
+        - Anser / mcp-qwen version: (e.g. 5.2.0)
+        - Engine: (e.g. vLLM + Qwen3.8-27B @ 245K)
+        - How you launched: (e.g. `node index.js`, MCP client, etc.)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs / Output
+      description: Any non-sensitive logs. **Redact API keys, tokens, and personal paths before posting.**
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Context
+      description: Anything else that might help (screenshots, related PRs, workarounds you tried).
+    validations:
+      required: false
