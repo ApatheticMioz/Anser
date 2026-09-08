@@ -152,7 +152,7 @@ async function runTests() {
   }
 
   // -------------------------------------------------------------------------
-  // Test 5: CRLF file with LF-only target -> line-ending mismatch error
+  // Test 5: CRLF file with LF-only target -> auto-normalizes & preserves CRLF
   // -------------------------------------------------------------------------
   console.log("\n[Test 5] CRLF file with LF-only target");
   {
@@ -161,20 +161,18 @@ async function runTests() {
     const original = "line one\r\nline two\r\nline three\r\n";
     fs.writeFileSync(file, original, "utf8");
 
-    // Target uses LF only; the file uses CRLF. Exact match fails,
-    // normalized match succeeds -> line-ending mismatch error.
-    const err = await expectError(
-      svc.editFile({
-        path: "crlf.txt",
-        target_content: "line one\nline two",
-        replacement_content: "X",
-      }),
-      "crlf-mismatch",
-      ["LineEndingMismatchError", "CRLF"]
-    );
-    ok(err.message.includes("No write performed") || err.message.includes("No write"), "error states no write");
+    // Target uses LF only; the file uses CRLF. Auto-normalization matches,
+    // applies replacement, and preserves CRLF line endings on disk without error.
+    const res = await svc.editFile({
+      path: "crlf.txt",
+      target_content: "line one\nline two",
+      replacement_content: "line ONE\nline TWO",
+    });
+    ok(res.success === true, "returns success");
+    ok(res.occurrences_replaced === 1, "reports 1 occurrence replaced");
     const after = fs.readFileSync(file, "utf8");
-    ok(after === original, "file bytes unchanged (CRLF preserved)");
+    ok(after === "line ONE\r\nline TWO\r\nline three\r\n", "content updated and CRLF preserved");
+    ok(after.includes("\r\n"), "file still uses CRLF");
   }
 
   // -------------------------------------------------------------------------
@@ -195,6 +193,28 @@ async function runTests() {
     const after = fs.readFileSync(file, "utf8");
     ok(res.success === true, "returns success");
     ok(after === "function a() {\n  return 1;\n}\n\nfunction b() {\n  return 200;\n}\n", "multi-line target replaced exactly once");
+  }
+
+  // -------------------------------------------------------------------------
+  // Test 7: LF file with CRLF target -> auto-normalizes & preserves LF
+  // -------------------------------------------------------------------------
+  console.log("\n[Test 7] LF file with CRLF target");
+  {
+    const svc = makeService();
+    const file = path.join(TEST_DIR, "lf.txt");
+    const original = "alpha\nbeta\ngamma\n";
+    fs.writeFileSync(file, original, "utf8");
+
+    const res = await svc.editFile({
+      path: "lf.txt",
+      target_content: "alpha\r\nbeta",
+      replacement_content: "ALPHA\r\nBETA",
+    });
+    ok(res.success === true, "returns success");
+    ok(res.occurrences_replaced === 1, "reports 1 occurrence replaced");
+    const after = fs.readFileSync(file, "utf8");
+    ok(after === "ALPHA\nBETA\ngamma\n", "content updated and LF preserved");
+    ok(!after.includes("\r\n"), "file still uses LF without CRLF pollution");
   }
 
   // -------------------------------------------------------------------------

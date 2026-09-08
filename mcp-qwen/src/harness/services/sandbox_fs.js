@@ -10,7 +10,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { IS_WINDOWS } from "../../config.js";
 import { normalizeWorkspacePath, toWindowsPath, toPosixWslPath, canonicalizePath } from "../../wsl_bridge.js";
@@ -186,14 +186,15 @@ export class SandboxFsService {
   }
 
   /**
-   * Performs an exact text replacement in a file.
+   * Performs an exact or line-ending-normalized text replacement in a file.
    *
    * Guard rules:
    * - 0 occurrences: explicit "target not found" error (no write).
    * - 1 occurrence: proceed with replacement.
    * - >1 occurrences without replace_all: refuse with count (no write).
    * - >1 occurrences with replace_all: replace all.
-   * - 0 exact but CRLF-normalized match: explicit line-ending mismatch error (no write).
+   * - Line-ending auto-normalization: adapts transparently between LF and CRLF,
+   *   preserving the target file's existing line-ending style.
    */
   async editFile({ path: filePath, target_content, replacement_content, replace_all = false }) {
     if (!target_content || typeof target_content !== "string" || target_content.length === 0) {
@@ -204,25 +205,28 @@ export class SandboxFsService {
       throw new Error(`File not found for edit: ${filePath}`);
     }
     const original = fs.readFileSync(resolved, "utf8");
-    const occurrences = original.split(target_content).length - 1;
+    const fileUsesCRLF = original.includes("\r\n");
+
+    let effectiveTarget = target_content;
+    let effectiveReplacement = replacement_content;
+    let occurrences = original.split(effectiveTarget).length - 1;
 
     if (occurrences === 0) {
-      // CRLF honesty: check if a match exists when normalizing line endings
-      const normalizedOriginal = original.replace(/\r\n/g, "\n");
-      const normalizedTarget = target_content.replace(/\r\n/g, "\n");
-      if (normalizedOriginal.includes(normalizedTarget)) {
-        // Determine which line-ending style the file uses
-        const fileUsesCRLF = original.includes("\r\n");
-        const targetUsesCRLF = target_content.includes("\r\n");
-        const fileStyle = fileUsesCRLF ? "CRLF (\\r\\n)" : "LF (\\n)";
-        const targetStyle = targetUsesCRLF ? "CRLF (\\r\\n)" : "LF (\\n)";
-        throw new Error(
-          `LineEndingMismatchError: target_content not found with exact match. ` +
-          `The file uses ${fileStyle} line endings but the target uses ${targetStyle}. ` +
-          `No write performed. Provide a target that matches the file's actual line endings.`
-        );
+      // Auto-normalize line endings to match the target file's line ending style
+      const fileTarget = fileUsesCRLF
+        ? target_content.replace(/\r?\n/g, "\r\n")
+        : target_content.replace(/\r\n/g, "\n");
+      const normalizedOccurrences = original.split(fileTarget).length - 1;
+
+      if (normalizedOccurrences > 0) {
+        effectiveTarget = fileTarget;
+        effectiveReplacement = fileUsesCRLF
+          ? replacement_content.replace(/\r?\n/g, "\r\n")
+          : replacement_content.replace(/\r\n/g, "\n");
+        occurrences = normalizedOccurrences;
+      } else {
+        throw new Error(`Target content not found in file: ${filePath}. No write performed.`);
       }
-      throw new Error(`Target content not found in file: ${filePath}. No write performed.`);
     }
 
     if (occurrences > 1 && !replace_all) {
@@ -233,8 +237,8 @@ export class SandboxFsService {
     }
 
     const updated = replace_all
-      ? original.replaceAll(target_content, replacement_content)
-      : original.replace(target_content, replacement_content);
+      ? original.replaceAll(effectiveTarget, effectiveReplacement)
+      : original.replace(effectiveTarget, effectiveReplacement);
 
     fs.writeFileSync(resolved, updated, "utf8");
     return {
@@ -282,13 +286,36 @@ export class SandboxFsService {
   }
 
   /**
+   * Applies a standard unified diff patch using git apply.
+   */
+  async applyPatch({ patch, dirPath = "." }) {
+    if (!patch || typeof patch !== "string" || patch.trim().length === 0) {
+      throw new Error("patch cannot be empty");
+    }
+    const resolved = this.resolvePath(dirPath);
+    try {
+      execFileSync("git", ["apply", "--unidiff-zero", "--whitespace=fix", "-"], {
+        cwd: resolved,
+        input: patch,
+        encoding: "utf8",
+        timeout: 15_000,
+        windowsHide: true,
+      });
+      return { success: true, message: "Patch applied cleanly" };
+    } catch (err) {
+      const msg = err.stderr ? err.stderr.toString().trim() : (err.message || String(err));
+      throw new Error(`GitApplyError: Failed to apply patch: ${msg}`);
+    }
+  }
+
+  /**
    * Fast indexed search using git grep (respecting .gitignore) or fallback file search.
    */
   async searchCode({ query, dirPath = ".", max_results = 50 }) {
     const resolved = this.resolvePath(dirPath);
     try {
-      // Use git grep first (inherently avoids .venv and node_modules)
-      const { stdout } = await execFileAsync("git", ["grep", "-n", "-I", "--max-count", String(max_results), query], {
+      // Use git grep first (inherently avoids .venv and node_modules, includes untracked files)
+      const { stdout } = await execFileAsync("git", ["grep", "-n", "-I", "--untracked", "--max-count", String(max_results), "-e", query], {
         cwd: resolved,
         timeout: 10_000,
       });
@@ -298,7 +325,15 @@ export class SandboxFsService {
         count: lines.length,
         matches: lines.slice(0, max_results),
       };
-    } catch {
+    } catch (err) {
+      // git grep exit code 1 means "no matches found", NOT an execution error
+      if (err && err.code === 1) {
+        return {
+          query,
+          count: 0,
+          matches: [],
+        };
+      }
       // Fallback: search files avoiding ignored directories
       const matches = [];
       const walkSearch = (cur) => {
@@ -317,10 +352,6 @@ export class SandboxFsService {
             walkSearch(full);
           } else if (f.isFile()) {
             // P4i: use statSync for the size check, NOT the dirent's f.size.
-            // Through a junction/reparse point the dirent's size is undefined
-            // (the reparse point's own size, not the target's), which made
-            // `f.size < 500_000` false and silently skipped the file.
-            // statSync follows the reparse point and returns the real size.
             let size = f.size;
             if (size === undefined) {
               try {
@@ -401,6 +432,19 @@ export function sandboxFsPlugin(ctx, options = {}) {
       required: ["path", "target_content", "replacement_content"],
     },
     execute: (args) => fsService.editFile(args),
+  });
+
+  ctx.registerTool("apply_patch", {
+    description: "Apply a standard unified diff patch atomically using git apply (--unidiff-zero)",
+    parameters: {
+      type: "object",
+      properties: {
+        patch: { type: "string", description: "Standard unified diff patch content" },
+        path: { type: "string", description: "Target base directory", default: "." },
+      },
+      required: ["patch"],
+    },
+    execute: (args) => fsService.applyPatch(args),
   });
 
   ctx.registerTool("list_dir", {
