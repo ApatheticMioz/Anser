@@ -14,7 +14,7 @@ const scriptPath = path.resolve(__dirname, "..", "index.js");
 // (QWEN_STATE_DIR) and task_registry.js (writes task JSON / session logs /
 // slot leases under QWEN_STATE_DIR). Redirect the child's state dir to a fresh
 // temp dir so the live MCP server never writes to the production
-// C:\Users\Apath\.qwen state.
+// C:\Users\<user>\.qwen state.
 const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_fifo_state_"));
 const ISOLATED_ENV = {
   ...process.env,

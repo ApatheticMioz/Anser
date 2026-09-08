@@ -20,7 +20,7 @@ import os from "node:os";
 // config.js (QWEN_STATE_DIR) at import time. The live AnserRunner (Test 6)
 // mounts the eventLogger plugin with no explicit baseDir, so it defaults to
 // QWEN_STATE_DIR/sessions — without this redirect it would write session logs
-// into the PRODUCTION C:\Users\Apath\.qwen/sessions state. This is the
+// into the PRODUCTION C:\Users\<user>\.qwen/sessions state. This is the
 // established isolation pattern from tests/shell_hardening.test.js.
 const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_evo_state_"));
 process.env.QWEN_STATE_DIR = TMP_STATE;

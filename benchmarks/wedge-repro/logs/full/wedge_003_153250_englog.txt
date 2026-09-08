@@ -1,27 +1,27 @@
 
-(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "/home/apath/qwen-serving/venv/lib/python3.12/site-packages/torch/_ops.py", line 1279, in __call__
+(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "<user_home>/qwen-serving/venv/lib/python3.12/site-packages/torch/_ops.py", line 1279, in __call__
 
 (EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]     return self._op(*args, **kwargs)
 
 (EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]            ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "/home/apath/qwen-serving/venv/lib/python3.12/site-packages/vllm/model_executor/layers/attention/kv_transfer_utils.py", line 40, in wrapper
+(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "<user_home>/qwen-serving/venv/lib/python3.12/site-packages/vllm/model_executor/layers/attention/kv_transfer_utils.py", line 40, in wrapper
 
 (EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]     return func(*args, **kwargs)
 
 (EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]            ^^^^^^^^^^^^^^^^^^^^^
 
-(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "/home/apath/qwen-serving/venv/lib/python3.12/site-packages/vllm/model_executor/layers/attention/attention.py", line 894, in unified_attention_with_output
+(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "<user_home>/qwen-serving/venv/lib/python3.12/site-packages/vllm/model_executor/layers/attention/attention.py", line 894, in unified_attention_with_output
 
 (EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]     self.impl.forward(
 
-(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "/home/apath/qwen-serving/venv/lib/python3.12/site-packages/vllm/v1/attention/backends/kvarn_attn.py", line 2171, in forward
+(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "<user_home>/qwen-serving/venv/lib/python3.12/site-packages/vllm/v1/attention/backends/kvarn_attn.py", line 2171, in forward
 
 (EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]     attn_out = self._cached_multiquery_path(q, kv_cache, attn_metadata)
 
 (EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "/home/apath/qwen-serving/venv/lib/python3.12/site-packages/vllm/v1/attention/backends/kvarn_attn.py", line 2503, in _cached_multiquery_path
+(EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]   File "<user_home>/qwen-serving/venv/lib/python3.12/site-packages/vllm/v1/attention/backends/kvarn_attn.py", line 2503, in _cached_multiquery_path
 
 (EngineCore pid=454421) ERROR 08-29 15:32:46 [core.py:1351]     if (total_k <= 0 or total_k + group > self._fa_K_buf.shape[0]
 
@@ -32,13 +32,13 @@
 
 (APIServer pid=454303) ERROR 08-29 15:32:46 [async_llm.py:724] Traceback (most recent call last):
 
-(APIServer pid=454303) ERROR 08-29 15:32:46 [async_llm.py:724]   File "/home/apath/qwen-serving/venv/lib/python3.12/site-packages/vllm/v1/engine/async_llm.py", line 680, in output_handler
+(APIServer pid=454303) ERROR 08-29 15:32:46 [async_llm.py:724]   File "<user_home>/qwen-serving/venv/lib/python3.12/site-packages/vllm/v1/engine/async_llm.py", line 680, in output_handler
 
 (APIServer pid=454303) ERROR 08-29 15:32:46 [async_llm.py:724]     outputs = await engine_core.get_output_async()
 
 (APIServer pid=454303) ERROR 08-29 15:32:46 [async_llm.py:724]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(APIServer pid=454303) ERROR 08-29 15:32:46 [async_llm.py:724]   File "/home/apath/qwen-serving/venv/lib/python3.12/site-packages/vllm/v1/engine/core_client.py", line 1101, in get_output_async
+(APIServer pid=454303) ERROR 08-29 15:32:46 [async_llm.py:724]   File "<user_home>/qwen-serving/venv/lib/python3.12/site-packages/vllm/v1/engine/core_client.py", line 1101, in get_output_async
 
 (APIServer pid=454303) ERROR 08-29 15:32:46 [async_llm.py:724]     raise self._format_exception(outputs) from None
 

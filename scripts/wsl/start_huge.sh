@@ -15,7 +15,7 @@ export VLLM_DFLASH2_LOOKUP_ADAPTIVE=0  # A/B tested 2026-08-23: pins verify bloc
 # reads it - the n-gram-chains feature lives in an external repo (upstream issue #38)
 # that was never installed, so the earlier CHAIN=1/CHAIN=0 toggles were both inert.
 # The feature is also documented greedy-only, and our delegated workloads run at
-# temperature 1.0. See mcp-qwen/NOTES.md.)
+# temperature 1.0. See docs/archive/DEVELOPMENT_NOTES_2026.md.)
 # Set MAX_SEQS=1 for single-user pair programming (MAX_CONCURRENT_GOOSE=1).
 # Setting MAX_SEQS=1 eliminates unused multi-stream CUDA graphs and recurrent state
 # reservations, reclaiming ~800+ MiB of non-KV VRAM headroom on the RTX 3090.

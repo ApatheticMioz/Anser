@@ -106,7 +106,6 @@ LLM_Ecosystem/
 │   ├── index.js                    # Server entry point exposing tools via stdio
 │   ├── stream_proxy.js             # Universal SSE streaming proxy on port 18022
 │   ├── package.json                # Dependencies (@modelcontextprotocol/sdk, @ast-grep/napi)
-│   ├── NOTES.md                    # Engineering design notes & investigation history
 │   ├── update_schemas.py           # Synchronizes tool definitions into Antigravity IDE
 │   ├── src/                        # Modular runtime implementation
 │   │   ├── config.js               # Central configuration & timeout constants
@@ -447,7 +446,7 @@ The MCP server exposes the following environment-variable knobs (all defined in 
 |---|---|---|
 | `QWEN_RACE_MS` | `45000` | Synchronous race window (ms) before yielding to the zero-turn long-poll wait. |
 | `QWEN_MAX_CONCURRENT` | `1` | Maximum concurrent execution slots (cross-process semaphore). |
-| `QWEN_STATE_DIR` | `~/.qwen` (or `/mnt/c/Users/Apath/.qwen` on WSL) | Root directory for task state, slot leases, and Evo lineage. |
+| `QWEN_STATE_DIR` | `~/.qwen` (or `/mnt/c/Users/<user>/.qwen` on WSL) | Root directory for task state, slot leases, and Evo lineage. |
 | `QWEN_MIN_TIMEOUT_MS` | `600000` (10 min) | Minimum per-task timeout budget (ms). |
 | `QWEN_INACTIVITY_TIMEOUT_MS` | `1800000` (30 min) | Inactivity timeout: kill task if no tool activity for this duration. |
 | `QWEN_FIRST_TOKEN_TIMEOUT_MS` | `240000` (4 min) | Timeout for first token from vLLM after request dispatch. |
@@ -496,7 +495,7 @@ Detailed design decisions, threat models, and architectural evaluations are inde
 - [Anser Implementation & Progress Ledger](docs/audits/ANSER_PROGRESS.md)
 - [Patchwork Adversarial Security Audit](docs/audits/PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md)
 - [Qwen-Evo Collaborative Peer Audit](docs/audits/QWEN_EVO_AUDIT.md)
-- [Engineering Notes & Delegation History](mcp-qwen/NOTES.md)
+- [Engineering Notes & Delegation History](docs/archive/DEVELOPMENT_NOTES_2026.md)
 
 ---
 

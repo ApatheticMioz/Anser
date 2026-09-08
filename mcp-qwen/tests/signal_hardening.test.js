@@ -16,7 +16,7 @@
  * are redirected to a fresh temp dir BEFORE the dynamic imports of
  * config.js / provider_vllm.js / task_registry.js inside the tests, so
  * task_registry's import-time mkdir(TASK_DIR) and every read target
- * <tmp>/.qwen, never the production C:\Users\Apath\.qwen state. This is the
+ * <tmp>/.qwen, never the production C:\Users\<user>\.qwen state. This is the
  * established isolation pattern from tests/shell_hardening.test.js.
  */
 

@@ -1,6 +1,6 @@
 # mcp-qwen — Design Document
 
-Distilled from the incident ledger in `NOTES.md` (kept raw; this file is the
+Distilled from the incident ledger in `docs/archive/DEVELOPMENT_NOTES_2026.md` (kept raw; this file is the
 "why"). Every claim below cites the module that implements it. Release
 version: tracked solely in `package.json` / git tags.
 
@@ -532,7 +532,7 @@ Detailed audit of the transcripts reveals **6 critical operational friction mode
 
 ## 6. References
 
-- `NOTES.md` — raw incident ledger (historical record)
+- `docs/archive/DEVELOPMENT_NOTES_2026.md` — raw incident ledger (historical record)
 - `README.md` — operational guide and configuration reference
 - `tests/` — executable regression locks (26 test suites)
 - Upstream: `syv-ai/qwen38-27b-rtx3090` (vLLM recipe; issue #48 = the

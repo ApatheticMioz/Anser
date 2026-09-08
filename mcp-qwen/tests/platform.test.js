@@ -285,14 +285,14 @@ function assertOk(cond, name) {
     delete process.env.QWEN_WIN_HOME;
     delete process.env.QWEN_WIN_HOME_WSL;
     _resetWslUserCache();
-    setWslUserProbe(() => "apath");
+    setWslUserProbe(() => "testuser");
     const cands = apiKeyCandidates();
     assertOk(
       cands.some((c) => c.includes("qwen-serving") && c.includes("api_key.txt")),
       "apiKeyCandidates() yields qwen-serving/api_key.txt paths"
     );
     assertOk(
-      cands.every((c) => !c.includes("\\\\home") && !c.includes("home\\\\apath")),
+      cands.every((c) => !c.includes("\\\\home") && !c.includes("home\\\\testuser")),
       "apiKeyCandidates() has no double-backslash home segment"
     );
     setWslUserProbe(null);

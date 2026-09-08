@@ -12,4 +12,4 @@ REM For the non-reasoning variant, use start_noreason.bat instead.
 REM Single-line command deliberately - a prior multi-line ^ continuation
 REM version broke mid-session (cmd.exe treated a later flag as a separate
 REM command once the continuation parsing failed), killing the server.
-"D:\LLM_Ecosystem\llama-cpp\llama-server.exe" -m "\\wsl.localhost\Ubuntu\home\apath\qwen-uncensored\model\Qwen3.8-27B-Uncensored-Q4_K_M.gguf" --mmproj "\\wsl.localhost\Ubuntu\home\apath\qwen-uncensored\model\Qwen3.8-27B-Uncensored-vision-f16.gguf" --alias qwen3.8-27b --port 18020 --host 127.0.0.1 -ngl 999 -c 16384 -fa on -ctk q8_0 -ctv q4_0 -rea on
+"D:\LLM_Ecosystem\llama-cpp\llama-server.exe" -m "\\wsl.localhost\Ubuntu\home\<user>\qwen-uncensored\model\Qwen3.8-27B-Uncensored-Q4_K_M.gguf" --mmproj "\\wsl.localhost\Ubuntu\home\<user>\qwen-uncensored\model\Qwen3.8-27B-Uncensored-vision-f16.gguf" --alias qwen3.8-27b --port 18020 --host 127.0.0.1 -ngl 999 -c 16384 -fa on -ctk q8_0 -ctv q4_0 -rea on

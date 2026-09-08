@@ -2,7 +2,7 @@
 
 Not auto-loaded into any session's context. Read this on demand when debugging
 `mcp-qwen/index.js` or reconsidering a design decision below — it's the "why,"
-not the "what to do now" (that's `D:\LLM_Ecosystem\CLAUDE.md` and
+not the "what to do now" (that's `<workspace_root>\CLAUDE.md` and
 `~/.claude/CLAUDE.md`, kept short deliberately).
 
 ## Goose subprocess design (initial)
@@ -25,7 +25,7 @@ client can wait for.
 
 ## Bug: fabricated file path (2026-08-23, session 1)
 
-A real run wrote to `C:\Users\hassan\goose\...` — not this machine's user, not
+A real run wrote to `<user_home>\goose\...` — not this machine's user, not
 anywhere in the given `cwd`. Root cause, confirmed via Goose's own
 `llm_request.*.jsonl` log (`%APPDATA%\Block\goose\data\logs\`): Goose's
 `developer` extension resolves its working directory from the process-wide
@@ -540,7 +540,7 @@ Two correctness-relevant defaults, both verified via `bench/quality_battery.py`
 ## Claude Desktop config file gotcha
 
 Registration lives in `mcpServers` inside
-`C:\Users\Apath\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
+`<user_home>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
 — **not** `~/.mcp.json` or `~/.claude/settings.json`, and not the
 normal-looking `AppData\Roaming\Claude\claude_desktop_config.json` either (this
 MSIX-packaged install silently redirects writes to the `Packages\...\LocalCache`
@@ -650,14 +650,14 @@ Windows/Git-Bash side of the Bash tool, worth remembering:
    inside the same string did not fix this either.
 2. Git Bash (MSYS) expands `~` in `wsl -d Ubuntu -- bash ~/foo.sh` *before*
    `wsl.exe` ever sees the argument, producing a garbled Windows-side path
-   (`C:/Users/Apath/...`). Use the absolute WSL path instead.
+   (`<user_home>/...`). Use the absolute WSL path instead.
 3. Git Bash *also* auto-translates any argument that merely looks like a
-   POSIX absolute path (`/home/apath/...`) into a Windows path by its own
+   POSIX absolute path (`<user_home>/...`) into a Windows path by its own
    pathconv heuristic, even when it's meant for `wsl.exe` verbatim — turning
-   `/home/apath/foo.sh` into `C:/Program Files/Git/home/apath/foo.sh`. Fix:
+   `<user_home>/foo.sh` into `C:/Program Files/Git/<user_home>/foo.sh`. Fix:
    prefix the call with `MSYS_NO_PATHCONV=1`.
 The combination that actually worked: `MSYS_NO_PATHCONV=1 wsl -d Ubuntu --
-bash /home/apath/qwen-serving/launchers/start_huge.sh` run via the Bash tool's
+bash <user_home>/qwen-serving/launchers/start_huge.sh` run via the Bash tool's
 own `run_in_background:true` (letting the harness hold `wsl.exe` open, rather
 than trying to background anything inside WSL itself). For polling a
 long-running boot without spending a turn per check: watch the harness output
@@ -672,32 +672,32 @@ live this session before landing on a marker specific enough to be reliable.
 ## WSL environment MCP gap & cross-environment sync (2026-08-25)
 
 An audit of a live session where Gemini 3.7F in Antigravity IDE connected to a
-remote WSL workspace (`/home/apath/Work/temp/final`) revealed that the model
+remote WSL workspace (`<user_home>/Work/temp/final`) revealed that the model
 never invoked `delegate_coding_task` despite starting the vLLM server.
 Root-cause analysis showed:
 
 1. **Remote-WSL Config Asymmetry**: Antigravity running via Remote-WSL resolves
-   global customization roots from Linux paths (`/home/apath/.gemini/config/`),
-   not the Windows host (`C:\Users\Apath\.gemini\config\`).
-2. `/home/apath/.gemini/config/mcp_config.json` was 0 bytes, and
-   `/home/apath/.gemini/GEMINI.md` did not exist. The remote agent context
+   global customization roots from Linux paths (`<user_home>/.gemini/config/`),
+   not the Windows host (`<user_home>\.gemini\config\`).
+2. `<user_home>/.gemini/config/mcp_config.json` was 0 bytes, and
+   `<user_home>/.gemini/GEMINI.md` did not exist. The remote agent context
    received 0 MCP tools and no delegation rules.
 3. Path translation: Spawning Node on Windows from within WSL requires
-   explicit paths (`/mnt/c/Program Files/nodejs/node.exe D:\LLM_Ecosystem\mcp-qwen\index.js`),
-   as bare POSIX paths (`/mnt/d/...`) fail module resolution when passed to a Windows binary.
+   explicit paths (`/mnt/c/Program Files/nodejs/node.exe <workspace_root>\mcp-qwen\index.js`),
+   as bare POSIX paths (`<workspace_root>/...`) fail module resolution when passed to a Windows binary.
 
 **Fix Applied & Verified**:
-- Populated `/home/apath/.gemini/config/mcp_config.json` with the `node.exe` command
-  and `D:\LLM_Ecosystem\mcp-qwen\index.js`.
-- Created `/home/apath/.local/bin/node` wrapper executable in WSL.
-- Mirrored `GEMINI.md` to `/home/apath/.gemini/GEMINI.md` and `CLAUDE.md` to
-  `/home/apath/.claude/CLAUDE.md`.
+- Populated `<user_home>/.gemini/config/mcp_config.json` with the `node.exe` command
+  and `<workspace_root>\mcp-qwen\index.js`.
+- Created `<user_home>/.local/bin/node` wrapper executable in WSL.
+- Mirrored `GEMINI.md` to `<user_home>/.gemini/GEMINI.md` and `CLAUDE.md` to
+  `<user_home>/.claude/CLAUDE.md`.
 - Live verified from WSL via `mcp_client_test.js`: all 6 tools registered,
   Goose subprocess executed, written files created and tested with 0 errors.
 
 ## SOTA Multi-Agent Hardening: Vision Role Division, Session Drift Fix, & Polling Invariants (2026-08-26)
 
-An architectural audit of session traces (`8233615f-6a9b-4b4b-b4b0-649b77f6dc36`) evaluating `TreeMap-Disk-Visualizer` surfaced three systemic operational findings:
+An architectural audit of session traces (`<session_uuid>`) evaluating `TreeMap-Disk-Visualizer` surfaced three systemic operational findings:
 
 1. **Vision Tool Misalignment on Worker vs. Lead**:
    - **Context**: The worker model (Qwen 3.8-27B) is served via vLLM with `Universal 245K Context` and `--language-model-only` (dropping the 2.7 GB vision tower to dedicate all 24 GB VRAM to KV pool and DFlash2 speculative decoding).
@@ -985,11 +985,11 @@ aggravated variant share the same first-JIT-launch signature.
 1. **Upstream issue #48 filed & attachments published**:
    - Issue: [syv-ai/qwen38-27b-rtx3090#48](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/48)
    - Cross-link: [syv-ai/qwen38-27b-rtx3090#25 (Comment #5462775920)](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/25#issuecomment-5462775920)
-   - Attachments Gist: [Gist 532337dcf4b66a66729d8ae68df9d435](https://gist.github.com/ApatheticMioz/532337dcf4b66a66729d8ae68df9d435) attached in [Comment #5462825503](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/48#issuecomment-5462825503), containing `repro.py`, `wedge_pyspy_enginecore.txt`, `wedge_001_104300_englog.txt`, `wedge_001_152027_englog.txt`, and `iterations_unpatched.jsonl`.
+   - Attachments Gist: [Gist 532337dcf4b66a66729d8ae68df9d435](https://gist.github.com/<github_user>/532337dcf4b66a66729d8ae68df9d435) attached in [Comment #5462825503](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/48#issuecomment-5462825503), containing `repro.py`, `wedge_pyspy_enginecore.txt`, `wedge_001_104300_englog.txt`, `wedge_001_152027_englog.txt`, and `iterations_unpatched.jsonl`.
 
 2. **Dispatch `--exec` spawn fix**:
    - In `ps` inspection of Goose processes, arguments appeared as `Prefer native Goose tools (, , , , )`. Spawning `wsl.exe -d Ubuntu -- <cmd>` ran through login shell bash, executing backtick-quoted tool directives as command substitutions.
-   - Fixed by switching `wsl.exe` spawn to `--exec /home/apath/.local/bin/goose` and updating `sessionExistsOnDisk` to use `--exec`.
+   - Fixed by switching `wsl.exe` spawn to `--exec <user_home>/.local/bin/goose` and updating `sessionExistsOnDisk` to use `--exec`.
 
 3. **ESM Import & Test Harness Isolation (`isMain`)**:
    - `index.js` unconditionally ran `main()`, attached `StdioServerTransport`, and started `statusHttpServer.listen(18021)` upon module import.
@@ -1035,7 +1035,7 @@ aggravated variant share the same first-JIT-launch signature.
    - **Verify Stability**: `VLLM_DFLASH2_LOOKUP_ADAPTIVE=0` pins verify block length for stable prefix caching (+26% faster).
    - **Agent Concurrency**: `MAX_SEQS=8` preserves all 8 concurrent agent worker slots matching `MAX_CONCURRENT_GOOSE=8`.
    - **Metrics**: `REQ_METRICS=1` surfaces per-request latency & usage metrics.
-   - Configured in `/mnt/d/LLM_Ecosystem/scripts/wsl/start_huge.sh`.
+   - Configured in `<workspace_root>/scripts/wsl/start_huge.sh`.
 
 5. **Historical Infrastructure Gotchas (Merged from root NOTES.md)**:
 

@@ -25,6 +25,7 @@ across arms, so prefix-cache behaviour matches.
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -34,7 +35,10 @@ from pathlib import Path
 
 BASE = "http://localhost:18020"
 WSL_DISTRO = "Ubuntu"
-SUDO_PASS = "1234"
+# Sudo password for the py-spy dump, read from the environment (never
+# hardcoded). If unset, the dump step prompts the operator interactively
+# (see _sudo_pass()) so the value is never written to a tracked file.
+SUDO_PASS = os.environ.get("SUDO_PASS", "")
 REPRO_DIR = Path(__file__).parent
 
 ARM_ENV = {
@@ -135,17 +139,43 @@ def start_engine(arm: str):
     )
 
 
+def _sudo_pass() -> str:
+    """Return the sudo password for the py-spy dump.
+
+    Read from the SUDO_PASS environment variable; if it is not set, prompt
+    the operator interactively (hidden input) so the value is never stored
+    in a tracked file. Returns "" if the operator declines, in which case
+    the caller skips the privileged dump.
+    """
+    if SUDO_PASS:
+        return SUDO_PASS
+    try:
+        import getpass
+        return getpass.getpass(
+            "SUDO_PASS not set - enter sudo password for py-spy dump (blank to skip): "
+        )
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
 def capture_wedge_evidence(arm: str, it: int, logdir: Path):
     pids = engine_pids()
     core = pids.get("engine_core")
     ts = time.strftime("%H%M%S")
     if core:
-        dump = wsl(
-            f"echo {SUDO_PASS} | sudo -S /home/apath/qwen-serving/venv/bin/py-spy "
-            f"dump --pid {core} 2>&1",
-            timeout=120,
-        )
-        (logdir / f"wedge_{it:03d}_{ts}_pyspy.txt").write_text(dump, encoding="utf-8")
+        # py-spy lives in the WSL user's home; $HOME expands to the running
+        # user's home (no hardcoded username). The sudo password comes from
+        # the environment / interactive prompt, never a hardcoded constant.
+        sp = _sudo_pass()
+        if sp:
+            dump = wsl(
+                f"echo {sp} | sudo -S $HOME/qwen-serving/venv/bin/py-spy "
+                f"dump --pid {core} 2>&1",
+                timeout=120,
+            )
+            (logdir / f"wedge_{it:03d}_{ts}_pyspy.txt").write_text(dump, encoding="utf-8")
+        else:
+            print("  (SUDO_PASS not set - skipping privileged py-spy dump)", file=sys.stderr)
     tail = wsl("tail -c 20000 /tmp/mcp_launch_huge.log | tr '\\r' '\\n' | tail -60",
                timeout=60)
     (logdir / f"wedge_{it:03d}_{ts}_englog.txt").write_text(tail, encoding="utf-8")

@@ -2,10 +2,10 @@
   "timestamp": "2026-09-07T09:14:39.000000",
   "pid": 33,
   "cmdline_args": [
-    "/home/apath/qwen-serving/venv/bin/python",
-    "/home/apath/qwen-serving/venv/bin/vllm",
+    "<user_home>/qwen-serving/venv/bin/python",
+    "<user_home>/qwen-serving/venv/bin/vllm",
     "serve",
-    "/home/apath/qwen-serving/models/Qwen3.8-27B-W4A16-AutoRound-fast",
+    "<user_home>/qwen-serving/models/Qwen3.8-27B-W4A16-AutoRound-fast",
     "--served-model-name",
     "qwen3.8-27b",
     "--host",
@@ -31,7 +31,7 @@
     "--max-num-batched-tokens",
     "2048",
     "--speculative-config",
-    "{\"method\":\"dflash\",\"model\":\"/home/apath/qwen-serving/models/Qwen3.8-27B-DFlash2-W4A16\",\"num_speculative_tokens\":7}",
+    "{\"method\":\"dflash\",\"model\":\"<user_home>/qwen-serving/models/Qwen3.8-27B-DFlash2-W4A16\",\"num_speculative_tokens\":7}",
     "--compilation-config",
     "{\"max_cudagraph_capture_size\":8,\"custom_ops\":[\"+rms_norm\",\"+silu_and_mul\"]}",
     "--reasoning-parser",
@@ -54,8 +54,8 @@
     "VLLM_WSL2_ENABLE_PIN_MEMORY=1",
     "WSL_DISTRO_NAME=Ubuntu",
     "NAME=PC",
-    "PWD=/home/apath/qwen-serving",
-    "LOGNAME=apath",
-    "HOME=/home/apath"
+    "PWD=<user_home>/qwen-serving",
+    "LOGNAME=<user>",
+    "HOME=<user_home>"
   ]
 }

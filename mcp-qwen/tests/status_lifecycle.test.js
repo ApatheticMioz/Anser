@@ -38,7 +38,7 @@ import assert from "node:assert";
 // ---------------------------------------------------------------------------
 // Isolate ALL on-disk state in a fresh temp dir BEFORE any src import so
 // config.js pins QWEN_STATE_DIR (and SLOTS_DIR under it) to the private dir.
-// The production ~/.qwen (C:\Users\Apath\.qwen) is never read or written.
+// The production ~/.qwen (C:\Users\<user>\.qwen) is never read or written.
 // ---------------------------------------------------------------------------
 const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "status_lifecycle_"));
 process.env.QWEN_STATE_DIR = TMP_STATE;

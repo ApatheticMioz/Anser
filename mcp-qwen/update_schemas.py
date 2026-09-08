@@ -2,15 +2,60 @@ import json, os, glob, sys
 
 is_win = sys.platform == "win32"
 
+# User home dirs, derived at runtime (no hardcoded username).
+HOME = os.path.expanduser("~")
+# WSL username: conventionally lowercase; default to the lowercased local
+# username, overridable via WSL_USER.
+WSL_USER = os.environ.get("WSL_USER", os.path.basename(HOME).lower())
+# Windows username: may differ in case from the WSL username (the WSL home
+# is conventionally lowercase while the Windows profile dir is not). Default
+# to the local username; overridable via WIN_USER.
+WIN_USER = os.environ.get("WIN_USER", os.path.basename(HOME))
+# Repo root: this script lives at <repo>/mcp-qwen/update_schemas.py, so the
+# repo root is one level up. Derived at runtime (no hardcoded drive/path).
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# The .gemini MCP schema dir, expressed for each side of the Windows/WSL split.
+GEMINI_MCP = os.path.join(".gemini", "antigravity-ide", "mcp", "qwen38-local")
+
+
+def _win_to_wsl(p):
+    """Convert a Windows path (D:\\...) to its WSL mount path (/mnt/d/...)."""
+    if len(p) >= 2 and p[1] == ":":
+        return "/mnt/" + p[0].lower() + p[2:].replace("\\", "/")
+    return p
+
+
+def _wsl_to_win(p):
+    """Convert a WSL mount path (/mnt/d/...) to its Windows path (D:\\...)."""
+    if p.startswith("/mnt/"):
+        parts = p.split("/")
+        if len(parts) >= 3:
+            return parts[2].upper() + ":\\" + "\\".join(parts[3:])
+    return p
+
+
+def _index_js_paths():
+    """Return (windows_style, wsl_style) paths to mcp-qwen/index.js, derived
+    from the repo root (no hardcoded drive/path)."""
+    if is_win:
+        win = os.path.join(REPO_ROOT, "mcp-qwen", "index.js")
+        return win, _win_to_wsl(win)
+    wsl = os.path.join(REPO_ROOT, "mcp-qwen", "index.js")
+    return _wsl_to_win(wsl), wsl
+
+
 target_dirs = []
 if is_win:
-    target_dirs.append(r"C:\Users\Apath\.gemini\antigravity-ide\mcp\qwen38-local")
-    wsl_dir = r"\\wsl.localhost\Ubuntu\home\apath\.gemini\antigravity-ide\mcp\qwen38-local"
+    target_dirs.append(os.path.join(HOME, GEMINI_MCP))
+    wsl_dir = r"\\wsl.localhost\Ubuntu" + os.path.join(os.sep, "home", WSL_USER, GEMINI_MCP)
     if os.path.exists(os.path.dirname(wsl_dir)) and not os.path.islink(wsl_dir):
         target_dirs.append(wsl_dir)
 else:
-    target_dirs.append(os.path.expanduser("~/.gemini/antigravity-ide/mcp/qwen38-local"))
-    win_dir = "/mnt/c/Users/Apath/.gemini/antigravity-ide/mcp/qwen38-local"
+    target_dirs.append(os.path.join(HOME, GEMINI_MCP))
+    # Windows-side .gemini, reached from WSL via the /mnt/c mount. The Windows
+    # username may differ in case from the WSL one, so use WIN_USER.
+    win_dir = os.path.join("/mnt/c/Users", WIN_USER, GEMINI_MCP)
     if os.path.exists(win_dir):
         target_dirs.append(win_dir)
 
@@ -154,15 +199,18 @@ for mcp_dir in unique_dirs:
         f.write(instructions_content)
     print(f'Wrote {inst_path}')
 
-# Ensure mcp_config.json has appropriate platform paths
-win_cfg_path = r"C:\Users\Apath\.gemini\config\mcp_config.json" if is_win else "/mnt/c/Users/Apath/.gemini/config/mcp_config.json"
-wsl_cfg_path = r"\\wsl.localhost\Ubuntu\home\apath\.gemini\config\mcp_config.json" if is_win else os.path.expanduser("~/.gemini/config/mcp_config.json")
+# Ensure mcp_config.json has appropriate platform paths (all derived at
+# runtime - no hardcoded username or drive/path).
+win_cfg_path = os.path.join(HOME, ".gemini", "config", "mcp_config.json") if is_win else os.path.join("/mnt/c/Users", WIN_USER, ".gemini", "config", "mcp_config.json")
+wsl_cfg_path = r"\\wsl.localhost\Ubuntu" + os.path.join(os.sep, "home", WSL_USER, ".gemini", "config", "mcp_config.json") if is_win else os.path.expanduser("~/.gemini/config/mcp_config.json")
+
+_index_win, _index_wsl = _index_js_paths()
 
 win_cfg = {
     "mcpServers": {
         "qwen38-local": {
             "command": "node",
-            "args": [r"D:\LLM_Ecosystem\mcp-qwen\index.js"],
+            "args": [_index_win],
             "env": {"QWEN_RACE_MS": "150000"}
         }
     }
@@ -172,7 +220,7 @@ wsl_cfg = {
     "mcpServers": {
         "qwen38-local": {
             "command": "node",
-            "args": ["/mnt/d/LLM_Ecosystem/mcp-qwen/index.js"],
+            "args": [_index_wsl],
             "env": {"QWEN_RACE_MS": "150000"}
         }
     }

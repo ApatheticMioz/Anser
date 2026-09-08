@@ -46,6 +46,6 @@ docs/
 ## Key Architecture References
 
 - **MCP Server Architecture**: [`mcp-qwen/index.js`](file:///d:/LLM_Ecosystem/mcp-qwen/index.js)
-- **Engineering Decisions & Benchmark Changelog**: [`mcp-qwen/NOTES.md`](file:///d:/LLM_Ecosystem/mcp-qwen/NOTES.md)
+- **Engineering Decisions & Benchmark Changelog**: [`docs/archive/DEVELOPMENT_NOTES_2026.md`](archive/DEVELOPMENT_NOTES_2026.md)
 - **SWE-rebench Validation Suite**: [`benchmarks/swe-rebench/README.md`](file:///d:/LLM_Ecosystem/benchmarks/swe-rebench/README.md)
 - **Upstream vLLM Wedge Repro Report**: [`benchmarks/wedge-repro/RESULTS.md`](file:///d:/LLM_Ecosystem/benchmarks/wedge-repro/RESULTS.md)

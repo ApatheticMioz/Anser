@@ -4,7 +4,7 @@ run as part of setup; run manually once the sample and grading steps are
 approved.
 
 Runs on the WINDOWS side (not WSL) - Goose here is goose.exe
-(C:\\Users\\Apath\\.local\\bin\\goose.exe), a Windows binary, matching how
+(%USERPROFILE%\\.local\\bin\\goose.exe), a Windows binary, matching how
 mcp-qwen/index.js drives it. Repos are cloned to a Windows scratch directory
 and Goose talks to vLLM over http://localhost:18020, same env-var contract
 as mcp-qwen/index.js's goose spawn (GOOSE_PROVIDER/GOOSE_MODEL/
@@ -26,17 +26,27 @@ Usage (from a Windows Python, e.g. `py -3.11`):
     python run_goose_solve.py ^
         --tasks predictions\\sample_2026_03_50.jsonl ^
         --out predictions\\goose_qwen_2026_03_50.jsonl ^
-        --workdir C:\\Users\\Apath\\AppData\\Local\\Temp\\swe-rebench-scratch ^
+        --workdir %USERPROFILE%\\AppData\\Local\\Temp\\swe-rebench-scratch ^
         --timeout 900
 """
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-GOOSE_EXE = r"C:\Users\Apath\.local\bin\goose.exe"
+# User profile dir: USERPROFILE on Windows, $HOME elsewhere. Derived at
+# runtime so no personal username is hardcoded in this file.
+_USERPROFILE = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+
+# Goose is a Windows binary; locate it under the user's profile dir
+# (override with the GOOSE_EXE env var if it lives elsewhere).
+GOOSE_EXE = os.environ.get(
+    "GOOSE_EXE",
+    os.path.join(_USERPROFILE, ".local", "bin", "goose.exe"),
+)
 MODEL_NAME_OR_PATH = "qwen3.8-27b-goose-huge"  # CTX=huge/DFlash2/KVarN - this repo's default config
 VLLM_PORT = 18020
 
@@ -138,7 +148,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tasks", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--workdir", default=r"C:\Users\Apath\AppData\Local\Temp\swe-rebench-scratch")
+    ap.add_argument("--workdir",
+                    default=os.path.join(_USERPROFILE, "AppData", "Local", "Temp", "swe-rebench-scratch"))
     ap.add_argument("--timeout", type=int, default=900,
                      help="Per-task Goose timeout in seconds. Matches this repo's "
                           "own 900s ceiling for extension-bearing delegate calls "

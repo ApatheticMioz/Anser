@@ -7,7 +7,7 @@ import os from "node:os";
 // candidate paths) to a fresh temp dir BEFORE importing config.js /
 // server_lifecycle.js, so bumpWedgeCounter / readWedgeCounter operate on
 // <tmp>/.qwen/tasks/.wedge_counter.json and NEVER the production
-// C:\Users\Apath\.qwen state. This is the established isolation pattern from
+// C:\Users\<user>\.qwen state. This is the established isolation pattern from
 // tests/shell_hardening.test.js (QWEN_STATE_DIR + HOME + QWEN_WSL_HOME +
 // QWEN_WIN_HOME all pinned to one fresh mkdtemp).
 const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_lifecycle_state_"));
@@ -79,7 +79,7 @@ try {
   // Test 5: Atomic wedge counter write
   console.log("\n[Test 5: bumpWedgeCounter atomic file write]");
   // F9 isolation proof: the wedge counter must live under the temp state dir,
-  // never the production C:\Users\Apath\.qwen state.
+  // never the production C:\Users\<user>\.qwen state.
   assert.ok(
     WEDGE_COUNTER_FILE.startsWith(TMP_STATE),
     `WEDGE_COUNTER_FILE must be under the temp state dir (got: ${WEDGE_COUNTER_FILE})`

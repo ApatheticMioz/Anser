@@ -29,7 +29,7 @@ const scriptPath = path.resolve(__dirname, "..", "index.js");
 // (QWEN_STATE_DIR) and task_registry.js (writes task JSON / session logs /
 // slot leases under QWEN_STATE_DIR). Redirect the child's state dir to a fresh
 // temp dir so the live MCP server never writes to the production
-// C:\Users\Apath\.qwen state.
+// C:\Users\<user>\.qwen state.
 const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_schema_state_"));
 const ISOLATED_ENV = {
   ...process.env,
@@ -92,12 +92,12 @@ function deepDiff(a, b, path, diffs) {
  */
 function findGeneratedDir() {
   const candidates = [
-    // Windows (this machine)
-    "C:/Users/Apath/.gemini/antigravity-ide/mcp/qwen38-local",
-    // WSL
-    "/mnt/c/Users/Apath/.gemini/antigravity-ide/mcp/qwen38-local",
-    // Linux home
+    // Windows (this machine) - derived from the current user's home, not a
+    // hardcoded username.
     path.join(os.homedir(), ".gemini/antigravity-ide/mcp/qwen38-local"),
+    // WSL - the Windows C: drive mounted under /mnt/c, derived from the
+    // current user's home (no hardcoded username).
+    path.join("/mnt/c/Users", path.basename(os.homedir()), ".gemini/antigravity-ide/mcp/qwen38-local"),
   ];
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;

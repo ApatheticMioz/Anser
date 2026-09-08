@@ -6,7 +6,7 @@
       "object": "model",
       "created": 1787766879,
       "owned_by": "vllm",
-      "root": "/home/apath/qwen-serving/models/Qwen3.8-27B-W4A16-AutoRound-fast",
+      "root": "<user_home>/qwen-serving/models/Qwen3.8-27B-W4A16-AutoRound-fast",
       "parent": null,
       "max_model_len": 245760,
       "permission": [

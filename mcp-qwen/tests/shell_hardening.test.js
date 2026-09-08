@@ -156,7 +156,7 @@ await checkAsync("d: quote-bearing id -> pgrep pattern escaped, no raw quote", a
 
 // (d2) real-bash execution: an injection payload does NOT execute. The
 // marker is STDOUT-based, not file-based: on Windows, Git Bash mangles a
-// backslash canary path (`C:\x` -> `CUsersApathx` created in the CWD), so a
+// backslash canary path (`C:\x` -> `CUsersTestUserx` created in the CWD), so a
 // file-existence check would inspect the wrong path and FALSE-PASS on a real
 // injection. A marker echoed to stdout is observed no matter where bash runs.
 await checkAsync("d2: injection payload does not execute in a real bash", async () => {

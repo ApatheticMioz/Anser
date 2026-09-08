@@ -52,7 +52,7 @@ async function verifySecurity() {
   // --- Category 1: File Path Escapes (C:, D:\.., /mnt/c, traversal) ---
   const pathVectors = [
     "C:\\Windows\\System32\\calc.exe",
-    "C:\\Users\\Apath\\Desktop",
+    "C:\\Users\\testuser\\Desktop",
     "C:\\",
     "c:/autoexec.bat",
     "D:\\",
@@ -251,7 +251,7 @@ async function verifySecurity() {
   // Re-scoped vectors (old over-broad behavior -> new path-aware expectation):
   //   "rm -rf C:\\Windows\\System32"  - OLD: blocked by C:\Windows substring match.
   //     NEW: allowed (deeper subpath, not a protected root or its direct wildcard).
-  //   "rm -rf /mnt/c/Users/Apath"       - OLD: blocked by /mnt/c/Users substring match.
+  //   "rm -rf /mnt/c/Users/testuser"       - OLD: blocked by /mnt/c/Users substring match.
   //     NEW: allowed (deeper subpath, not a protected root or its direct wildcard).
   const allowCommands = [
     // Legitimate WSL temp/workspace cleanup (old: blocked by any abs-path rm)
@@ -355,7 +355,7 @@ async function verifySecurity() {
   // --- Category 7: Evo Operator File Unlinking Containment ---
   const outsidePaths = [
     "C:\\Windows\\notepad.exe",
-    "C:\\Users\\Apath\\Desktop\\file.txt",
+    "C:\\Users\\testuser\\Desktop\\file.txt",
     "/mnt/c/Users/test.txt",
     "../../outside.js",
   ];
