@@ -21,6 +21,8 @@
 
 import { spawn } from "node:child_process";
 import path from "node:path";
+import os from "node:os";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +30,20 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const INDEX = path.join(REPO_ROOT, "index.js");
 
 const TIMEOUT_MS = 20_000;
+
+// F9 (state isolation): the spawned index.js child imports config.js
+// (QWEN_STATE_DIR) and task_registry.js (writes task JSON / session logs /
+// slot leases under QWEN_STATE_DIR). Redirect the child's state dir to a fresh
+// temp dir so the live MCP server never writes to the production
+// C:\Users\Apath\.qwen state.
+const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_stdio_state_"));
+const ISOLATED_ENV = {
+  ...process.env,
+  QWEN_STATE_DIR: TMP_STATE,
+  QWEN_WSL_HOME: TMP_STATE,
+  QWEN_WIN_HOME: TMP_STATE,
+  HOME: TMP_STATE,
+};
 
 function frame(msg) {
   return JSON.stringify(msg) + "\n";
@@ -39,6 +55,7 @@ function main() {
   const child = spawn(process.execPath, [INDEX], {
     cwd: REPO_ROOT,
     stdio: ["pipe", "pipe", "pipe"],
+    env: ISOLATED_ENV,
   });
 
   let stdoutBuf = "";

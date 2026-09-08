@@ -13,17 +13,34 @@
 import assert from "node:assert";
 import fs from "node:fs";
 import path from "node:path";
-import { EventBus } from "../src/harness/core/events.js";
-import { Context } from "../src/harness/core/kernel.js";
-import { SandboxFsService, sandboxFsPlugin } from "../src/harness/services/sandbox_fs.js";
-import { ShellExecutorService } from "../src/harness/services/shell_executor.js";
-import { EventLoggerService } from "../src/harness/services/event_logger.js";
-import { LineageDag } from "../src/harness/evo/lineage_dag.js";
-import { ClosedLoopEvaluator } from "../src/harness/evo/evaluator.js";
-import { EvoWatchdog } from "../src/harness/evo/watchdog.js";
-import { EvoOperator } from "../src/harness/evo/evo_operator.js";
-import { AnserRunner } from "../src/harness/runner.js";
-import { isEngineAvailable } from "./helpers/engine_probe.js";
+import os from "node:os";
+
+// F9 (state isolation): pin the Qwen state dir (and home-based candidate
+// paths) to a fresh temp dir BEFORE importing any module that reads
+// config.js (QWEN_STATE_DIR) at import time. The live AnserRunner (Test 6)
+// mounts the eventLogger plugin with no explicit baseDir, so it defaults to
+// QWEN_STATE_DIR/sessions — without this redirect it would write session logs
+// into the PRODUCTION C:\Users\Apath\.qwen/sessions state. This is the
+// established isolation pattern from tests/shell_hardening.test.js.
+const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_evo_state_"));
+process.env.QWEN_STATE_DIR = TMP_STATE;
+process.env.QWEN_WSL_HOME = TMP_STATE;
+process.env.QWEN_WIN_HOME = TMP_STATE;
+process.env.HOME = TMP_STATE;
+
+// Dynamic imports AFTER the env redirect so config.js pins QWEN_STATE_DIR to
+// the temp dir at module load.
+const { EventBus } = await import("../src/harness/core/events.js");
+const { Context } = await import("../src/harness/core/kernel.js");
+const { SandboxFsService, sandboxFsPlugin } = await import("../src/harness/services/sandbox_fs.js");
+const { ShellExecutorService } = await import("../src/harness/services/shell_executor.js");
+const { EventLoggerService } = await import("../src/harness/services/event_logger.js");
+const { LineageDag } = await import("../src/harness/evo/lineage_dag.js");
+const { ClosedLoopEvaluator } = await import("../src/harness/evo/evaluator.js");
+const { EvoWatchdog } = await import("../src/harness/evo/watchdog.js");
+const { EvoOperator } = await import("../src/harness/evo/evo_operator.js");
+const { AnserRunner } = await import("../src/harness/runner.js");
+const { isEngineAvailable } = await import("./helpers/engine_probe.js");
 
 const TEST_DIR = path.resolve(process.cwd(), ".test_evo_tmp");
 

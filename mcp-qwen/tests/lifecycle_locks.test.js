@@ -2,13 +2,29 @@ import assert from "node:assert";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import {
+
+// F9 (state isolation): redirect the Qwen state dir (and the home-based
+// candidate paths) to a fresh temp dir BEFORE importing config.js /
+// server_lifecycle.js, so bumpWedgeCounter / readWedgeCounter operate on
+// <tmp>/.qwen/tasks/.wedge_counter.json and NEVER the production
+// C:\Users\Apath\.qwen state. This is the established isolation pattern from
+// tests/shell_hardening.test.js (QWEN_STATE_DIR + HOME + QWEN_WSL_HOME +
+// QWEN_WIN_HOME all pinned to one fresh mkdtemp).
+const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_lifecycle_state_"));
+process.env.QWEN_STATE_DIR = TMP_STATE;
+process.env.QWEN_WSL_HOME = TMP_STATE;
+process.env.QWEN_WIN_HOME = TMP_STATE;
+process.env.HOME = TMP_STATE;
+
+// Dynamic import AFTER the env redirect so config.js pins QWEN_STATE_DIR (and
+// TASK_DIR / WEDGE_COUNTER_FILE under it) to the temp dir at module load.
+const {
   tryAcquireExclusiveLock,
   releaseExclusiveLock,
   bumpWedgeCounter,
   readWedgeCounter,
-} from "../src/server_lifecycle.js";
-import { WEDGE_COUNTER_FILE } from "../src/config.js";
+} = await import("../src/server_lifecycle.js");
+const { WEDGE_COUNTER_FILE } = await import("../src/config.js");
 
 console.log("=== Lifecycle Locks & Concurrency Hardening (Offline) ===");
 
@@ -62,6 +78,12 @@ try {
 
   // Test 5: Atomic wedge counter write
   console.log("\n[Test 5: bumpWedgeCounter atomic file write]");
+  // F9 isolation proof: the wedge counter must live under the temp state dir,
+  // never the production C:\Users\Apath\.qwen state.
+  assert.ok(
+    WEDGE_COUNTER_FILE.startsWith(TMP_STATE),
+    `WEDGE_COUNTER_FILE must be under the temp state dir (got: ${WEDGE_COUNTER_FILE})`
+  );
   const curBefore = readWedgeCounter();
   bumpWedgeCounter("test_concurrency_reason");
   const curAfter = readWedgeCounter();

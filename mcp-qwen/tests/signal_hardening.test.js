@@ -1,11 +1,23 @@
 /**
  * Signal-Preserving Hardening Verification (fully OFFLINE)
  *
- * Tests:
- * 1. provider_vllm.js dynamic headroom clamping against MAX_LEN_HUGE (245,760)
- * 2. provider_vllm.js ContextExhaustedError when prompt exceeds ceiling
- * 3. task_registry.js readTaskFromDisk transientLock return on EBUSY/EPERM
- * 4. task_registry.js diskPoll debouncing of missing task before failing
+ * Vectors:
+ * 1. provider_vllm.js clamps max_tokens to fit within the MAX_LEN_HUGE
+ *    (245,760) headroom: a large prompt shrinks the requested max_tokens to
+ *    exactly MAX_LEN_HUGE - estPrompt - 128 (the headroom formula).
+ * 2. provider_vllm.js throws ContextExhaustedError when the prompt alone
+ *    exceeds the 245K ceiling (fail-fast, no fabricated generation).
+ * 3. task_registry.js readTaskFromDisk returns { transientLock: true } on a
+ *    transient file lock (EBUSY/EPERM) — a real signal, not corruption.
+ * 4. task_registry.js readTaskFromDisk returns null on a clean ENOENT
+ *    (file absent) — the honest not-found, never conflated with corruption.
+ *
+ * F9 (state isolation): the Qwen state dir (and home-based candidate paths)
+ * are redirected to a fresh temp dir BEFORE the dynamic imports of
+ * config.js / provider_vllm.js / task_registry.js inside the tests, so
+ * task_registry's import-time mkdir(TASK_DIR) and every read target
+ * <tmp>/.qwen, never the production C:\Users\Apath\.qwen state. This is the
+ * established isolation pattern from tests/shell_hardening.test.js.
  */
 
 import assert from "node:assert";
@@ -13,6 +25,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test, describe } from "node:test";
+
+// F9 (state isolation): pin the Qwen state dir + home-based candidate paths to
+// a fresh temp dir BEFORE the dynamic imports below resolve config.js /
+// provider_vllm.js / task_registry.js.
+const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_signal_state_"));
+process.env.QWEN_STATE_DIR = TMP_STATE;
+process.env.QWEN_WSL_HOME = TMP_STATE;
+process.env.QWEN_WIN_HOME = TMP_STATE;
+process.env.HOME = TMP_STATE;
 
 describe("Signal Preserving Hardening (Offline)", () => {
   test("provider_vllm clamps max_tokens to fit within MAX_LEN_HUGE headroom", async () => {

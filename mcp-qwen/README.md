@@ -8,9 +8,9 @@ Qwen3.8-27B coworker (vLLM + DFlash2 + KVarN, 245K context) to two runtimes:
 - Structural AST surgery via `@ast-grep/napi` (in-process) + CLI fallback
 - 137-vector zero-trust containment (123 attack vectors blocked, 14 allow vectors)
 - Closed-loop evolutionary optimization (`.evo/lineage.json`)
-- Zero-turn OS-level wait (`curl` long-poll on `:18021` saving ~570M tokens)
+- Zero-turn OS-level wait (`curl` long-poll on `:18021` saving ~590M tokens)
 - Engine wedge detection + auto-heal
-- Full 26-suite test gate (`npm run test:all`) validated live with zero skips
+- Full 33-suite test gate (`npm run test:all`) validated live with zero skips
 
 ## Quickstart
 
@@ -300,9 +300,12 @@ flight (`hasLiveWork()` in `src/task_registry.js`).
 If the MCP server process dies, its tasks become orphans. On the next
 `readTaskFromDisk`, `isTaskOrphaned` checks the owner PID liveness and
 heartbeat age; orphans are marked `FAILED` with a `WORKER_PROCESS_TERMINATED`
-error. `qwen_task(action="cancel_all")` kills all goose processes
-machine-wide (anchored sweep + `taskkill /F /IM goose.exe`), cancels all
-in-memory and disk tasks, and clears slot leases.
+error. `qwen_task(action="cancel_all")` kills each task's goose child via an
+anchored per-session sweep (pgrep → `/proc` cmdline boundary verify → kill),
+cancels all in-memory and disk tasks, and clears slot leases. (The old
+machine-wide `taskkill /F /IM goose.exe` was removed in P15 — it killed other
+instances' live goose children; the anchored sweep only matches a session id
+at an exact `--name <id>` boundary.)
 
 ### Stream-proxy lifecycle
 
@@ -347,7 +350,7 @@ Three layers of defense:
 
 ## Test Suite
 
-`npm test` runs the 23 offline suites. `npm run test:all` runs all 26 suites (all must exit 0):
+`npm test` runs 28 suites (25 offline + 3 live/skip). `npm run test:all` runs all 33 suites (all must exit 0):
 
 | # | Suite | Command | Type | Purpose |
 |---|-------|---------|------|---------|
@@ -377,8 +380,15 @@ Three layers of defense:
 | 24 | `stream_proxy.test.js` | `npm run test:proxy` | Live / Mock | SSE stream proxy: repetition tiering, UTF-8 reassembly, real proxy regression |
 | 25 | `utf8_proxy.test.js` | `npm run test:proxy` | Live / Mock | Multi-byte UTF-8 split across chunks reassembly verification |
 | 26 | `benchmark.test.js` | `npm run test:benchmark` | Live / Skip | Head-to-head Evo vs legacy-Goose microkernel benchmark |
+| 27 | `goose_runner_mapping.test.js` | `npm test` | Offline | status→isError mapping: `completed`/`completed_ceiling` = success, fail-closed on unknown/null |
+| 28 | `lifecycle_locks.test.js` | `npm run test:all` | Offline | Exclusive lock acquire/reject/stale-recovery, PID-ownership release, atomic wedge counter |
+| 29 | `signal_hardening.test.js` | `npm run test:all` | Offline | vLLM headroom clamping, `ContextExhaustedError`, `readTaskFromDisk` transientLock/ENOENT |
+| 30 | `honesty_drift.test.js` | `npm test` | Offline | `listModels` honest error, corrupt-task quarantine, dead-constant culling |
+| 31 | `lineage_integrity.test.js` | `npm test` | Offline | Per-workspace DAG singleton, version gate, honest legacy status mapping |
+| 32 | `status_lifecycle.test.js` | `npm test` | Offline | Status-server keeper re-election, elapsed fix, cancel slot release, honest `stopServer` |
+| 33 | `shell_hardening.test.js` | `npm test` | Offline | Shell-injection hardening (session-id charset, pgrep escape), credential honesty |
 
-**Live-engine test gating**: Suites 6, 19, 20, and 26 use `tests/helpers/engine_probe.js` (`isEngineAvailable` / `requireEngineOrSkip`) to probe `/v1/models` with a 3s timeout. When vLLM is running, all 26 suites execute live; when offline, they print `[SKIP]` and exit 0. Under active engine operation, `npm run test:all` runs all 26 suites with **zero skips and zero failures**.
+**Live-engine test gating**: Suites 6, 19, 20, and 26 use `tests/helpers/engine_probe.js` (`isEngineAvailable` / `requireEngineOrSkip`) to probe `/v1/models` with a 3s timeout. When vLLM is running, all 33 suites execute live; when offline, those four print `[SKIP]` and exit 0 (the remaining 29 run offline or against a mock upstream). Under active engine operation, `npm run test:all` runs all 33 suites with **zero skips and zero failures**.
 
 ## 11-Hour Production Verification & Telemetry Ledger
 

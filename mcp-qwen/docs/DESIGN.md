@@ -260,9 +260,15 @@ consumed. Spawning `wsl.exe -d Ubuntu -- <cmd>` ran through the login shell
 
 **Root cause:** `wsl.exe --` invokes a shell; `--exec` does not.
 
-**Structural fix:** all WSL dispatches use `--exec`
-(`src/platform.js`, `buildSpawnProfile`), which runs the command directly
-with no shell interpretation.
+**Structural fix:** the spawn-profile builder (`src/platform.js`,
+`buildSpawnProfile`) uses `--exec`, which runs the command directly with no
+shell interpretation. The `wsl_bridge.js` kill/boot paths are a deliberate
+exception: they run `bash -c` because they need shell features (pipes,
+process substitution) for the anchored sweep. Their one interpolated value
+— the session id — is MCP-client-controlled, so it is validated against the
+system charset on entry (resolveSessionId) AND doubly escaped at every
+`pgrep -f` interpolation point (pgrepEscapeId: regex-escape, then the
+POSIX single-quote idiom), mutation-tested in tests/shell_hardening.test.js.
 
 ### L8. Import-time side effects (v4.5.3)
 

@@ -25,6 +25,20 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const scriptPath = path.resolve(__dirname, "..", "index.js");
 
+// F9 (state isolation): the spawned index.js child imports config.js
+// (QWEN_STATE_DIR) and task_registry.js (writes task JSON / session logs /
+// slot leases under QWEN_STATE_DIR). Redirect the child's state dir to a fresh
+// temp dir so the live MCP server never writes to the production
+// C:\Users\Apath\.qwen state.
+const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_schema_state_"));
+const ISOLATED_ENV = {
+  ...process.env,
+  QWEN_STATE_DIR: TMP_STATE,
+  QWEN_WSL_HOME: TMP_STATE,
+  QWEN_WIN_HOME: TMP_STATE,
+  HOME: TMP_STATE,
+};
+
 const TIMEOUT_MS = 20_000;
 let passed = 0;
 let failed = 0;
@@ -129,6 +143,7 @@ async function runTests() {
     transport = new StdioClientTransport({
       command: "node",
       args: [scriptPath],
+      env: ISOLATED_ENV,
     });
     client = new Client({ name: "schema-parity-test", version: "1.0.0" });
     await client.connect(transport);

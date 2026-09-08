@@ -10,6 +10,7 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AstService } from "../src/harness/services/ast_service.js";
@@ -21,8 +22,13 @@ import { shellExecutorPlugin } from "../src/harness/services/shell_executor.js";
 import { sandboxFsPlugin } from "../src/harness/services/sandbox_fs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TEST_DIR = path.resolve(__dirname, "..", ".canary_tmp");
-fs.mkdirSync(TEST_DIR, { recursive: true });
+// F9 (state isolation): the canary's workspace is a FRESH temp dir, never
+// process.cwd() (the repo root). Mounting the evo plugin at process.cwd()
+// made it write candidate nodes into the REAL <repo>/.evo/lineage.json
+// (observed twice this mission). A fresh mkdtemp keeps the Evo DAG, snapshots,
+// and the sample file entirely inside a throwaway workspace that is cleaned up
+// at the end, so the production .evo/lineage.json is never touched.
+const TEST_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_canary_"));
 
 async function runCanary() {
   console.log("=== Starting Evo Canary Pilot ===");
@@ -57,7 +63,7 @@ function multiply(x, y) {
     "utf8"
   );
 
-  const ast = new AstService({ root: process.cwd() });
+  const ast = new AstService({ root: TEST_DIR });
   const searchRes = await ast.search({
     path: sampleJs,
     pattern: "function $NAME($$$ARGS) { $$$BODY }",
@@ -161,10 +167,10 @@ FAILED test_core.py::test_calc - AssertionError: assert 50 == 100
   // --- Test 5: Evo Closed-Loop Integration ---
   console.log("\n[Test 5: Evo Integration with Failure Digest]");
   const ctx = new Context(null, "canary_session");
-  ctx.plugin(sandboxFsPlugin, { root: process.cwd() });
-  ctx.plugin(shellExecutorPlugin, { cwd: process.cwd() });
-  ctx.plugin(astPlugin, { root: process.cwd() });
-  ctx.plugin(evoPlugin, { workspaceRoot: process.cwd() });
+  ctx.plugin(sandboxFsPlugin, { root: TEST_DIR });
+  ctx.plugin(shellExecutorPlugin, { cwd: TEST_DIR });
+  ctx.plugin(astPlugin, { root: TEST_DIR });
+  ctx.plugin(evoPlugin, { workspaceRoot: TEST_DIR });
 
   const evo = ctx.get("evo");
   const proposeRes = await evo.proposeCandidate({

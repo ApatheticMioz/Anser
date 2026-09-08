@@ -9,14 +9,30 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import assert from "node:assert";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { SandboxFsService } from "../src/harness/services/sandbox_fs.js";
-import { AnserRunner } from "../src/harness/runner.js";
-import { ShellExecutorService } from "../src/harness/services/shell_executor.js";
-import { EvoOperator } from "../src/harness/evo/evo_operator.js";
-import { requireEngineOrSkip } from "./helpers/engine_probe.js";
+
+// F9 (state isolation): pin the Qwen state dir (and home-based candidate
+// paths) to a fresh temp dir BEFORE importing runner.js. The live AnserRunner
+// (Benchmark 2) mounts the eventLogger plugin with no explicit baseDir, so it
+// defaults to QWEN_STATE_DIR/sessions — without this redirect it would write
+// session logs into the PRODUCTION C:\Users\Apath\.qwen/sessions state. This is
+// the established isolation pattern from tests/shell_hardening.test.js.
+const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx7_benchmark_state_"));
+process.env.QWEN_STATE_DIR = TMP_STATE;
+process.env.QWEN_WSL_HOME = TMP_STATE;
+process.env.QWEN_WIN_HOME = TMP_STATE;
+process.env.HOME = TMP_STATE;
+
+// Dynamic imports AFTER the env redirect so config.js pins QWEN_STATE_DIR to
+// the temp dir at module load.
+const { SandboxFsService } = await import("../src/harness/services/sandbox_fs.js");
+const { AnserRunner } = await import("../src/harness/runner.js");
+const { ShellExecutorService } = await import("../src/harness/services/shell_executor.js");
+const { EvoOperator } = await import("../src/harness/evo/evo_operator.js");
+const { requireEngineOrSkip } = await import("./helpers/engine_probe.js");
 
 const execFileAsync = promisify(execFile);
 const BENCHMARK_TMP = path.resolve(process.cwd(), ".benchmark_tmp");
