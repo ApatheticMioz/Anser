@@ -17,7 +17,7 @@ Qwen3.8-27B coworker (vLLM + DFlash2 + KVarN, 245K context) to two runtimes:
 ### Claude Code CLI
 
 ```bash
-claude mcp add --scope user qwen-anser node D:/LLM_Ecosystem/mcp-qwen/index.js
+claude mcp add --scope user qwen-anser node <repo-root>/mcp-qwen/index.js
 ```
 
 The server registers three tools: `qwen_coworker`, `qwen_task`, `qwen_server`.
@@ -75,10 +75,10 @@ and verifies the `mcp_config.json` entries. Re-run after any schema change in
 
 ```bash
 # Register (one-time)
-claude mcp add --scope user qwen-anser node D:/LLM_Ecosystem/mcp-qwen/index.js
+claude mcp add --scope user qwen-anser node <repo-root>/mcp-qwen/index.js
 
 # In a Claude Code session, dispatch:
-#   qwen_coworker(prompt="...", cwd="D:/LLM_Ecosystem/my-project", session_id="task1")
+#   qwen_coworker(prompt="...", cwd="<repo-root>/my-project", session_id="task1")
 #
 # Long tasks yield a taskId + wait_command:
 #   curl -s http://127.0.0.1:18021/task/<id>/wait

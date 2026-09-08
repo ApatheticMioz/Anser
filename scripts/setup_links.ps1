@@ -59,12 +59,22 @@ New-NativeSymlink -LinkPath $geminiRuleDst -TargetPath $geminiSrc
 Write-Host "  -> Linked $geminiRuleDst -> $geminiSrc"
 
 # If WSL is available, also update WSL symlinks
+# Derive the WSL /mnt/<drive>/... equivalent of the repo root
+# (e.g. X:\MyProject -> /mnt/x/MyProject) from $repoRoot.
+$wslRepoRoot = $null
+if ($repoRoot -match '^([A-Za-z]):(.*)$') {
+    $wslRepoRoot = "/mnt/$($Matches[1].ToLower())" + ($Matches[2] -replace '\\','/')
+}
 try {
     $wslCheck = wsl.exe -e which bash 2>$null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "Configuring WSL symlinks..."
-        wsl.exe -e bash -c "/mnt/d/LLM_Ecosystem/scripts/wsl/setup_links.sh"
-        Write-Host "  -> WSL symlinks configured."
+        if ($wslRepoRoot) {
+            wsl.exe -e bash -c "$wslRepoRoot/scripts/wsl/setup_links.sh"
+            Write-Host "  -> WSL symlinks configured."
+        } else {
+            Write-Warning "Could not derive WSL repo root from '$repoRoot'; skipping WSL symlinks."
+        }
     }
 } catch {
     Write-Warning "WSL not reachable or error updating WSL symlinks: $_"
