@@ -154,7 +154,11 @@ await checkAsync("d: quote-bearing id -> pgrep pattern escaped, no raw quote", a
   }
 });
 
-// (d2) real-bash execution: an injection payload does NOT execute
+// (d2) real-bash execution: an injection payload does NOT execute. The
+// marker is STDOUT-based, not file-based: on Windows, Git Bash mangles a
+// backslash canary path (`C:\x` -> `CUsersApathx` created in the CWD), so a
+// file-existence check would inspect the wrong path and FALSE-PASS on a real
+// injection. A marker echoed to stdout is observed no matter where bash runs.
 await checkAsync("d2: injection payload does not execute in a real bash", async () => {
   // Probe for bash (offline-skip if unavailable).
   let bashPath = null;
@@ -168,30 +172,39 @@ await checkAsync("d2: injection payload does not execute in a real bash", async 
     console.log("  -> [SKIP] bash unavailable (skipping real-execution injection test)");
     return;
   }
-  // Use a POSIX (os.tmpdir) canary path so bash does not mangle it (a Windows
-  // path with backslashes would be interpreted by bash and land at a different
-  // location, masking a real injection).
-  const canaryDir = fs.mkdtempSync(path.join(os.tmpdir(), "fx2_canary_"));
-  const canary = path.join(canaryDir, "CANARY");
-  try {
-    // A classic injection payload: if the quote broke out of the single-quoted
-    // region, `touch <canary>` would run as a separate command and create the
-    // file. With correct escaping the `;` stays inside the pgrep pattern.
-    const id = "x" + Q + "; touch " + canary + "; echo " + Q + "y";
-    const calls = [];
-    setWslCommandSyncRunner((cmd) => {
-      calls.push(cmd);
-      return "";
-    });
-    killGooseSessionSync(id);
-    setWslCommandSyncRunner(null);
-    const cmd = calls[0];
-    // Execute the EXACT constructed command in a real bash.
-    execFileSync(bashPath, ["-c", cmd], { stdio: "ignore" });
-    assert.strictEqual(fs.existsSync(canary), false, "injection did NOT create the canary file");
-  } finally {
-    fs.rmSync(canaryDir, { recursive: true, force: true });
-  }
+  // A classic injection payload: if the quote broke out of the single-quoted
+  // region, `echo <MARKER>` would run as a separate command and print the
+  // marker to stdout. With correct escaping the `;` stays inside the pgrep
+  // pattern and the marker never appears.
+  const MARKER = "FX2_INJECTION_CANARY_EXECUTED";
+  const id = "x" + Q + "; echo " + MARKER + "; echo " + Q + "y";
+  const calls = [];
+  setWslCommandSyncRunner((cmd) => {
+    calls.push(cmd);
+    return "";
+  });
+  killGooseSessionSync(id);
+  setWslCommandSyncRunner(null);
+  const cmd = calls[0];
+  // Sanity (mutation-check for d2 itself): rebuild the command with the RAW
+  // id substituted back in — quoting deliberately broken — and prove the
+  // marker DOES fire. Without this, a marker check that could never observe
+  // the injection would false-pass silently.
+  const escaped = extractEscapedId(cmd);
+  assert.ok(escaped !== null, `extracted escaped id from: ${cmd}`);
+  const brokenCmd = cmd.replace(escaped, id);
+  const brokenOut = execFileSync(bashPath, ["-c", brokenCmd], { stdio: "pipe" }).toString();
+  assert.ok(
+    brokenOut.includes(MARKER),
+    `sanity: the unescaped payload must execute (got: ${JSON.stringify(brokenOut)})`
+  );
+  // Execute the EXACT constructed command in a real bash.
+  const out = execFileSync(bashPath, ["-c", cmd], { stdio: "pipe" }).toString();
+  assert.strictEqual(
+    out.includes(MARKER),
+    false,
+    "injection marker must NOT appear in stdout of the constructed command"
+  );
 });
 
 // ---------------------------------------------------------------------------
