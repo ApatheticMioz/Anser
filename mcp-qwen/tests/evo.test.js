@@ -207,6 +207,14 @@ async function runTests() {
     const status1 = evo.getStatus();
     assert.strictEqual(status1.summary.acceptedCount, 2, "Lineage should have baseline + candidate accepted");
 
+    // Test 5b: Zero-assertion command (syntax check like tsc) must yield exactly 50.0, not 100.0
+    const zeroEval = new ClosedLoopEvaluator({ shell });
+    const evalZeroAssertions = await zeroEval.evaluate({
+      command: "node -e \"process.exit(0)\"",
+      cwd: TEST_DIR,
+    });
+    assert.strictEqual(evalZeroAssertions.fitness, 50, "Zero-assertion exit 0 command must score exactly 50.0 (syntax gate)");
+
     // Step 5: Propose a regressive candidate and verify rollback
     const badProposal = await evo.proposeCandidate({
       hypothesis: "Broken modification causing crash",

@@ -133,7 +133,9 @@ export class ClosedLoopEvaluator {
       return -100 - parsed.testsFailed * 25;
     }
 
-    let baseScore = 100;
+    // Zero-assertion baseline: a compiler pass or command without test framework assertions
+    // is a neutral syntax gate (score: 50.0), NOT a verified functional optimization (100.0).
+    let baseScore = 50;
     if (parsed.testsTotal > 0) {
       baseScore = (parsed.testsPassed / parsed.testsTotal) * 100;
     }

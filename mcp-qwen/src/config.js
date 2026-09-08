@@ -33,7 +33,7 @@ export function getReasoningEffort() {
   return v ? v : "xhigh";
 }
 
-export const DEFAULT_RACE_MS = 45_000;
+export const DEFAULT_RACE_MS = 15_000;
 export const RACE_MS = process.env.QWEN_RACE_MS
   ? parseInt(process.env.QWEN_RACE_MS, 10)
   : DEFAULT_RACE_MS;

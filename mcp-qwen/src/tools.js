@@ -167,7 +167,7 @@ export function registerTools(server) {
       }
 
       const curlBin = IS_WINDOWS ? "curl.exe" : "curl";
-      const waitCmd = `${curlBin} -fS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
+      const waitCmd = `${curlBin} -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
       const elapsedSec = Math.round(RACE_MS / 1000);
       const responseText = [
         `### Qwen Task Dispatched (Background Execution)`,
@@ -177,7 +177,8 @@ export function registerTools(server) {
         `- **Time Elapsed**: ${elapsedSec}s (Task continuing in background with ${Math.round(totalTimeoutMs / 60000)} min budget)`,
         ``,
         `> [!TIP]`,
-        `> **Zero-Turn Reactive Wait**: Execute the following command via \`run_command\` (or background shell). It will sleep at $0 token cost and automatically wake you when Qwen completes:`,
+        `> **Zero-Turn Reactive Wait**: Execute the wait command via \`run_command\` (Antigravity) or \`Bash\` (Claude Code). It sleeps at $0 token cost and automatically wakes you on completion.`,
+        `> For extended background tasks, enforce the telemetry-grounded decaying check-in schedule via bounded wait windows (\`--max-time 3000\` -> \`1800\` -> \`900\` -> \`300\`):`,
         `\`\`\`bash`,
         `${waitCmd}`,
         `\`\`\``,
