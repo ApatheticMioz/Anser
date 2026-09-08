@@ -41,6 +41,14 @@ import {
 // Re-export validator and canary token for backwards compatibility
 export { validateShellSafety, assertDeadManFuse, CANARY_DISASTER_FUSE_TOKEN };
 
+// FX2: escape a single quote for use INSIDE a single-quoted POSIX shell
+// string (the classic close-quote / escaped-quote / reopen-quote idiom). Used by ALL THREE shell branches (WSL,
+// Git-Bash, Linux) so the command can never break out of the surrounding
+// single quotes and inject a second command. Same idiom as the WSL branch.
+function escapeSingleQuote(s) {
+  return String(s).replace(/'/g, "'\\''");
+}
+
 export class ShellExecutorService {
   constructor(options = {}) {
     // P4i: canonicalize the default cwd through the OS symlink/junction
@@ -109,7 +117,7 @@ export class ShellExecutorService {
         // WSLENV, so the color-forcing vars are sanitized INSIDE the -c
         // payload: Node >= 24 honors FORCE_COLOR on piped stdout and would
         // otherwise corrupt JSON.parse'd ast-grep output and metric regexes.
-        args = ["-d", wslDistro(), "--", "bash", "-c", `exec -a "${execTag}" bash -c 'unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat EXEC_TAG="${execTag}"; cd "${posixCwd}" && ${command.replace(/'/g, "'\\''")}'`];
+        args = ["-d", wslDistro(), "--", "bash", "-c", `exec -a "${execTag}" bash -c 'unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat EXEC_TAG="${execTag}"; cd "${posixCwd}" && ${escapeSingleQuote(command)}'`];
         spawnCwd = undefined; // let WSL handle cd
       } else if (process.env.QWEN_SHELL_MODE !== "cmd" && posixShell()) {
         // POSIX shell routing (P4g): the command is handed to a real
@@ -129,7 +137,12 @@ export class ShellExecutorService {
           posixSpawnCwd = toWindowsPath(effectiveCwd);
         }
         executable = posixShell();
-        args = ["-c", `EXEC_TAG="${execTag}" && ${command}`];
+        // FX2: uniform with the WSL branch — `exec -a` sets the process
+        // argv[0] to the exec tag (so the anchored pgrep sweep can match it)
+        // and the command is single-quote-wrapped with the ''' escape idiom
+        // so it can never break out of the quoting. Git Bash's bash supports
+        // `exec -a` (verified), so no deviation from the WSL mechanism.
+        args = ["-c", `exec -a "${execTag}" bash -c 'unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat EXEC_TAG="${execTag}"; ${escapeSingleQuote(command)}'`];
         spawnCwd = posixSpawnCwd;
       } else {
         // Legacy cmd.exe path: zero regression for machines without a
@@ -139,7 +152,10 @@ export class ShellExecutorService {
       }
     } else {
       executable = "bash";
-      args = ["-c", `EXEC_TAG="${execTag}" && ${command}`];
+      // FX2: uniform with the WSL branch — `exec -a` sets the process argv[0]
+      // to the exec tag and the command is single-quote-wrapped with the
+      // ''' escape idiom so it can never break out of the quoting.
+      args = ["-c", `exec -a "${execTag}" bash -c 'unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat EXEC_TAG="${execTag}"; ${escapeSingleQuote(command)}'`];
     }
 
     // Final pre-spawn dead-man assertion barrier

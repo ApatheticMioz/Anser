@@ -130,8 +130,13 @@ export function releaseExclusiveLock(lockPath) {
 export async function serverInfo() {
   try {
     const key = getApiKeySync();
+    // FX2: vLLM does not require auth. When no key file is found,
+    // getApiKeySync returns null and we send NO Authorization header
+    // (honest) instead of a fabricated token.
+    const headers = {};
+    if (key) headers.Authorization = `Bearer ${key}`;
     const res = await fetch(`${BASE_URL}/models`, {
-      headers: { Authorization: `Bearer ${key}` },
+      headers,
       signal: AbortSignal.timeout(2000),
     });
     if (!res.ok) return null;
@@ -160,12 +165,12 @@ export async function canaryProbe(force = false) {
   let result;
   try {
     const key = getApiKeySync();
+    // FX2: omit Authorization when no key file exists (honest, not fabricated).
+    const headers = { "Content-Type": "application/json" };
+    if (key) headers.Authorization = `Bearer ${key}`;
     const res = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
+      headers,
       body: JSON.stringify({
         model: "qwen3.8-27b",
         // Ceiling only: the canary prompt ("Reply with: ok") makes a healthy
@@ -378,12 +383,12 @@ export async function healWedgedEngine(statsAgeSec) {
 export async function warmEngine() {
   try {
     const key = getApiKeySync();
+    // FX2: omit Authorization when no key file exists (honest, not fabricated).
+    const headers = { "Content-Type": "application/json" };
+    if (key) headers.Authorization = `Bearer ${key}`;
     await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
+      headers,
       body: JSON.stringify({
         model: "qwen3.8-27b",
         messages: [{ role: "user", content: "ping" }],

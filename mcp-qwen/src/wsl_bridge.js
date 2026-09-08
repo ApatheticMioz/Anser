@@ -150,7 +150,7 @@ export function getApiKeySync() {
       }
     } catch {}
   }
-  return "EMPTY";
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,12 +194,65 @@ function sleepSync(ms) {
 function escapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+/**
+ * Escape a single quote for use INSIDE a single-quoted POSIX shell string.
+ *
+ * The classic idiom: close the quote, emit an escaped quote, reopen the
+ * quote. Same `replace` as the WSL branch in shell_executor.js. A single
+ * quote in the input can never break out of the surrounding single quotes,
+ * so a user-controlled value interpolated here cannot inject a command.
+ *
+ *   "it's"  ->  it'\''s
+ */
+function escapeSingleQuote(s) {
+  return String(s).replace(/'/g, "'\\''");
+}
+
+/**
+ * Escape a user-controlled id for interpolation into the anchored
+ * `pgrep -f '<pattern>'` sweep.
+ *
+ * pgrep -f matches an EXTENDED REGEX, not a literal, so two independent
+ * escapes must compose, in this order:
+ *   1. escapeRe    — neutralize ERE metacharacters (`.` `*` `[` `(` `$` ...)
+ *                    so the pattern matches ONLY the literal id. Without this,
+ *                    a crafted id like `.*` would match every goose process
+ *                    on the box and the sweep would kill sibling sessions.
+ *   2. escapeSingleQuote — neutralize single quotes so the pattern cannot
+ *                    break out of the surrounding single-quoted shell string.
+ *
+ * Order is load-bearing: regex-escape FIRST (its output is backslashes and
+ * original quotes only, both inert inside single quotes), then shell-escape
+ * (its output is quote swaps only, never touching the regex backslashes).
+ *
+ *   "it's.*"  ->  "it's\.\*"  ->  it'\''s\.\*
+ */
+function pgrepEscapeId(s) {
+  return escapeSingleQuote(escapeRe(String(s)));
+}
 
 /**
  * Synchronous WSL command runner (bash -c) for the shutdown path.
  * Returns the raw stdout (Buffer). Never throws.
+ *
+ * Indirection for the WSL command runner so tests can run fully offline
+ * (no real wsl.exe / bash subprocesses). Defaults to the real runner.
+ * Pass null to restore the real runner.
  */
+let wslCommandSyncRunner = null;
+export function setWslCommandSyncRunner(fn) {
+  wslCommandSyncRunner = typeof fn === "function" ? fn : null;
+}
+
 function runWslCommandSync(cmd) {
+  if (wslCommandSyncRunner) {
+    try {
+      const out = wslCommandSyncRunner(cmd);
+      return Buffer.isBuffer(out) ? out : Buffer.from(String(out ?? ""));
+    } catch {
+      return Buffer.from("");
+    }
+  }
   try {
     if (IS_WINDOWS) {
       return execFileSync("wsl.exe", ["-d", wslDistro(), "--", "bash", "-c", cmd], {
@@ -231,7 +284,7 @@ export async function killGooseSession(sessionId) {
   let candidates = [];
   try {
     const { stdout } = await runWslCommand(
-      `pgrep -f 'goose run --name ${escapeRe(id)}' 2>/dev/null || true`
+      `pgrep -f 'goose run --name ${pgrepEscapeId(id)}' 2>/dev/null || true`
     );
     candidates = stdout
       .split(/\s+/)
@@ -270,7 +323,7 @@ export function killGooseSessionSync(sessionId) {
   let candidates = [];
   try {
     const out = runWslCommandSync(
-      `pgrep -f 'goose run --name ${escapeRe(id)}' 2>/dev/null || true`
+      `pgrep -f 'goose run --name ${pgrepEscapeId(id)}' 2>/dev/null || true`
     ).toString();
     candidates = out
       .split(/\s+/)
@@ -424,7 +477,7 @@ export function killTaggedWslProcessesSync(tag) {
   let candidates = [];
   try {
     const out = runWslCommandSync(
-      `pgrep -f '${escapeRe(id)}' 2>/dev/null || true`
+      `pgrep -f '${pgrepEscapeId(id)}' 2>/dev/null || true`
     ).toString();
     candidates = out
       .split(/\s+/)

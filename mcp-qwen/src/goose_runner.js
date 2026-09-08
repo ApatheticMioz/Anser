@@ -63,9 +63,30 @@ export function isSuccessStatus(status) {
   return status === "completed" || status === "completed_ceiling";
 }
 
+// FX2: the charset the system itself generates for session ids. The default
+// generator produces `workspace_<md5hex8>_<pid-b36>_<ts-b36>`; the shell
+// executor tags are `qwen_sh_<ts>_<rand>`; clients use `<milestone>_s1`,
+// `task-ui-ovh`, etc. All of these are [A-Za-z0-9._:-]. A session id is
+// interpolated into a single-quoted POSIX shell string (the anchored
+// `pgrep -f 'goose run --name <id>'` sweep in wsl_bridge.js), so any
+// character outside this charset (a single quote, `;`, backtick, space,
+// newline, ...) is a shell-injection vector. We REFUSE such ids loudly
+// (fail-fast) rather than silently sanitizing them.
+const SESSION_ID_CHARSET = /^[A-Za-z0-9._:-]+$/;
+
 export function resolveSessionId(cwd, requestedSessionId) {
   if (requestedSessionId && requestedSessionId.trim()) {
-    return requestedSessionId.trim();
+    const id = requestedSessionId.trim();
+    if (!SESSION_ID_CHARSET.test(id)) {
+      throw new Error(
+        `Invalid session_id "${id}": session ids must match [A-Za-z0-9._:-]+ ` +
+          `(the charset the system generates, e.g. qwen_sh_<ts>_<rand>, ` +
+          `<milestone>_s1). Refusing to use a session id containing shell ` +
+          `metacharacters (quote, ;, backtick, space, newline, ...) to prevent ` +
+          `shell injection in the anchored process sweep.`
+      );
+    }
+    return id;
   }
   const hash = crypto.createHash("md5").update(cwd.toLowerCase()).digest("hex").slice(0, 8);
   // P15: the default session id must be unique per task, not just per cwd.
