@@ -283,6 +283,20 @@ export function registerTools(server) {
       }
 
       let task = tasks.get(task_id) || readTaskFromDisk(task_id);
+      if (task && task.corrupted) {
+        // D11 (FX6): a corrupt task file is an explicit corruption signal,
+        // never conflated with a clean not-found. Surface the file and the
+        // parse error verbatim (the file has already been quarantined).
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Task \`${task_id}\` file is CORRUPT (quarantined to ${task.file}): ${task.error}`,
+            },
+          ],
+          isError: true,
+        };
+      }
       if (!task) {
         return {
           content: [
@@ -417,6 +431,21 @@ export function registerTools(server) {
         } catch {}
 
         const diskTask = readTaskFromDisk(task_id);
+        if (diskTask && diskTask.corrupted) {
+          // D11 (FX6): a corrupt task file is an explicit corruption signal.
+          // There is no live task to cancel (the file is already quarantined);
+          // surface the file and the parse error rather than a fabricated
+          // "already finished".
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Task \`${task_id}\` file is CORRUPT (quarantined to ${diskTask.file}): ${diskTask.error}`,
+              },
+            ],
+            isError: true,
+          };
+        }
         if (diskTask && !diskTask.done) {
           if (diskTask.sessionId) {
             // P15: anchored sweep (pgrep -> /proc cmdline boundary verify ->

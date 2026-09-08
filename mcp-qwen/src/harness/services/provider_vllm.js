@@ -30,18 +30,58 @@ export class VllmProviderService {
 
   /**
    * Fetches available models from the vLLM server.
+   *
+   * D8 (FX6): a probe failure is a real signal, never a fabricated list.
+   * The old code swallowed every failure (network error, non-2xx, bad JSON)
+   * and returned `[this.model]` — a synthetic "success" that hid an engine
+   * that was down. Now every failure path THROWS a loud error carrying the
+   * upstream status/detail, so an engine-down condition surfaces as an error
+   * instead of a fake model list. Only a genuine 2xx with a parseable
+   * `data` array yields a real list.
    */
   async listModels() {
+    let res;
     try {
-      const res = await fetch(`${this.baseUrl}/models`, {
+      res = await fetch(`${this.baseUrl}/models`, {
         signal: AbortSignal.timeout(5000),
       });
-      if (res.ok) {
-        const data = await res.json();
-        return (data.data || []).map((m) => m.id);
-      }
-    } catch {}
-    return [this.model];
+    } catch (err) {
+      // Network-level failure (connection refused / timeout / DNS): the
+      // engine (or proxy) is unreachable. Surface it verbatim — never a
+      // fabricated list.
+      throw new Error(
+        `listModels: vLLM /models probe failed against ${this.baseUrl}: ${
+          err && err.message ? err.message : String(err)
+        }`
+      );
+    }
+    if (!res.ok) {
+      // Non-2xx: the engine answered but rejected the probe. Carry the
+      // upstream status + body so the failure is decidable.
+      let detail = "";
+      try {
+        detail = await res.text();
+      } catch {}
+      throw new Error(
+        `listModels: vLLM /models probe returned HTTP ${res.status} ${res.statusText} from ${this.baseUrl}: ${detail}`
+      );
+    }
+    let data;
+    try {
+      data = await res.json();
+    } catch (err) {
+      throw new Error(
+        `listModels: vLLM /models returned 200 but an unparseable body from ${this.baseUrl}: ${
+          err && err.message ? err.message : String(err)
+        }`
+      );
+    }
+    if (!data || !Array.isArray(data.data)) {
+      throw new Error(
+        `listModels: vLLM /models returned 200 but no 'data' array from ${this.baseUrl} (body: ${JSON.stringify(data)})`
+      );
+    }
+    return data.data.map((m) => m.id);
   }
 
   /**

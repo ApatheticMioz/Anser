@@ -77,46 +77,137 @@ export function markTaskOrphanedOnDisk(diskTask) {
   return diskTask;
 }
 
-export function readTaskFromDisk(taskId) {
+/**
+ * Quarantines a corrupt/unreadable task file by renaming it to
+ * `<name>.corrupt-<epochms>` (the LineageDag quarantine pattern) and logs
+ * loudly to stderr. Returns the underlying error message. Shared by
+ * readTaskFromDisk (single read) and listTasksFromDisk (bulk read) so BOTH
+ * surface corruption identically instead of silently swallowing it.
+ *
+ * D11 (FX6): a corrupt file is a real signal, never conflated with a clean
+ * not-found. It is preserved (renamed, not deleted) so it can be inspected,
+ * and the corruption is announced on stderr.
+ */
+function quarantineCorruptTaskFile(filePath, err) {
+  const msg = err && err.message ? err.message : String(err);
+  const corruptBackup = `${filePath}.corrupt-${Date.now()}`;
+  console.error(
+    `[task_registry] Corrupt task file ${filePath}: ${msg}. Quarantining to ${corruptBackup}.`
+  );
   try {
-    const filePath = path.join(TASK_DIR, `${taskId}.json`);
-    if (fs.existsSync(filePath)) {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-      if (parsed && !parsed.done && isTaskOrphaned(parsed)) {
-        return markTaskOrphanedOnDisk(parsed);
-      }
-      return parsed;
-    }
-  } catch (err) {
-    if (err && (err.code === "EBUSY" || err.code === "EPERM")) {
-      return { transientLock: true, id: taskId };
-    }
+    fs.renameSync(filePath, corruptBackup);
+  } catch (qerr) {
+    // The rename itself failed (e.g. the file vanished between the read and
+    // the rename, or a transient lock). The corruption is still surfaced via
+    // the stderr log and the returned message; we do not fabricate a success.
+    console.error(
+      `[task_registry] Failed to quarantine ${filePath}: ${
+        qerr && qerr.message ? qerr.message : String(qerr)
+      }`
+    );
   }
-  return null;
+  return msg;
 }
 
+/**
+ * Reads a single task from disk, distinguishing the signals honestly:
+ *   - file ABSENT             -> null (clean not-found)
+ *   - transient file lock     -> { transientLock: true, id } (EBUSY/EPERM;
+ *                                 the worker is mid-write; retry next tick)
+ *   - file CORRUPT/unreadable -> { corrupted: true, id, file, error }
+ *                                 (the file is QUARANTINEd and a loud
+ *                                 stderr log is emitted)
+ *   - healthy file            -> the parsed task object
+ *
+ * D11 (FX6): the old code returned null for BOTH "absent" and "corrupt", so
+ * a corrupt task file was reported as "task not found" (and, in the wait
+ * path, as "failed") — dishonest. Now a corrupt file is an explicit
+ * corruption signal: quarantined, logged loudly, and surfaced to the caller
+ * as a distinguishable result, never conflated with a clean not-found.
+ */
+export function readTaskFromDisk(taskId) {
+  const filePath = path.join(TASK_DIR, `${taskId}.json`);
+  if (!fs.existsSync(filePath)) {
+    return null; // clean not-found
+  }
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    if (err && (err.code === "EBUSY" || err.code === "EPERM")) {
+      // Transient Windows file lock while the worker is mid-write: a real
+      // signal, not corruption. The caller retries on the next tick.
+      return { transientLock: true, id: taskId };
+    }
+    // Unreadable for a non-transient reason: corruption.
+    const msg = quarantineCorruptTaskFile(filePath, err);
+    return { corrupted: true, id: taskId, file: filePath, error: msg };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    // Unparseable: corruption.
+    const msg = quarantineCorruptTaskFile(filePath, err);
+    return { corrupted: true, id: taskId, file: filePath, error: msg };
+  }
+  if (parsed && !parsed.done && isTaskOrphaned(parsed)) {
+    return markTaskOrphanedOnDisk(parsed);
+  }
+  return parsed;
+}
+
+/**
+ * Lists all on-disk tasks, applying retention cleanup.
+ *
+ * D11 (FX6): a corrupt/unreadable file is no longer silently skipped (the old
+ * `catch {}` swallowed it, so a corrupt task vanished from the list with no
+ * signal). Now each corrupt file is QUARANTINEd and logged loudly to stderr
+ * (same helper as readTaskFromDisk); a transient lock (EBUSY/EPERM) is still
+ * skipped for this tick (the worker is mid-write) but is a distinct, honest
+ * case. The returned list contains only healthy, parseable tasks.
+ */
 export function listTasksFromDisk() {
   const result = [];
+  let files;
   try {
-    const files = fs.readdirSync(TASK_DIR);
-    const now = Date.now();
-    for (const f of files) {
-      if (f.endsWith(".json")) {
-        try {
-          const filePath = path.join(TASK_DIR, f);
-          const stat = fs.statSync(filePath);
-          if (now - stat.mtimeMs > TASK_RETENTION_MS) {
-            try {
-              fs.unlinkSync(filePath);
-            } catch {}
-            continue;
-          }
-          const task = JSON.parse(fs.readFileSync(filePath, "utf8"));
-          result.push(task);
-        } catch {}
-      }
+    files = fs.readdirSync(TASK_DIR);
+  } catch {
+    return result; // TASK_DIR unreadable this tick: return what we have.
+  }
+  const now = Date.now();
+  for (const f of files) {
+    if (!f.endsWith(".json")) continue;
+    const filePath = path.join(TASK_DIR, f);
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      continue; // vanished between readdir and stat
     }
-  } catch {}
+    if (now - stat.mtimeMs > TASK_RETENTION_MS) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch {}
+      continue;
+    }
+    let raw;
+    try {
+      raw = fs.readFileSync(filePath, "utf8");
+    } catch (err) {
+      if (err && (err.code === "EBUSY" || err.code === "EPERM")) continue; // transient lock
+      quarantineCorruptTaskFile(filePath, err);
+      continue;
+    }
+    let task;
+    try {
+      task = JSON.parse(raw);
+    } catch (err) {
+      quarantineCorruptTaskFile(filePath, err);
+      continue;
+    }
+    result.push(task);
+  }
   return result;
 }
 
@@ -302,6 +393,21 @@ export const statusHttpServer = http.createServer((req, res) => {
     let diskTask = null;
     if (!task) {
       diskTask = readTaskFromDisk(taskId);
+      if (diskTask && diskTask.corrupted) {
+        // D11 (FX6): a corrupt task file is an explicit corruption signal,
+        // never conflated with a clean not-found. Surface it as a 500 with
+        // the file and the parse error.
+        res.writeHead(500, { "Content-Type": "application/json" });
+        return res.end(
+          JSON.stringify({
+            found: true,
+            id: taskId,
+            corrupted: true,
+            file: diskTask.file,
+            error: `Task file corrupted: ${diskTask.error}`,
+          })
+        );
+      }
       if (!diskTask) {
         res.writeHead(404, { "Content-Type": "text/plain" });
         return res.end(`Task not found: ${taskId}`);
@@ -336,6 +442,24 @@ export const statusHttpServer = http.createServer((req, res) => {
       if (current?.transientLock) {
         // Transient Windows file lock (EBUSY/EPERM) during worker saveTaskToDisk.
         // Worker is actively writing; skip tick and continue polling.
+        return;
+      }
+      if (current?.corrupted) {
+        // D11 (FX6): the task file is corrupt. End the wait with an explicit
+        // corruption signal (500) naming the file and the parse error — never
+        // debounced into a fabricated "Task failed."
+        clearInterval(diskPoll);
+        try {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              id: taskId,
+              corrupted: true,
+              file: current.file,
+              error: `Task file corrupted: ${current.error}`,
+            })
+          );
+        } catch {}
         return;
       }
 
@@ -379,6 +503,21 @@ export const statusHttpServer = http.createServer((req, res) => {
   if (req.method === "GET" && getMatch) {
     const taskId = getMatch[1];
     let task = tasks.get(taskId) || readTaskFromDisk(taskId);
+    if (task && task.corrupted) {
+      // D11 (FX6): a corrupt task file is an explicit corruption signal,
+      // never conflated with a clean not-found. Surface it as a 500 with the
+      // file and the parse error.
+      res.writeHead(500, { "Content-Type": "application/json" });
+      return res.end(
+        JSON.stringify({
+          found: true,
+          id: taskId,
+          corrupted: true,
+          file: task.file,
+          error: `Task file corrupted: ${task.error}`,
+        })
+      );
+    }
     if (!task) {
       res.writeHead(404, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ found: false, id: taskId }));
@@ -450,6 +589,21 @@ export const statusHttpServer = http.createServer((req, res) => {
       return res.end(JSON.stringify({ cancelled: true, id: taskId }));
     }
     const diskTask = readTaskFromDisk(taskId);
+    if (diskTask && diskTask.corrupted) {
+      // D11 (FX6): a corrupt task file is an explicit corruption signal.
+      // There is no live task to cancel (the file is already quarantined);
+      // surface the corruption as a 500 rather than fabricating a cancel.
+      res.writeHead(500, { "Content-Type": "application/json" });
+      return res.end(
+        JSON.stringify({
+          cancelled: false,
+          id: taskId,
+          corrupted: true,
+          file: diskTask.file,
+          error: `Task file corrupted: ${diskTask.error}`,
+        })
+      );
+    }
     if (diskTask) {
       if (diskTask.sessionId) {
         // P15: anchored sweep (pgrep -> /proc cmdline boundary verify -> kill)

@@ -27,6 +27,7 @@
 
 import http from "http";
 import { RepetitionDetector } from "./src/repetition_detector.js";
+import { PROXY_MAX_BODY_BYTES } from "./src/config.js";
 
 const UPSTREAM_PORT = parseInt(process.env.VLLM_PORT || "18020", 10);
 const PROXY_PORT = parseInt(process.env.VLLM_PROXY_PORT || "18022", 10);
@@ -309,19 +310,21 @@ const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url.startsWith("/v1/chat/completions")) {
     const chunks = [];
     let byteCount = 0;
-    const MAX_BODY_BYTES = 50 * 1024 * 1024; // 50MB
+    // D13 (FX6): single source for the inbound body limit — imported from
+    // config.js (PROXY_MAX_BODY_BYTES). The old inline 50MB literal was a
+    // dual-source drift risk against config.js; it is gone.
     let exceeded = false;
 
     req.on("data", (chunk) => {
       if (exceeded) return;
       byteCount += chunk.length;
-      if (byteCount > MAX_BODY_BYTES) {
+      if (byteCount > PROXY_MAX_BODY_BYTES) {
         exceeded = true;
         res.writeHead(413, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
             error: {
-              message: `Payload Too Large: request body exceeded ${MAX_BODY_BYTES} bytes limit.`,
+              message: `Payload Too Large: request body exceeded ${PROXY_MAX_BODY_BYTES} bytes limit.`,
               type: "payload_too_large",
               code: 413,
             },

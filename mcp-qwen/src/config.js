@@ -98,7 +98,6 @@ export const MAX_CONCURRENT_GOOSE = process.env.QWEN_MAX_CONCURRENT
   : 1;
 
 export const SLOT_HEARTBEAT_MS = 15_000;
-export const SLOT_STALE_MS = 90_000;
 export const SLOT_WEDGED_MS = 300_000;
 export const SLOT_POLL_MS = 1_000;
 
