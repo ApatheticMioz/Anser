@@ -413,7 +413,7 @@ v5.1.0 was validated through an unbroken 11.25-hour multi-agent pair-programming
 
 ### 13-Hour Autonomous Production Marathon Telemetry (v5.2.0 End-to-End Overhaul — Sept 7, 2026)
 
-In an unbroken 13.1-hour autonomous pairing session driving the full 6-phase UI overhaul of `enterprise-app` across Claude Code (GLM-5.3 / GLM-5.3-Flash) and local Qwen3.8-27B (Anser Coworker on RTX 3090), the stack delivered the following production metrics:
+In an unbroken 13.1-hour autonomous pairing session driving the full 6-phase frontend UI overhaul of an enterprise web application across Claude Code (GLM-5.3 / GLM-5.3-Flash) and local Qwen3.8-27B (Anser Coworker on RTX 3090), the stack delivered the following production metrics:
 
 | Production Telemetry Dimension | Empirical Measurement | Operational Value |
 |---|---|---|

@@ -196,9 +196,12 @@ Measured single-user decode: ~130 tok/s (short), ~89 (code), up to ~381
 
 ---
 
-## Production Marathon Telemetry
+## Production Marathon Telemetry [Historical Baselines]
 
-### 11-Hour Multi-Agent Production Marathon Telemetry (v5.1.0 Validation)
+> [!NOTE]
+> **Historical Pre-Release Telemetry**: These marathon benchmarks (11h and 13h continuous sessions) were recorded during pre-release development iterations (v5.1.0 and v5.2.0) leading up to the Anser architecture. They are preserved here as empirical verification of continuous, long-horizon local serving stability on a single RTX 3090, prior to the upcoming stable Anser release.
+
+### 11-Hour Multi-Agent Production Marathon Telemetry (v5.1.0 Pre-Release Validation)
 
 In an unbroken 11.25-hour autonomous pairing session across Gemini 3.8 Flash (Antigravity Meta-Supervisor), GLM-5.3-Flash / Claude Code (Lead Architect), and Qwen3.8-27B (Anser Coworker), the stack delivered the following production metrics:
 
@@ -220,9 +223,9 @@ In an unbroken 11.25-hour autonomous pairing session across Gemini 3.8 Flash (An
 
 ---
 
-### 13-Hour Autonomous Production Marathon Telemetry (v5.2.0 End-to-End Overhaul — Sept 7, 2026)
+### 13-Hour Autonomous Production Marathon Telemetry (v5.2.0 Pre-Release Overhaul — Sept 7, 2026)
 
-In an unbroken 13.1-hour autonomous pairing session driving the full 6-phase UI overhaul of `enterprise-app` across Claude Code (GLM-5.3 / GLM-5.3-Flash) and local Qwen3.8-27B (Anser Coworker on RTX 3090), the stack delivered the following production metrics:
+In an unbroken 13.1-hour autonomous pairing session driving a full 6-phase frontend UI overhaul of an enterprise web application across Claude Code (GLM-5.3 / GLM-5.3-Flash) and local Qwen3.8-27B (Anser Coworker on RTX 3090), the stack delivered the following production metrics:
 
 | Production Telemetry Dimension | Empirical Measurement | Operational Value |
 |---|---|---|
@@ -250,7 +253,10 @@ Detailed audit of the transcripts reveals **6 critical operational friction mode
 
 ---
 
-## SWE-rebench Validation Benchmark
+## [HISTORICAL / PRE-RELEASE] SWE-rebench Validation Benchmark (Legacy Goose Runner)
+
+> [!NOTE]
+> **Legacy Historical Benchmark**: This benchmark was conducted under the legacy Goose runner architecture on pre-release code. Current Anser 2026.1 microkernel runs use the native pair-programming protocol. This is retained strictly as an uncurated historical baseline.
 
 To evaluate real-world software engineering generalization without data contamination, the stack was benchmarked against [SWE-rebench](https://swe-rebench.com/) (Nebius, `nebius/SWE-rebench-leaderboard`), using fresh GitHub issues created after model training cutoffs (March 2026 split):
 

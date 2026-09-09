@@ -168,7 +168,7 @@ To dispatch work to the local autonomous Qwen3.8-27B coworker, call `call_mcp_to
 - **ToolName**: `"qwen_coworker"`
 - **Arguments**:
   - `prompt`: Specific, single-concern task or inquiry scoped by the Lead Architect to ONE subsystem (Full Objective Fulfillment, no tool ceilings).
-  - `cwd`: Target project directory (e.g. `<workspace_root>` or workspace).
+  - `cwd`: Target project directory (e.g. `<workspace_root>` or current working directory).
   - `session_id`: Named session (e.g. `"redteam_stage1"`) to maintain KV-cache across 2–3 turns.
   - `extensions`: Optional stdio extensions, e.g. `["uvx free-search-mcp"]` for live web lookup or `["npx -y @upstash/context7-mcp"]`.
 
