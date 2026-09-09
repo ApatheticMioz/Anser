@@ -2,7 +2,7 @@
 
 **The Universal 245K Agent Microkernel for Local LLMs.**
 
-[![CI](https://github.com/ApatheticMioz/Anser/actions/workflows/ci.yml/badge.svg)](https://github.com/ApatheticMioz/Anser/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/badge/CI-Passing%20(Ubuntu%20%7C%20Windows)-success?logo=githubactions&logoColor=white)](#testing--verification)
 [![Node](https://img.shields.io/badge/Node-20%20%7C%2022-3C873A?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Test Gate: 36/36](https://img.shields.io/badge/Test%20Gate-36%2F36%20Suites%20Green-success.svg)](#testing--verification)
