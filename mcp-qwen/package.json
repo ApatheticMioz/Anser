@@ -38,8 +38,8 @@
     "dflash2",
     "kvarn"
   ],
-  "author": "",
-  "license": "MIT",
+  "author": "ApatheticMioz",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "engines": {
     "node": ">=22"

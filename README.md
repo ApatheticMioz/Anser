@@ -4,7 +4,7 @@
 
 [![CI](https://img.shields.io/badge/CI-Passing%20(Ubuntu%20%7C%20Windows)-success?logo=githubactions&logoColor=white)](#testing--verification)
 [![Node](https://img.shields.io/badge/Node-22%20%7C%2024-3C873A?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Test Gate: 36/36](https://img.shields.io/badge/Test%20Gate-36%2F36%20Suites%20Green-success.svg)](#testing--verification)
 [![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#model-serving--speculative-decoding)
 [![Serving](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#model-serving--speculative-decoding)
@@ -32,7 +32,7 @@
 9. [Testing & Verification](#testing--verification)
 10. [Repository Structure](#repository-structure)
 11. [Contributing](#contributing)
-12. [License & Acknowledgments](#license--acknowledgments)
+12. [License & Commercial Licensing](#license--commercial-licensing)
 
 ---
 
@@ -329,7 +329,7 @@ Anser/
   AGENTS.md                 # Machine-readable operating contract (2026 AAIF)
   CONTRIBUTING.md           # Human contributor workflow
   SECURITY.md               # Private vulnerability reporting
-  LICENSE                   # MIT (Anser Contributors)
+  LICENSE                   # GNU AGPLv3 (Anser Contributors)
   .github/
     workflows/ci.yml        # Cross-platform test gate
     ISSUE_TEMPLATE/         # Bug + feature request templates
@@ -362,9 +362,14 @@ the machine-readable contract. In short:
 
 ---
 
-## License & Acknowledgments
+## License & Commercial Licensing
 
-Licensed under the [MIT License](LICENSE) — **Anser Contributors**.
+Licensed under the **[GNU Affero General Public License v3 (AGPL-3.0)](LICENSE)** — **Anser Contributors**.
+
+- **Open Source & Copyleft**: Anser is free and open-source software. You are free to inspect, run, modify, and redistribute it under the terms of the AGPLv3. Any modified version deployed over a network or used as an online service must make its complete corresponding source code available under AGPLv3.
+- **Enterprise & Dual-Licensing**: If you wish to embed Anser's microkernel or sandbox components into a proprietary, closed-source commercial product or internal infrastructure without copyleft obligations, a commercial dual-license is available. Inquiries: [`ApatheticMioz@gmail.com`](mailto:ApatheticMioz@gmail.com).
+
+### Acknowledgments
 
 - **Qwen Team (Alibaba Cloud)** for Qwen3.8-27B.
 - **vLLM Project** for high-throughput LLM serving.

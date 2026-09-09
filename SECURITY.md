@@ -25,9 +25,8 @@ the flaw before a fix ships.
 
 ### Preferred: Private disclosure
 
-1. **Email the maintainer** at the address listed in the repository
-   `README.md` / `CONTRIBUTING.md`, with the subject line
-   **`[Security] <short description>`**.
+1. **Email the maintainer** at [`ApatheticMioz@gmail.com`](mailto:ApatheticMioz@gmail.com),
+   with the subject line **`[Security] <short description>`**.
 2. Include, as far as you can safely provide:
    - A clear description of the vulnerability and its impact.
    - The affected component (e.g. zero-trust sandbox, shell hardening /

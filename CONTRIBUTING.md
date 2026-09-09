@@ -151,7 +151,7 @@ Example: `feat(harness): harden search, edit, patch guards and establish protoco
 Before requesting review, confirm:
 - [ ] `npm run test:all --prefix mcp-qwen` is green (or `TEST_OFFLINE=1` for
       GPU-less runs) — **zero skipped canaries you introduced**.
-- [ ] CI (`.github/workflows/ci.yml`) is green across the Node 20/22 x
+- [ ] CI (`.github/workflows/ci.yml`) is green across the Node 22/24 x
       ubuntu/windows matrix.
 - [ ] No hardcoded drive letters, home dirs, or usernames in any file
       (paths are relative or env-driven).
