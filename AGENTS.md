@@ -59,7 +59,7 @@ All commands are **relative** — never hardcode a drive letter or home path.
 `<repo>` = the root of your checkout.
 
 ### 2.1 Prerequisites
-- **Node.js >= 20** (20 or 22; the CI matrix runs both).
+- **Node.js >= 22** (22 or 24; the CI matrix runs both active LTS versions).
 - **Git** (leave `core.autocrlf` at default — `.gitattributes` pins LF).
 - **Optional, for the full live stack:** a GPU with >= 24 GB VRAM, WSL2 (or
   native Linux), CUDA 12.4+, and a vLLM serving of Qwen3.8-27B on `:18020`.
@@ -252,9 +252,9 @@ running vLLM on `:18020` + a 24 GB GPU. They **skip honestly** when
 
 ### 5.4 CI
 `.github/workflows/ci.yml` runs the gate on every push/PR across a
-**Node 20 & 22 x ubuntu-latest & windows-latest** matrix (4 jobs, no
-fail-fast). It uses `npm ci` in `mcp-qwen/` and runs both `test` (31) and
-`test:all` (36). A green CI is required before a PR is mergeable.
+**Node 22 & 24 x ubuntu-latest & windows-latest** matrix (4 jobs, no
+fail-fast). It uses `npm ci` in `mcp-qwen/` and runs the authoritative
+`test:all` gate (36 suites). A green CI is required before a PR is mergeable.
 
 ---
 

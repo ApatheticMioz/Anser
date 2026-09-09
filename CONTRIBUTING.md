@@ -13,7 +13,7 @@ clone to merged pull request.
 ## 1. Local Environment Setup
 
 ### Prerequisites
-- **Node.js 20+** (20 or 22 — the CI matrix runs both).
+- **Node.js 22+** (22 or 24 — the CI matrix runs both active LTS versions).
 - **Git** (leave `core.autocrlf` at default; `.gitattributes` pins LF).
 - **Optional, for the full live stack only:** a GPU with >= 24 GB VRAM, WSL2
   (or native Linux), CUDA 12.4+, and a vLLM serving of Qwen3.8-27B on `:18020`.

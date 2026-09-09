@@ -3,7 +3,7 @@
 **The Universal 245K Agent Microkernel for Local LLMs.**
 
 [![CI](https://img.shields.io/badge/CI-Passing%20(Ubuntu%20%7C%20Windows)-success?logo=githubactions&logoColor=white)](#testing--verification)
-[![Node](https://img.shields.io/badge/Node-20%20%7C%2022-3C873A?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/Node-22%20%7C%2024-3C873A?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Test Gate: 36/36](https://img.shields.io/badge/Test%20Gate-36%2F36%20Suites%20Green-success.svg)](#testing--verification)
 [![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#model-serving--speculative-decoding)
@@ -313,7 +313,7 @@ running vLLM on `:18020` + a 24 GB GPU; they **skip honestly** when
 `TEST_OFFLINE=1` or the engine is offline.
 
 **CI** (`.github/workflows/ci.yml`) runs the gate on every push/PR across a
-**Node 20 & 22 x ubuntu-latest & windows-latest** matrix (4 jobs, no
+**Node 22 & 24 x ubuntu-latest & windows-latest** matrix (4 jobs, no
 fail-fast), using `npm ci` for deterministic native-binary resolution.
 
 All suites enforce the **Universal LF invariant** (`.gitattributes`:
