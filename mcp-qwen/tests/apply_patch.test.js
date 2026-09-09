@@ -347,7 +347,13 @@ async function runTests() {
       const err = await capture(nonGitSvc.applyPatch({ patch, dirPath: "." }));
       ok(err === null, "patch applies in a non-git directory (no throw)");
       const after = fs.readFileSync(f, "utf8");
-      ok(after === "world\n", "file modified in the non-git directory");
+      // In a non-git directory, line endings depend on the host's git config
+      // (core.autocrlf may convert LF to CRLF on Windows runners where no
+      // .gitattributes exists). Normalize newlines before comparing.
+      ok(
+        after.replace(/\r\n/g, "\n") === "world\n",
+        "file modified in the non-git directory"
+      );
     } finally {
       fs.rmSync(nonGitDir, { recursive: true, force: true });
     }
