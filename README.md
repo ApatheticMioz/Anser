@@ -371,3 +371,4 @@ Licensed under the [MIT License](LICENSE) — **Anser Contributors**.
 - **Huawei CSL** for [KVarN](https://github.com/huawei-csl/KVarN).
 - **Inco AI** for the [DFlash2](https://inco.ai/blog/dflash2/) block drafter.
 - **Herrington Darkholme & contributors** for [ast-grep](https://github.com/ast-grep/ast-grep).
+- **syv-ai** for [qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090) (serving recipes and RTX 3090 24GB configuration baselines).
