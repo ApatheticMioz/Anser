@@ -35,6 +35,7 @@ const {
   _resetPosixShellCache,
   setPosixShellProbeCandidate,
   toWindowsPath,
+  toPosixWslPath,
 } = await import("../src/platform.js");
 
 const { ShellExecutorService } = await import(
@@ -321,6 +322,7 @@ async function main() {
       console.log("[SKIP] CWD fidelity (not Windows)");
     } else {
       const executor = new ShellExecutorService({ cwd: REPO_ROOT });
+      const posixRepoRoot = toPosixWslPath(REPO_ROOT);
 
       // (e1) POSIX-style cwd is translated with toWindowsPath().
       // Use node -e to read process.cwd() (returns the real Windows path,
@@ -330,13 +332,13 @@ async function main() {
         async () => {
           const res = await executor.execute({
             command: 'node -e "console.log(process.cwd())"',
-            cwd: "/mnt/d/LLM_Ecosystem/mcp-qwen",
+            cwd: posixRepoRoot,
           });
-          const expected = toWindowsPath("/mnt/d/LLM_Ecosystem/mcp-qwen");
+          const expected = toWindowsPath(posixRepoRoot);
           assertOk(
             res.exitCode === 0 &&
               res.stdout.trim().toLowerCase() === expected.toLowerCase(),
-            `CWD fidelity: /mnt/d/... -> ${JSON.stringify(
+            `CWD fidelity: posix cwd -> ${JSON.stringify(
               res.stdout.trim()
             )} (expected ${expected})`
           );
@@ -349,12 +351,12 @@ async function main() {
         async () => {
           const res = await executor.execute({
             command: 'node -e "console.log(process.cwd())"',
-            cwd: "D:\\LLM_Ecosystem\\mcp-qwen",
+            cwd: REPO_ROOT,
           });
           assertOk(
             res.exitCode === 0 &&
-              res.stdout.trim().toLowerCase() === "d:\\llm_ecosystem\\mcp-qwen",
-            `CWD fidelity: D:\\... passed verbatim -> ${JSON.stringify(
+              res.stdout.trim().toLowerCase() === REPO_ROOT.toLowerCase(),
+            `CWD fidelity: windows cwd passed verbatim -> ${JSON.stringify(
               res.stdout.trim()
             )}`
           );
