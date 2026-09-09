@@ -1,4 +1,8 @@
-# SWE-rebench eval: Goose + Qwen3.8-27B, CTX=huge
+# [OLD / HISTORICAL ARCHIVE] SWE-rebench eval: Goose + Qwen3.8-27B, CTX=huge
+
+> [!WARNING]
+> **[OLD / HISTORICAL ARCHIVE — Legacy Goose Runner]**:
+> This benchmark was conducted using the **legacy Goose runner** (`goose.exe`) on an early prototype configuration. It does NOT reflect the current Anser microkernel or its native pair-programming protocol. It is archived here strictly for historical reference.
 
 Validates the actual served, quantized model (not the self-reported 61.7
 SWE-bench Pro figure, which was almost certainly measured on a different

@@ -1,4 +1,8 @@
-# 13-Hour Autonomous Production Marathon Telemetry (Session Sept 7, 2026)
+# 13-Hour Autonomous Production Marathon Telemetry (Session Sept 7, 2026) [OLD / Pre-Release Baseline]
+
+> [!NOTE]
+> **[OLD / HISTORICAL PRE-RELEASE BASELINE (v5.2.0)]**:
+> This telemetry log captures a pre-release development run (v5.2.0) prior to the upcoming stable Anser release. It does not reflect the upcoming stable release and is preserved for empirical baseline and debugging analysis.
 
 ## 1. Executive Summary
 

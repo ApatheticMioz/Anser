@@ -9,7 +9,7 @@
 [![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#model-serving--speculative-decoding)
 [![Serving](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#model-serving--speculative-decoding)
 [![Security](https://img.shields.io/badge/Security-137%2F137%20Vectors%20Contained-success.svg)](#zero-trust-sandboxed-file-operations)
-[![SWE-rebench](https://img.shields.io/badge/SWE--rebench-32.0%25%20Resolved-blueviolet.svg)](#swe-rebench-validation-benchmark)
+[![SWE-rebench: Old (Goose)](https://img.shields.io/badge/SWE--rebench-32.0%25%20%5BOLD%20%7C%20Goose%5D-inactive.svg)](#old-swe-rebench-validation-benchmark-legacy-goose-runner)
 
 > **Anser** lets a high-reasoning cloud orchestrator (the *Lead Architect*)
 > drive a **locally-served Qwen3.8-27B** — 245K context on a single 24 GB GPU,
@@ -26,8 +26,8 @@
 3. [Key Features](#key-features)
 4. [Quickstart (3 Steps)](#quickstart-3-steps)
 5. [Model Serving, Speculative Decoding & Quantization](#model-serving--speculative-decoding)
-6. [Production Marathon Telemetry (11h & 13h Runs)](#production-marathon-telemetry)
-7. [SWE-rebench Validation Benchmark](#swe-rebench-validation-benchmark)
+6. [Production Marathon Telemetry [OLD / Pre-Release Baselines]](#production-marathon-telemetry-old--pre-release-baselines)
+7. [SWE-rebench Validation Benchmark [OLD / Legacy Goose]](#old-swe-rebench-validation-benchmark-legacy-goose-runner)
 8. [Zero-Trust Sandboxed File Operations](#zero-trust-sandboxed-file-operations)
 9. [Testing & Verification](#testing--verification)
 10. [Repository Structure](#repository-structure)
@@ -196,12 +196,15 @@ Measured single-user decode: ~130 tok/s (short), ~89 (code), up to ~381
 
 ---
 
-## Production Marathon Telemetry [Historical Baselines]
+## Production Marathon Telemetry [OLD / Pre-Release Baselines]
 
 > [!NOTE]
-> **Historical Pre-Release Telemetry**: These marathon benchmarks (11h and 13h continuous sessions) were recorded during pre-release development iterations (v5.1.0 and v5.2.0) leading up to the Anser architecture. They are preserved here as empirical verification of continuous, long-horizon local serving stability on a single RTX 3090, prior to the upcoming stable Anser release.
+> **[OLD / Pre-Release Telemetry — Subject to Upcoming Stable Release Benchmarks]**:
+> Both marathon benchmarks documented below (the 11.25h and 13.1h continuous sessions) were captured on **slightly older pre-release versions** (v5.1.0 and v5.2.0 prototype iterations).
+> **None of these metrics were measured on the current codebase or the upcoming stable release of Anser.**
+> They are preserved here strictly as empirical proof of concept demonstrating continuous, long-horizon local serving stability, memory containment, and zero-turn wait efficiency on a single consumer RTX 3090 over 10+ hours. Fresh production benchmarks will be conducted and published once the upcoming stable release is finalized.
 
-### 11-Hour Multi-Agent Production Marathon Telemetry (v5.1.0 Pre-Release Validation)
+### [OLD] 11-Hour Multi-Agent Production Marathon Telemetry (v5.1.0 Pre-Release Validation)
 
 In an unbroken 11.25-hour autonomous pairing session across Gemini 3.8 Flash (Antigravity Meta-Supervisor), GLM-5.3-Flash / Claude Code (Lead Architect), and Qwen3.8-27B (Anser Coworker), the stack delivered the following production metrics:
 
@@ -223,7 +226,7 @@ In an unbroken 11.25-hour autonomous pairing session across Gemini 3.8 Flash (An
 
 ---
 
-### 13-Hour Autonomous Production Marathon Telemetry (v5.2.0 Pre-Release Overhaul — Sept 7, 2026)
+### [OLD] 13-Hour Autonomous Production Marathon Telemetry (v5.2.0 Pre-Release Overhaul — Sept 7, 2026)
 
 In an unbroken 13.1-hour autonomous pairing session driving a full 6-phase frontend UI overhaul of an enterprise web application across Claude Code (GLM-5.3 / GLM-5.3-Flash) and local Qwen3.8-27B (Anser Coworker on RTX 3090), the stack delivered the following production metrics:
 
@@ -253,12 +256,13 @@ Detailed audit of the transcripts reveals **6 critical operational friction mode
 
 ---
 
-## [HISTORICAL / PRE-RELEASE] SWE-rebench Validation Benchmark (Legacy Goose Runner)
+## [OLD] SWE-rebench Validation Benchmark (Legacy Goose Runner)
 
-> [!NOTE]
-> **Legacy Historical Benchmark**: This benchmark was conducted under the legacy Goose runner architecture on pre-release code. Current Anser 2026.1 microkernel runs use the native pair-programming protocol. This is retained strictly as an uncurated historical baseline.
+> [!WARNING]
+> **[OLD / HISTORICAL — Legacy Goose Runner]**:
+> Mentioning SWE-bench here is strictly for historical prototype record-keeping from early experiments. This benchmark was conducted using the **legacy Goose runner** (`goose.exe`) on an early prototype configuration, *not* the current Anser microkernel or its native pair-programming protocol. It is retained strictly as an uncurated historical baseline and does not reflect current Anser performance or capabilities.
 
-To evaluate real-world software engineering generalization without data contamination, the stack was benchmarked against [SWE-rebench](https://swe-rebench.com/) (Nebius, `nebius/SWE-rebench-leaderboard`), using fresh GitHub issues created after model training cutoffs (March 2026 split):
+To evaluate real-world software engineering generalization without data contamination on that early prototype, the legacy Goose+Qwen stack was benchmarked against [SWE-rebench](https://swe-rebench.com/) (Nebius, `nebius/SWE-rebench-leaderboard`), using fresh GitHub issues created after model training cutoffs (March 2026 split):
 
 - **Resolved Rate (Best-of-1)**: **32.0% (16/50)** on uncurated fresh GitHub issues.
 - **Attempted Resolution Rate**: **57.1% (16/28)** for issues completed within the 900s timeout budget.

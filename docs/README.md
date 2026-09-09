@@ -47,5 +47,5 @@ docs/
 
 - **MCP Server Architecture**: [`mcp-qwen/index.js`](../mcp-qwen/index.js)
 - **Engineering Decisions & Benchmark Changelog**: [`docs/archive/DEVELOPMENT_NOTES_2026.md`](archive/DEVELOPMENT_NOTES_2026.md)
-- **SWE-rebench Validation Suite**: [`benchmarks/swe-rebench/README.md`](../benchmarks/swe-rebench/README.md)
+- **[OLD] SWE-rebench Validation Suite (Legacy Goose Runner)**: [`benchmarks/swe-rebench/README.md`](../benchmarks/swe-rebench/README.md)
 - **Upstream vLLM Wedge Repro Report**: [`benchmarks/wedge-repro/RESULTS.md`](../benchmarks/wedge-repro/RESULTS.md)
