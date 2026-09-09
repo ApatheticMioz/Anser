@@ -142,7 +142,7 @@ function loadTypescript() {
 // (exit 0). ENOENT (binary missing) and non-zero exit both mean "unavailable".
 function probeBinary(cmd, args) {
   try {
-    execFileSync(cmd, args, { stdio: "ignore", timeout: 5000, windowsHide: true });
+    execFileSync(cmd, args, { stdio: "ignore", timeout: 10000, windowsHide: true });
     return true;
   } catch (err) {
     // ENOENT => binary not on PATH; non-zero exit => present but not runnable.

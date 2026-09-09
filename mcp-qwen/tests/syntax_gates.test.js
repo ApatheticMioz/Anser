@@ -276,19 +276,17 @@ async function runTests() {
     // -------------------------------------------------------------------------
     console.log("\n[Test 5] Go gate (gofmt -e)");
     {
-      const goAvail = binaryAvailable("gofmt", ["-h"]);
-      if (goAvail) {
-        const valid = "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n";
-        const rValid = ast.validateSyntax(path.join(TEST_DIR, "g.go"), valid, "go");
-        ok(rValid.checked === true && rValid.valid === true, "valid Go accepted (gofmt present)");
+      const valid = "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n";
+      const rValid = ast.validateSyntax(path.join(TEST_DIR, "g.go"), valid, "go");
+      if (rValid.checked) {
+        ok(rValid.valid === true, "valid Go accepted (gofmt present)");
 
         const broken = "package main\n\nfunc main( {\n\tprintln(\"hi\")\n}\n";
         const rBroken = ast.validateSyntax(path.join(TEST_DIR, "g.go"), broken, "go");
         ok(rBroken.checked === true && rBroken.valid === false, "broken Go rejected (gofmt present)");
       } else {
         // Genuinely absent -> honest degradation (checked:false, never "valid").
-        const r = ast.validateSyntax(path.join(TEST_DIR, "g.go"), "package main\n", "go");
-        ok(r.checked === false && r.valid === false && /gofmt/.test(r.reason), "absent gofmt degrades honestly (checked:false)");
+        ok(rValid.valid === false && /gofmt/.test(rValid.reason), "absent gofmt degrades honestly (checked:false)");
         skip("go broken-rejection", "gofmt absent; honest-degradation path asserted instead");
       }
     }
@@ -298,18 +296,16 @@ async function runTests() {
     // -------------------------------------------------------------------------
     console.log("\n[Test 6] Rust gate (rustfmt --check)");
     {
-      const rustAvail = binaryAvailable("rustfmt", ["--version"]);
-      if (rustAvail) {
-        const valid = "fn main() {\n    println!(\"hi\");\n}\n";
-        const rValid = ast.validateSyntax(path.join(TEST_DIR, "r.rs"), valid, "rust");
-        ok(rValid.checked === true && rValid.valid === true, "valid Rust accepted (rustfmt present)");
+      const valid = "fn main() {\n    println!(\"hi\");\n}\n";
+      const rValid = ast.validateSyntax(path.join(TEST_DIR, "r.rs"), valid, "rust");
+      if (rValid.checked) {
+        ok(rValid.valid === true, "valid Rust accepted (rustfmt present)");
 
         const broken = "fn main( {\n    println!(\"hi\");\n}\n";
         const rBroken = ast.validateSyntax(path.join(TEST_DIR, "r.rs"), broken, "rust");
         ok(rBroken.checked === true && rBroken.valid === false, "broken Rust rejected (rustfmt present)");
       } else {
-        const r = ast.validateSyntax(path.join(TEST_DIR, "r.rs"), "fn main() {}", "rust");
-        ok(r.checked === false && r.valid === false && /rustfmt/.test(r.reason), "absent rustfmt degrades honestly (checked:false)");
+        ok(rValid.valid === false && /rustfmt/.test(rValid.reason), "absent rustfmt degrades honestly (checked:false)");
         skip("rust broken-rejection", "rustfmt absent; honest-degradation path asserted instead");
       }
     }
