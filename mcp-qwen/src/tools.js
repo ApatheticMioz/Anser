@@ -10,6 +10,7 @@ import {
   AUTO_HEAL,
   WEDGE_STATS_SILENCE_S,
   REASONING_EFFORT_TIERS,
+  TASK_RETENTION_MS,
 } from "./config.js";
 import { normalizeWorkspacePath, canonicalizePath, killProcessTree, killGooseSession } from "./wsl_bridge.js";
 import {
@@ -313,7 +314,7 @@ export function registerTools(server) {
           content: [
             {
               type: "text",
-              text: `Task \`${task_id}\` not found in memory or disk (retention is 3 hours).`,
+              text: `Task \`${task_id}\` not found in memory or disk (retention is ${Math.round(TASK_RETENTION_MS / 3_600_000)}h).`,
             },
           ],
           isError: true,

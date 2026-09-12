@@ -24,8 +24,8 @@ export const tasks = new Map();
 
 export function saveTaskToDisk(task) {
   if (!task || !task.id) return;
+  const filePath = path.join(TASK_DIR, `${task.id}.json`);
   try {
-    const filePath = path.join(TASK_DIR, `${task.id}.json`);
     const tmpPath = `${filePath}.tmp_${process.pid}_${Date.now()}`;
     const payload = {
       id: task.id,
@@ -51,7 +51,13 @@ export function saveTaskToDisk(task) {
     };
     fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), "utf8");
     fs.renameSync(tmpPath, filePath);
-  } catch {}
+  } catch (err) {
+    // Telemetry persistence must never throw into the runner, but it must not
+    // be invisible either: a failed save (disk full, EBUSY, permission) is a
+    // real signal — log the path and the error to stderr and continue.
+    const msg = err && err.message ? err.message : String(err);
+    console.error(`[task_registry] Failed to save task ${task.id} to ${filePath}: ${msg}`);
+  }
 }
 
 export function isTaskOrphaned(diskTask) {
@@ -170,6 +176,12 @@ export function readTaskFromDisk(taskId) {
  * (same helper as readTaskFromDisk); a transient lock (EBUSY/EPERM) is still
  * skipped for this tick (the worker is mid-write) but is a distinct, honest
  * case. The returned list contains only healthy, parseable tasks.
+ *
+ * Retention cleanup also reaps orphaned `task_*.json.tmp_<pid>_<ts>` files
+ * (a saveTaskToDisk whose writeFileSync succeeded but whose renameSync never
+ * ran). Those orphans never match the `.json` filter, so without this they
+ * accumulate forever; the same mtime age gate reaps them (their lifetime is
+ * sub-second, so the gate is sufficient).
  */
 export function listTasksFromDisk() {
   const result = [];
@@ -181,7 +193,13 @@ export function listTasksFromDisk() {
   }
   const now = Date.now();
   for (const f of files) {
-    if (!f.endsWith(".json")) continue;
+    // Match healthy task JSON files AND orphaned tmp files. A tmp file is
+    // `<task>.json.tmp_<pid>_<ts>` — the leftover of a saveTaskToDisk whose
+    // writeFileSync succeeded but whose renameSync never ran (the old catch{}
+    // swallowed that failure, so these orphans accumulated forever). The tmp
+    // lifetime is sub-second, so the same mtime age gate reaps them.
+    const isTmpOrphan = /^task_.*\.json\.tmp_\d+_\d+$/.test(f);
+    if (!f.endsWith(".json") && !isTmpOrphan) continue;
     const filePath = path.join(TASK_DIR, f);
     let stat;
     try {
@@ -195,6 +213,7 @@ export function listTasksFromDisk() {
       } catch {}
       continue;
     }
+    if (isTmpOrphan) continue; // within retention: leave it (sub-second, ages out)
     let raw;
     try {
       raw = fs.readFileSync(filePath, "utf8");

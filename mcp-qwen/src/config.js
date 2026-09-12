@@ -100,7 +100,20 @@ export const MAX_REASONING_TOKENS = (() => {
 export const EXTENSION_BONUS_TIMEOUT_MS = 600_000; // 10 min
 // Invariant: retention must always outlive the longest legal task
 // (DEFAULT_TIMEOUT_MS), or it can unlink a LIVE task's JSON mid-run.
-export const TASK_RETENTION_MS = DEFAULT_TIMEOUT_MS + 1_800_000; // 4h + 30min
+// The floor is DEFAULT_TIMEOUT_MS + 30 min (the 30-min margin covers the
+// inactivity watchdog's grace window past the hard timeout).
+export const TASK_RETENTION_FLOOR_MS = DEFAULT_TIMEOUT_MS + 1_800_000; // 4h + 30min
+// Default retention: 7 days — long enough that audit telemetry survives a full
+// work week. Overridable via QWEN_TASK_RETENTION_MS; any configured value
+// below the floor is clamped up to the floor (the invariant above must never
+// be violated, even by an operator misconfiguration).
+export const DEFAULT_TASK_RETENTION_MS = 604_800_000; // 7 days
+export const TASK_RETENTION_MS = (() => {
+  const parsed = parseInt(process.env.QWEN_TASK_RETENTION_MS, 10);
+  const requested =
+    Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TASK_RETENTION_MS;
+  return Math.max(requested, TASK_RETENTION_FLOOR_MS);
+})();
 
 export const MAX_CONCURRENT_GOOSE = process.env.QWEN_MAX_CONCURRENT
   ? Math.max(1, parseInt(process.env.QWEN_MAX_CONCURRENT, 10))

@@ -126,6 +126,7 @@ All variables are read at process start (module-level) unless noted.
 | `QWEN_MIN_TIMEOUT_MS` | `600000` (10 min) | Floor for task timeout |
 | `QWEN_INACTIVITY_TIMEOUT_MS` | `1800000` (30 min) | Goose subprocess inactivity watchdog |
 | `QWEN_FIRST_TOKEN_TIMEOUT_MS` | `240000` (4 min) | Zero-output kill threshold after spawn |
+| `QWEN_TASK_RETENTION_MS` | `604800000` (7 days) | Task-telemetry retention window; floored at `DEFAULT_TIMEOUT_MS + 30min` so a live task's JSON is never unlinked mid-run |
 | `QWEN_MAX_CONCURRENT` | `1` | Global goose slot count (cross-process, disk-lease) |
 | `QWEN_MAX_TURNS` | *(null = unbounded)* | Max agent turns per dispatch |
 | `QWEN_MAX_CONTINUATION_TURNS` | `8` | Max re-prompts after `finish_reason: "length"` |
