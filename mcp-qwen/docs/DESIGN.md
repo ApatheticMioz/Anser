@@ -51,11 +51,15 @@ fact drives most of the liveness machinery:
   `running_requests > 0 || waiting_requests > 0`, the canary is skipped and
   wedge is declared from engine-log stats silence alone; when idle, the
   canary is authoritative.
-- **The first-token timeout** (`QWEN_FIRST_TOKEN_TIMEOUT_MS`, 4 min): a
-  wedged engine previously cost 10 minutes of GPU burn per attempt (the
-  2026-08-28 incident: zero SSE chunks, 600s inactivity kill,
-  `toolCallsCount: 0`). Zero output within the first-token window kills the
-  attempt with an explicit "engine wedged or saturated" message.
+- **The first-token watchdog** — historical. A wedged engine previously cost
+  10 minutes of GPU burn per attempt (the 2026-08-28 incident: zero SSE
+  chunks, 600s inactivity kill, `toolCallsCount: 0`), and a 4-min
+  first-token kill (`QWEN_FIRST_TOKEN_TIMEOUT_MS`) was specced for it. That
+  constant now has **no consumer** — it is retained as a reserved knob
+  (honesty-drift decision) — because live zero-output protection moved into
+  `QWEN_STREAM_IDLE_TIMEOUT_MS`, whose first-byte watchdog covers the same
+  failure with a 15-min budget sized for cold 200K prefills and MAX_SEQS
+  queue waits.
 - **The disk-lease semaphore** (`src/semaphore.js`): each Claude surface
   spawns its own MCP server process, so an in-process semaphore is useless
   across sessions. Slot leases in `~/.qwen/tasks/goose_slots/` are claimed
@@ -65,9 +69,10 @@ fact drives most of the liveness machinery:
   single slot means long queue waits, the client is handed a
   `curl .../task/<id>/wait` long-poll that blocks at $0 token cost instead
   of burning turns on `qwen_task` polls (the 570M-cache-read-token finding).
-- **The 45s race** (`QWEN_RACE_MS`): sized under Claude Desktop's ~60s
+- **The 15s race** (`QWEN_RACE_MS`): sized under Claude Desktop's ~60s
   client timeout and far under Antigravity's 180s, so one constant is safe
-  for both surfaces.
+  for both surfaces. Any task still running at expiry yields a durable
+  `taskId` + `wait_command` instead of a result.
 
 ### 1.3 Why the in-process Anser microkernel is the runtime
 

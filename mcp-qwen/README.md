@@ -121,13 +121,13 @@ All variables are read at process start (module-level) unless noted.
 | `QWEN_MAX_TOKENS` | `49152` | Per-turn output token budget |
 | `QWEN_MAX_REASONING_TOKENS` | `32768` | Per-turn reasoning (thinking) token ceiling; hit → `finish_reason: "length"` |
 | `QWEN_STREAM_IDLE_TIMEOUT_MS` | `900000` (15 min) | SSE stream idle watchdog (first-byte + inter-chunk) |
-| `QWEN_REASONING_EFFORT` | *(unset)* | Passed to vLLM `chat_template_kwargs.reasoning_effort` |
-| `QWEN_RACE_MS` | `45000` | Client-side race deadline before yielding `taskId` + `wait_command` |
+| `QWEN_REASONING_EFFORT` | `xhigh` | Fallback effort when a dispatch sends none; per-dispatch `reasoning_effort` overrides. Engine accepts exactly {xhigh, medium, low} |
+| `QWEN_RACE_MS` | `15000` (15 s) | Client-side race deadline before yielding `taskId` + `wait_command` |
 | `QWEN_MIN_TIMEOUT_MS` | `600000` (10 min) | Floor for task timeout |
 | `QWEN_INACTIVITY_TIMEOUT_MS` | `1800000` (30 min) | Goose subprocess inactivity watchdog |
-| `QWEN_FIRST_TOKEN_TIMEOUT_MS` | `240000` (4 min) | Zero-output kill threshold after spawn |
+| `QWEN_FIRST_TOKEN_TIMEOUT_MS` | `240000` (4 min) | **Reserved, no consumer yet** (retained as near-term knob per honesty-drift decision). Live zero-output protection is `QWEN_STREAM_IDLE_TIMEOUT_MS`, whose first-byte watchdog already covers this case |
 | `QWEN_TASK_RETENTION_MS` | `604800000` (7 days) | Task-telemetry retention window; floored at `DEFAULT_TIMEOUT_MS + 30min` so a live task's JSON is never unlinked mid-run |
-| `QWEN_MAX_CONCURRENT` | `1` | Global goose slot count (cross-process, disk-lease) |
+| `QWEN_MAX_CONCURRENT` | `2` | Global goose slot count (cross-process, disk-lease); kept 1:1 with the engine's `MAX_SEQS` |
 | `QWEN_MAX_TURNS` | *(null = unbounded)* | Max agent turns per dispatch |
 | `QWEN_MAX_CONTINUATION_TURNS` | `8` | Max re-prompts after `finish_reason: "length"` |
 | `QWEN_EMPTY_STREAM_RETRIES` | `2` | Retries for empty/zero-byte generations before honest failure |
