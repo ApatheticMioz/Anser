@@ -282,7 +282,8 @@ rewrite as valid.
 
 ### Engine wedge auto-heal + busy-gate
 
-The engine runs `MAX_SEQS=1` (one generation at a time). While a task is
+The engine runs `MAX_SEQS=2` (raised from 1 on 2026-09-12; one-or-two
+generations at a time). While a task is
 executing, a canary probe would queue behind the active generation and time
 out — measuring queue depth, not health. The **busy-gate** in
 `src/server_lifecycle.js` (`engineWedgeState`) reads `/metrics` gauges first:

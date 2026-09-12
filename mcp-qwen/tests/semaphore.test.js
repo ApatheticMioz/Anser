@@ -31,6 +31,10 @@ if (process.argv[2] !== "child") {
   process.env.QWEN_STATE_DIR = fs.mkdtempSync(
     path.join(os.tmpdir(), "semaphore_test_state_")
   );
+  // This suite asserts single-slot exclusion semantics; pin the semaphore so it
+  // does not float with the MAX_CONCURRENT_GOOSE default (2 since 2026-09-12,
+  // matching the engine's MAX_SEQS=2). Children inherit the pin via spawn env.
+  process.env.QWEN_MAX_CONCURRENT = "1";
 }
 
 const { acquireGooseSlot, releaseGooseSlot, listGooseSlots } = await import("../index.js");

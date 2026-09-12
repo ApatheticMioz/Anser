@@ -34,6 +34,12 @@ locked by `tests/ast_engine.test.js`.
 
 ### 1.2 Why `MAX_SEQS=1` shapes the whole design
 
+> **2026-09-12 addendum:** the seat count was raised to 2 (engine launcher +
+> `MAX_CONCURRENT_GOOSE` fallback), staying at the upstream huge-profile
+> validated count. The machinery below was designed under 1 seat and remains
+> correct at 2: the busy-gate keys off live `/metrics` gauges, not the seat
+> count, and the single-slot semaphore simply became a two-slot lease.
+
 The engine runs one generation at a time (`MAX_SEQS=1` on the vLLM side;
 `QWEN_MAX_CONCURRENT=1` on the harness side, `src/config.js`). This single
 fact drives most of the liveness machinery:

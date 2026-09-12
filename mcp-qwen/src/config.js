@@ -11,7 +11,11 @@ export const STREAM_PROXY_PORT = parseInt(process.env.STREAM_PROXY_PORT || "1802
 
 export const BASE_URL = `http://localhost:${VLLM_PORT}/v1`;
 export const MAX_LEN_HUGE = 245760;
-export const BOOT_TIMEOUT_MS = 180_000;
+// 2026-09-12: 180s -> 480s. Cold boot with MAX_SEQS=2 (multi-stream CUDA graph
+// capture restored) observed >180s in production: model load 15s + torch.compile
+// 45s + profiling/warmup 138s + DFlash-head compile/capture. The old deadline
+// was tuned for the 1-seat boot that eliminated those graphs.
+export const BOOT_TIMEOUT_MS = 480_000;
 export const BOOT_POLL_MS = 3000;
 
 // Output budget: default max_tokens for a single generation turn. Raised from
@@ -115,9 +119,12 @@ export const TASK_RETENTION_MS = (() => {
   return Math.max(requested, TASK_RETENTION_FLOOR_MS);
 })();
 
+// 2026-09-12: default raised 1 -> 2 to match the engine launcher's MAX_SEQS=2
+// (user-authorized; upstream huge-profile validated seat count). Keep 1:1 with
+// scripts/wsl/start_huge.sh. QWEN_MAX_CONCURRENT still overrides.
 export const MAX_CONCURRENT_GOOSE = process.env.QWEN_MAX_CONCURRENT
   ? Math.max(1, parseInt(process.env.QWEN_MAX_CONCURRENT, 10))
-  : 1;
+  : 2;
 
 export const SLOT_HEARTBEAT_MS = 15_000;
 export const SLOT_WEDGED_MS = 300_000;

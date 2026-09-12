@@ -21,7 +21,14 @@ export VLLM_DFLASH2_LOOKUP_ADAPTIVE=0  # A/B tested 2026-08-23: pins verify bloc
 # reservations, reclaiming ~800+ MiB of non-KV VRAM headroom on the RTX 3090.
 # This completely prevents WSL2 PCIe host-backing and dxgkio_escape deadlocks
 # during massive chunked prefills while preserving the full 245,760 context window.
-export MAX_SEQS=1
+# (Trajectory: ran MAX_SEQS=8 in the early multi-task era, then deliberately 1
+# for single-user pair programming — the VRAM-headroom + WSL2-deadlock rationale
+# above. 2026-09-12: user-authorized raise to 2. Watch for: the WSL2 PCIe
+# host-backing / dxgkio_escape deadlock signature during massive chunked
+# prefills, and non-KV VRAM headroom loss on the RTX 3090. Revert to 1 if either
+# reappears. Harness side must stay 1:1: MAX_CONCURRENT_GOOSE in
+# mcp-qwen/src/config.js.)
+export MAX_SEQS=2
 # Maximum Intelligence: Pristine W4A16 (unquantized activations). Retains 96.5% GSM8K
 # reasoning with zero perplexity degradation (+4.1% PPL / -1.5% GSM8K avoided).
 # Per-request usage & timing metrics (issue #51): enables usage reporting & prompt-tokens details

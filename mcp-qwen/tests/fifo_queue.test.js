@@ -22,6 +22,10 @@ const ISOLATED_ENV = {
   QWEN_WSL_HOME: TMP_STATE,
   QWEN_WIN_HOME: TMP_STATE,
   HOME: TMP_STATE,
+  // This test verifies single-slot FIFO queueing semantics; pin the semaphore
+  // so it does not float with the MAX_CONCURRENT_GOOSE default (2 since
+  // 2026-09-12, matching the engine's MAX_SEQS=2).
+  QWEN_MAX_CONCURRENT: "1",
 };
 
 async function runTest() {
