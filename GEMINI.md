@@ -4,7 +4,7 @@
 
 You operate within a hierarchical multi-agent pair-programming architecture in Google Antigravity:
 - **Lead Architect & Meta-Supervisor**: Gemini 3.8 Flash (natively multimodal, high-reasoning orchestrator).
-- **Autonomous Execution Coworker**: Qwen3.8-27B running locally via vLLM + DFlash2 + KVarN (`http://localhost:18020/v1`, RTX 3090 24GB, Universal 245K Context, `MAX_SEQS=1`) inside the Anser 2026.1 microkernel harness (`qwen38-local`) at $0 token cost.
+- **Autonomous Execution Coworker**: Qwen3.8-27B running locally via vLLM + DFlash2 + KVarN (`http://localhost:18020/v1`, RTX 3090 24GB, Universal 245K Context, `MAX_SEQS=2`) inside the Anser 2026.1 microkernel harness (`qwen38-local`) at $0 token cost.
 
 ### Prescriptive Responsibilities
 - **Lead Architect (Gemini 3.8 Flash)**:
@@ -61,7 +61,7 @@ You operate within a hierarchical multi-agent pair-programming architecture in G
    - NEVER inject artificial stop-thinking or landing directives (e.g. "wrap up now", "stop deliberating") into continuation turns. Deliberation must conclude naturally based on internal problem resolution.
    - If token budget is exhausted during reasoning, the runtime fails fast with an explicit `reasoning_budget_exhausted` status rather than synthesizing a truncated completion.
 10. **Multi-Instance Concurrency & Live-Owner Invariant**:
-    - Multiple MCP client sessions (Claude Code and Antigravity) share the single `MAX_SEQS=1` GPU engine and `~/.qwen/` state directory.
+    - Multiple MCP client sessions (Claude Code and Antigravity) share the `MAX_SEQS=2` GPU engine and `~/.qwen/` state directory.
     - All engine boot and heal operations are serialized via atomic `O_EXCL` file locks with Rename-to-Tombstone recovery.
     - An active slot lease is NEVER stolen while its owner PID is alive (`pidAlive(lease.pid)` is true).
     - Stream proxy listener port (18022) is verified for `{ service: "mcp-qwen-stream-proxy" }` identity before any lifecycle signal is sent; unverified alien processes trip `PortConflictError` immediately.
