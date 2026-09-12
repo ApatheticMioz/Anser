@@ -32,7 +32,7 @@ Measured anchors (serving recipe + our telemetry):
 **The architecture — two-sided asymmetric effort economics:**
 
 - **Cloud at HIGH effort for decisions.** Routing, decomposition, prompt-shaping, kill/no-kill calls. The audit shows each orchestrator mistake costs 30–120 min of serialized engine time (one relapse ≈ 2 h); dollars of cloud reasoning are nothing against that. Never economize on the deciding side.
-- **Local tiered by task class** (via the new per-dispatch `reasoning_effort` param; default `xhigh` unchanged): bounded mechanical implementation → `medium`; mutation-planning, security/correctness verification, tricky debugging → `xhigh`. Tier down consciously, per task class — never silently. (arXiv 2512.19585: reasoning gains plateau ~20k tokens and can dip at max budget — overthinking is real; Qwen3.8 exposes off/low/medium/xhigh, no "high".)
+- **Local tiered by task class** (via the new per-dispatch `reasoning_effort` param; default `xhigh` unchanged): bounded mechanical implementation → `medium`; mutation-planning, security/correctness verification, tricky debugging → `xhigh`. Tier down consciously, per task class — never silently. (arXiv 2512.19585: reasoning gains plateau ~20k tokens and can dip at max budget — overthinking is real. Empirical correction during implementation: the **served chat template accepts exactly {xhigh, medium, low}** — `off` and `high` return 400, despite the documented family tier list; and the serving launcher sets an engine-side default of `medium` via template kwargs, which the harness's explicit `xhigh` always overrides today.)
 - **Interface discipline joins the two** (§3): small, single-artifact, pointer-based dispatches into prefix-cache-coherent sessions, supervised telemetry-first.
 
 ## 3. Dispatch policy (empirical, codified in CLAUDE.md/GEMINI.md §3)
@@ -93,7 +93,7 @@ The session-level evidence behind each rule:
 1. **Effort-tier experiment (before hardening `medium` as policy):** paired bounded-implementation slices, `medium` vs `xhigh`; compare rounds, wall-clock, outcome quality. The Kaitchup 27B effort benchmarks are non-agentic (and paywalled); our own agentic numbers must come first.
 2. **Quoting-mode experiment:** extraction/report slices under `DFLASH_TOKENS=15` (381 tok/s on verbatim-copy workloads; costs half the seats + 8k context) — engine-side launcher change, separate decision.
 3. **Antigravity-side defects (out of this repo's reach):** 0-byte crash markers (crash handler writes nothing); planner transcript phantom-duplicate steps; 3 planner `invalid tool call (invalid_args)` parse errors in the audited session alone.
-4. **Effort values to verify engine-side:** the chat template's accepted `reasoning_effort` tiers (documented family behavior: off/low/medium/xhigh) — validated in the slice-1 schema; confirm against the live engine during the restart.
+4. ~~Effort values to verify engine-side~~ **RESOLVED**: the served chat template validates `reasoning_effort` to exactly {xhigh, medium, low} (400 on anything else); the slice-1 schema encodes the verified set (`REASONING_EFFORT_TIERS`).
 
 ## Appendix A — Knob classification (decision-relevant subset)
 
