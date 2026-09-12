@@ -32,6 +32,10 @@ export function saveTaskToDisk(task) {
       sessionId: task.sessionId,
       cwd: task.cwd,
       prompt: task.prompt,
+      // Effective reasoning-effort tier for this task (per-dispatch param when
+      // provided, else the QWEN_REASONING_EFFORT env default). Persisted for
+      // telemetry; undefined when the task predates the field.
+      reasoningEffort: task.reasoningEffort ?? null,
       ownerPid: task.ownerPid || process.pid,
       createdAt: task.createdAt,
       startedAt: task.startedAt,
@@ -538,6 +542,7 @@ export const statusHttpServer = http.createServer((req, res) => {
           status: task.status,
           done: task.done,
           isError: task.isError,
+          reasoningEffort: task.reasoningEffort ?? null,
           elapsed_s,
           startedAt: task.startedAt,
           lastActivitySecAgo,

@@ -92,6 +92,10 @@ export class VllmProviderService {
    * @param {Array<object>} [params.tools] OpenAI-formatted tools
    * @param {number} [params.temperature]
    * @param {number} [params.maxTokens]
+   * @param {string} [params.reasoningEffort] Task-local reasoning-effort tier
+   *   (one of REASONING_EFFORT_TIERS). When provided it overrides the
+   *   QWEN_REASONING_EFFORT env default for THIS request only — no
+   *   process.env mutation, so it never leaks across concurrent tasks.
    * @param {AbortSignal} [params.signal]
    * @param {(token: string) => void} [params.onToken]
    * @param {(metric: object) => void} [params.onMetrics]
@@ -107,6 +111,7 @@ export class VllmProviderService {
     tools = [],
     temperature = this.defaultTemperature,
     maxTokens = this.defaultMaxTokens,
+    reasoningEffort,
     signal,
     onToken,
     onMetrics,
@@ -139,13 +144,17 @@ export class VllmProviderService {
       payload.tool_choice = "auto";
     }
 
-    // Reasoning-effort passthrough: when the orchestrator sets
-    // QWEN_REASONING_EFFORT, forward it to the vLLM chat template so the
-    // engine can trade thinking depth for latency per dispatch. When unset,
+    // Reasoning-effort passthrough: a task-local `reasoningEffort` param
+    // (threaded from the qwen_coworker dispatch) takes precedence; when it is
+    // absent the existing dynamic QWEN_REASONING_EFFORT read is the fallback
+    // (unchanged behavior). Forwarded to the vLLM chat template so the engine
+    // can trade thinking depth for latency per dispatch. When neither is set,
     // send nothing and let the server default apply.
-    const reasoningEffort = getReasoningEffort();
-    if (reasoningEffort) {
-      payload.chat_template_kwargs = { reasoning_effort: reasoningEffort };
+    const effectiveReasoningEffort = reasoningEffort || getReasoningEffort();
+    if (effectiveReasoningEffort) {
+      payload.chat_template_kwargs = {
+        reasoning_effort: effectiveReasoningEffort,
+      };
     }
 
     let activeUrl = this.baseUrl;

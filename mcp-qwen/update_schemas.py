@@ -128,6 +128,7 @@ tools = {
                 'higher_is_better': {'type': 'boolean', 'description': 'Whether higher metric values represent improvement (default true)'},
                 'timeout_ms': {'type': 'integer', 'exclusiveMinimum': 0, 'maximum': 9007199254740991, 'description': 'Task timeout in ms (default 14,400,000ms (4 hours), minimum 600,000ms (10 min) - budgets are floored because a 27B model on consumer silicon routinely needs tens of minutes)'},
                 'skills': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Explicit list of skill names to inject (bypasses keyword auto-matching)'},
+                'reasoning_effort': {'type': 'string', 'enum': ['xhigh', 'medium', 'low'], 'description': "Per-dispatch reasoning-effort tier forwarded to the engine chat template (xhigh = maximal deliberation, medium = balanced, low = brief). Omit to use the QWEN_REASONING_EFFORT env default (xhigh). Only the engine's supported tiers are accepted; invalid values are rejected."},
             },
             'required': ['prompt']
         }

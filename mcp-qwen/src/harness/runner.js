@@ -21,7 +21,11 @@ import { astPlugin } from "./services/ast_service.js";
 import { McpBridge } from "./services/mcp_bridge.js";
 import { injectSkills, matchSkills } from "../skills.js";
 import { normalizeWorkspacePath, canonicalizePath } from "../wsl_bridge.js";
-import { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } from "../config.js";
+import {
+  MAX_CONTINUATION_TURNS,
+  EMPTY_STREAM_RETRIES,
+  getReasoningEffort,
+} from "../config.js";
 
 const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the Anser harness.
 You pair with the Lead Architect (Gemini / Claude) to explore, design, edit, test, and optimize software systems.
@@ -75,6 +79,10 @@ export class AnserRunner {
    * @param {string} [params.cwd] Target workspace directory
    * @param {string} [params.sessionId] Unique session ID
    * @param {number} [params.maxTurns] Maximum allowed turns (null = unbounded)
+   * @param {string} [params.reasoningEffort] Task-local reasoning-effort tier
+   *   (one of REASONING_EFFORT_TIERS). Threaded to the provider's streamChat
+   *   for every turn of this session; when absent the provider falls back to
+   *   the QWEN_REASONING_EFFORT env default (unchanged behavior).
    * @param {AbortSignal} [params.signal] Cancellation signal
    * @param {(token: string) => void} [params.onToken] Live token streaming callback
    * @param {(metric: object) => void} [params.onMetrics] Performance metric callback
@@ -95,6 +103,7 @@ export class AnserRunner {
     cwd,
     sessionId = `evo_${Date.now()}`,
     maxTurns = this.defaultMaxTurns,
+    reasoningEffort,
     signal,
     onToken,
     onMetrics,
@@ -162,6 +171,10 @@ export class AnserRunner {
       version: "2026.1",
       cwd: effectiveCwd,
       prompt,
+      // Effective reasoning-effort tier for this session (task-local param when
+      // provided, else the QWEN_REASONING_EFFORT env default). Surfaced for
+      // telemetry; the provider re-resolves the same value per request.
+      reasoningEffort: reasoningEffort || getReasoningEffort(),
     });
 
     if (matchedSkillNames.length > 0) {
@@ -202,6 +215,10 @@ export class AnserRunner {
         const turnResult = await llm.streamChat({
           messages,
           tools,
+          // Task-local reasoning-effort override (per-dispatch). Threaded to
+          // every turn of this session; the provider falls back to the
+          // QWEN_REASONING_EFFORT env default when it is absent.
+          reasoningEffort,
           signal,
           onToken: (tok) => {
             if (onToken) onToken(tok);

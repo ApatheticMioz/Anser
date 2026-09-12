@@ -5,6 +5,7 @@ import {
   MIN_TIMEOUT_MS,
   EXTENSION_BONUS_TIMEOUT_MS,
   MAX_TURNS,
+  getReasoningEffort,
 } from "./config.js";
 import {
   isWslLocation,
@@ -111,6 +112,7 @@ export function startGooseTask({
   metricName,
   higherIsBetter,
   skills,
+  reasoningEffort,
 }) {
   // P4i: canonicalize the task cwd ONCE at the spawn boundary, through the OS
   // symlink/junction resolution layer. This is the single point where the
@@ -129,11 +131,18 @@ export function startGooseTask({
   const totalTimeoutMs =
     baseTimeoutMs + (extensions && extensions.length ? EXTENSION_BONUS_TIMEOUT_MS : 0);
 
+  // Effective reasoning effort for THIS task: the per-dispatch param when
+  // provided, else the QWEN_REASONING_EFFORT env default (read at dispatch
+  // time). Surfaced on the task record for telemetry; the provider re-resolves
+  // the same value per request (param precedence, env fallback).
+  const effectiveReasoningEffort = reasoningEffort || getReasoningEffort();
+
   const taskEntry = {
     id: taskId,
     sessionId,
     cwd,
     prompt,
+    reasoningEffort: effectiveReasoningEffort,
     createdAt: Date.now(),
     startedAt: null,
     finishedAt: null,
@@ -235,6 +244,11 @@ export function startGooseTask({
           cwd: targetCwd,
           sessionId,
           maxTurns: maxTurnsVal,
+          // Task-local reasoning-effort override (per-dispatch). Threaded RAW
+          // (may be undefined) to the provider so its existing dynamic
+          // QWEN_REASONING_EFFORT read remains the fallback when the param is
+          // absent — no process.env mutation, no cross-task leakage.
+          reasoningEffort,
           signal: abortController.signal,
           // P8: make extensions[] first-class on the primary engine. The
           // runner boots the MCP extension bridge before the loop and

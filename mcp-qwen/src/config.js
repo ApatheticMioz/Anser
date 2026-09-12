@@ -33,6 +33,15 @@ export function getReasoningEffort() {
   return v ? v : "xhigh";
 }
 
+// Valid reasoning-effort tiers the engine's chat template accepts. Verified
+// against the LIVE Qwen3.8-27B chat_template.jinja (both AutoRound variants):
+// the template raises an exception for any value outside this set, and the
+// live vLLM engine returns 400 for "off"/"high" (200 for xhigh/medium/low).
+// The documented family behavior ("off/low/medium/xhigh") is NOT what this
+// engine implements — "off" is rejected. Single source of truth for the
+// qwen_coworker `reasoning_effort` schema and the provider's fallback.
+export const REASONING_EFFORT_TIERS = ["xhigh", "medium", "low"];
+
 export const DEFAULT_RACE_MS = 15_000;
 export const RACE_MS = process.env.QWEN_RACE_MS
   ? parseInt(process.env.QWEN_RACE_MS, 10)

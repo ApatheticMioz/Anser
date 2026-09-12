@@ -9,6 +9,7 @@ import {
   MAX_CONCURRENT_GOOSE,
   AUTO_HEAL,
   WEDGE_STATS_SILENCE_S,
+  REASONING_EFFORT_TIERS,
 } from "./config.js";
 import { normalizeWorkspacePath, canonicalizePath, killProcessTree, killGooseSession } from "./wsl_bridge.js";
 import {
@@ -54,7 +55,8 @@ export function registerTools(server) {
         "  - Single Logical Concern: Scope each prompt to ONE cohesive subsystem, architectural layer, or target AST slice. Do not bundle disparate subsystems or cross-cutting concerns into a single dispatch.\n" +
         "  - Full Objective Fulfillment: Do not instruct Qwen to limit its tool calls or artificially restrict its execution. Qwen operates autonomously with full tool depth once dispatched with a focused objective.\n" +
         "  - Session Lifecycle: Use persistent `session_id` across 2-3 focused turns, then roll to a fresh session_id (e.g. '<milestone>_stage2') when context accumulates.\n" +
-        "  - Zero-Turn Execution Contract: Tasks completing within ~45s return results synchronously. Long-running tasks yield a `taskId` and a `wait_command`. Execute the `wait_command` immediately in your shell to block at $0 cost and wake on completion. Do not poll manually or execute parallel exploratory tools while waiting.\n\n" +
+        "  - Zero-Turn Execution Contract: Tasks completing within ~45s return results synchronously. Long-running tasks yield a `taskId` and a `wait_command`. Execute the `wait_command` immediately in your shell to block at $0 cost and wake on completion. Do not poll manually or execute parallel exploratory tools while waiting.\n" +
+        "  - Reasoning Effort: optional `reasoning_effort` param (xhigh | medium | low) tunes per-dispatch thinking depth; omit to use the QWEN_REASONING_EFFORT env default (xhigh).\n\n" +
         "SUPPORTED EXTENSIONS:\n" +
         "  - `uvx free-search-mcp` (Web search, documentation lookup, PDF/DOCX ingestion)\n" +
         "  - `npx -y @upstash/context7-mcp` (Live framework/library documentation)\n" +
@@ -108,6 +110,12 @@ export function registerTools(server) {
           .array(z.string())
           .optional()
           .describe("Explicit list of skill names to inject (bypasses keyword auto-matching)"),
+        reasoning_effort: z
+          .enum(REASONING_EFFORT_TIERS)
+          .optional()
+          .describe(
+            "Per-dispatch reasoning-effort tier forwarded to the engine chat template (xhigh = maximal deliberation, medium = balanced, low = brief). Omit to use the QWEN_REASONING_EFFORT env default (xhigh). Only the engine's supported tiers are accepted; invalid values are rejected."
+          ),
       },
     },
     async ({
@@ -121,6 +129,7 @@ export function registerTools(server) {
       higher_is_better,
       timeout_ms,
       skills,
+      reasoning_effort,
     }) => {
       let raceHandle;
       try {
@@ -151,6 +160,7 @@ export function registerTools(server) {
         metricName: metric_name,
         higherIsBetter: higher_is_better,
         skills,
+        reasoningEffort: reasoning_effort,
       });
 
       const raceTimer = new Promise((resolve) => {
