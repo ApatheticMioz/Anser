@@ -15,6 +15,7 @@ import {
   releaseGooseSlot,
 } from "./semaphore.js";
 import { killProcessTree, killGooseSessionSync } from "./wsl_bridge.js";
+import { EventLoggerService } from "./harness/services/event_logger.js";
 
 try {
   fs.mkdirSync(TASK_DIR, { recursive: true });
@@ -84,7 +85,67 @@ export function markTaskOrphanedOnDisk(diskTask) {
     fileOps: diskTask.fileOps || [],
   };
   saveTaskToDisk(diskTask);
+  // Orphaned tasks must leave a terminal trace in the session event log.
+  // Without this, a session killed by an external process-tree death (the MCP
+  // server instance dying and taking its child runner with it) ends with NO
+  // session_end/session_error — undetectable after the fact except by absence
+  // (verified in production: session pattern_test_s1, 2026-09-11 10:12:47Z).
+  // Append a single-line terminal event so the silent infra death is detectable.
+  appendOrphanTerminalEvent(diskTask);
   return diskTask;
+}
+
+/**
+ * Appends a single-line terminal `session_error` event to the orphaned task's
+ * session events.jsonl so a silent infra death (external process-tree kill)
+ * leaves a detectable trace.
+ *
+ * Cross-instance safe: the detecting instance may differ from the owning
+ * instance (shared state dir). We only ever APPEND one line (appendFileSync)
+ * and never rewrite existing content. The double-terminal guard
+ * (hasTerminalEvent) ensures a session that already ended (session_end or
+ * session_error) is not given a second terminal event.
+ *
+ * Never throws: a failure to append the trace must not break the (already
+ * working) orphan-marking of the task file.
+ */
+function appendOrphanTerminalEvent(diskTask) {
+  if (!diskTask || !diskTask.sessionId) return;
+  try {
+    const logger = new EventLoggerService({ sessionId: diskTask.sessionId });
+    // Double-terminal guard: if the session already has a terminal event, do
+    // not append a second one.
+    if (logger.hasTerminalEvent()) return;
+    logger.append({
+      type: "session_error",
+      reason: "orphaned",
+      detail: describeOrphanCause(diskTask),
+      taskId: diskTask.id,
+      ownerPid: diskTask.ownerPid || null,
+    });
+  } catch (err) {
+    // Honest, non-fatal: the trace is best-effort. The task file is already
+    // marked orphaned (the primary signal). Log and continue.
+    const msg = err && err.message ? err.message : String(err);
+    console.error(
+      `[task_registry] Failed to append orphan terminal event for session ${diskTask.sessionId}: ${msg}`
+    );
+  }
+}
+
+/**
+ * Honest, human-readable description of WHY the task was orphaned (the owner
+ * pid state), for the terminal event's `detail` field.
+ */
+function describeOrphanCause(diskTask) {
+  const pid = diskTask.ownerPid;
+  if (pid) {
+    if (!pidAlive(pid)) {
+      return `owner pid ${pid} is dead (process exited or was killed)`;
+    }
+    return `owner pid ${pid} is alive but heartbeat is stale`;
+  }
+  return `no owner pid recorded; heartbeat is stale`;
 }
 
 /**

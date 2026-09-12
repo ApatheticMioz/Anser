@@ -49,6 +49,42 @@ export class EventLoggerService {
   }
 
   /**
+   * Returns true when the session's event stream already carries a terminal
+   * event (a `session_end` or `session_error`). Used by the orphan-marking
+   * path to guard against a DOUBLE terminal: a session that already ended
+   * (cleanly or by error) must not receive a second terminal event when its
+   * task is later reaped as orphaned.
+   *
+   * The scan is a single read of the existing file (no write) and tolerates
+   * malformed lines (they are skipped, matching readAll), so a partially
+   * written / corrupt trailing line can never throw into the caller.
+   *
+   * @returns {boolean}
+   */
+  hasTerminalEvent() {
+    if (!fs.existsSync(this.logFile)) return false;
+    let content;
+    try {
+      content = fs.readFileSync(this.logFile, "utf8");
+    } catch {
+      return false;
+    }
+    for (const line of content.split("\n")) {
+      if (!line.trim()) continue;
+      let ev;
+      try {
+        ev = JSON.parse(line);
+      } catch {
+        continue; // malformed line: skip, never throw
+      }
+      if (ev && (ev.type === "session_end" || ev.type === "session_error")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Reads all recorded events for the session.
    * @returns {Array<object>}
    */
