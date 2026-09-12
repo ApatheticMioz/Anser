@@ -103,7 +103,7 @@ export class VllmProviderService {
    *   content: string,
    *   toolCalls: Array<{ id: string, name: string, arguments: string }>,
    *   finishReason: string | null,
-   *   metrics: { promptTokens: number, completionTokens: number, ttftMs: number, totalMs: number, tokensPerSec: number, reasoningTokens: number, hadReasoning: boolean, reasoningCeilingHit: boolean, streamIdleTimeoutMs: number }
+   *   metrics: { promptTokens: number, completionTokens: number, ttftMs: number, totalMs: number, tokensPerSec: number, reasoningTokens: number, hadReasoning: boolean, reasoningCeilingHit: boolean, streamIdleTimeoutMs: number, promptTokensEstimated?: boolean }
    * }>}
    */
   async streamChat({
@@ -137,6 +137,11 @@ export class VllmProviderService {
       stream: true,
       temperature,
       max_tokens: clampedMaxTokens,
+      // vLLM 0.28+: request the engine-reported token usage in a terminal
+      // SSE chunk (empty choices + a `usage` field). Additive only — engines
+      // that ignore it simply never emit the chunk, and we fall back to the
+      // chars-based estimate below.
+      stream_options: { include_usage: true },
     };
 
     if (tools && tools.length > 0) {
@@ -201,6 +206,10 @@ export class VllmProviderService {
         response,
         decoder: new TextDecoder("utf-8"),
         t0,
+        // Threaded from streamChat (where the chars-based estimate is computed
+        // for the context-headroom clamp) so _consumeStream can fall back to it
+        // when the engine does not emit a stream_options usage chunk.
+        estimatedPromptTokens,
         onToken,
         onMetrics,
         controller: streamController,
@@ -235,6 +244,7 @@ export class VllmProviderService {
     response,
     decoder,
     t0,
+    estimatedPromptTokens,
     onToken,
     onMetrics,
     controller,
@@ -251,6 +261,9 @@ export class VllmProviderService {
     let reasoningCeilingHit = false;
     let idleTimedOut = false;
     let idleTimer = null;
+    // Engine-reported usage from the terminal stream_options chunk (vLLM 0.28+).
+    // Null until the engine emits it; the chars-based estimate is the fallback.
+    let engineUsage = null;
     const toolCallsMap = new Map(); // index -> { id, name, arguments }
 
     const disarmIdle = () => {
@@ -331,6 +344,18 @@ export class VllmProviderService {
               if (chunk.id === "chatcmpl-stream-err") {
                 const errMsg = chunk.choices?.[0]?.delta?.content || "vLLM stream error";
                 throw new Error(`vLLM stream error: ${errMsg}`);
+              }
+
+              // stream_options { include_usage: true } (vLLM 0.28+): the engine
+              // emits a terminal chunk whose `choices` is EMPTY and whose
+              // `usage` field carries the authoritative prompt/completion token
+              // counts. Capture it here, BEFORE the `choice` guard below, so the
+              // empty-choices chunk is consumed gracefully and never mistaken
+              // for a dead/empty stream (it carries no content, tool calls, or
+              // finish_reason — exactly the shape the runner's P2b/P2d guards
+              // key off, so we must not let it contribute to those signals).
+              if (chunk.usage && typeof chunk.usage === "object") {
+                engineUsage = chunk.usage;
               }
 
               const choice = chunk.choices?.[0];
@@ -435,9 +460,31 @@ export class VllmProviderService {
 
     const totalMs = Math.max(1, Date.now() - t0);
     const tokensPerSec = Number(((completionTokens / totalMs) * 1000).toFixed(2));
+
+    // Prompt-token telemetry: prefer the engine-reported usage (authoritative)
+    // from the stream_options terminal chunk; when the engine did not emit it,
+    // fall back to the chars-based estimate already computed for the
+    // context-headroom clamp and mark the metric as estimated so downstream
+    // consumers never mistake a guess for a measurement.
+    const enginePromptTokens =
+      engineUsage && Number.isFinite(engineUsage.prompt_tokens)
+        ? engineUsage.prompt_tokens
+        : null;
+    const promptTokens = enginePromptTokens ?? estimatedPromptTokens;
+    const promptTokensEstimated = enginePromptTokens === null;
+
+    // Completion tokens: the engine's usage is authoritative over the local
+    // per-delta count when present; reasoning accounting is left untouched.
+    const engineCompletionTokens =
+      engineUsage && Number.isFinite(engineUsage.completion_tokens)
+        ? engineUsage.completion_tokens
+        : null;
+    const effectiveCompletionTokens =
+      engineCompletionTokens ?? completionTokens;
+
     const metrics = {
-      promptTokens: 0, // In stream mode, vLLM usage summary is optional
-      completionTokens,
+      promptTokens,
+      completionTokens: effectiveCompletionTokens,
       ttftMs: ttft ?? totalMs,
       totalMs,
       tokensPerSec,
@@ -445,6 +492,7 @@ export class VllmProviderService {
       hadReasoning,
       reasoningCeilingHit,
       streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
+      ...(promptTokensEstimated ? { promptTokensEstimated: true } : {}),
     };
 
     if (onMetrics) onMetrics(metrics);
