@@ -67,7 +67,7 @@ The session-level evidence behind each rule:
 4. **`promptTokens` never recorded (fixed):** 0 in 100% of 5,520 events — prompt-size telemetry was impossible (this audit's prompt↔TTFT correlation is undefined as a result). Fix: record it in session events.
 5. **Engine exonerated:** 0 hangs, 0 circuit-breaker trips in-window; 66 `continuation_injected` + 27 `empty_stream_retry`, all recovered (the P2b/P2d machinery works); TTFT spikes cluster on specific days (09-05 cold-start cluster; one 521 s outlier on 09-08), not on prompt size — dominated by server-side stalls.
 6. **~~result.text cross-task splice~~ RETRACTED:** byte-level verification shows the on-disk file clean; the earlier claim was a substring-grep false positive (`step_index` legitimately appears in both outputs). The write path is provably safe: single atomic `saveTaskToDisk` (tmp+rename), `result` assigned exactly once at the terminal write, per-task stream buffers, `MAX_CONCURRENT=1`. Methodological note: this is the same error class as the orchestrator's premature "stale/dead" — pattern-matched conclusion ahead of verification. The claim→verify protocol exists because of it.
-7. **Doc/code drifts (reconciled):** `QWEN_RACE_MS` 15 s code vs 45 s docs; `QWEN_REASONING_EFFORT` docs say "(unset)" but code default is `xhigh`; `SLOT_WEDGED_MS` dead constant; `FIRST_TOKEN_TIMEOUT_MS` has no consumer.
+7. **Doc/code drifts (reconciled, `2449b84`):** `QWEN_RACE_MS` 15 s code vs 45 s docs; `QWEN_REASONING_EFFORT` docs said "(unset)" but code default is `xhigh`; `QWEN_MAX_CONCURRENT` row stale after the semaphore raise; `FIRST_TOKEN_TIMEOUT_MS` documented as a live kill mechanism but consumer-less — now documented as a reserved knob (retained per the honesty-drift D13 decision) with the stream-idle first-byte watchdog named as the live protection. `SLOT_WEDGED_MS` remains an inert import in `semaphore.js` (unused export; left in place).
 8. **Harness prompt overhead:** every dispatch carries ~1,331 chars of injected operational directives (1,428-char instruction → 2,914-char delivered message, ~48% boilerplate). Reordered constant-prefix-first for prefix-cache friendliness.
 
 ## 6. Changes shipped with this audit
@@ -75,12 +75,15 @@ The session-level evidence behind each rule:
 **Protocol (repo `CLAUDE.md` / `GEMINI.md`, §3 + §4.2; globals symlink to these):** the §3 policy table above, distilled into the dispatch contract; §4.2 supervision hardened with telemetry-before-kill and the healthy-work cancellation ban. Tool description of `qwen_coworker` mirrors the policy and documents the new parameter.
 
 **Anser code (`mcp-qwen`), one concern per slice:**
-1. `reasoning_effort` per-dispatch parameter on `qwen_coworker` (schema-validated, threaded task-locally to the provider's dynamic read site, env fallback unchanged, effective value surfaced in task record).
-2. Retention: `TASK_RETENTION_MS` env-configurable, default 7 days.
-3. `.tmp_*` orphan sweep (age-gated) + rename-failure logging.
-4. `promptTokens` recorded in session events.
-5. Kill/orphan event emission so external deaths leave a trace.
-6. Doc drift reconciliation + constant-prefix prompt ordering.
+1. `reasoning_effort` per-dispatch parameter on `qwen_coworker` (`ac212be`; tiers corrected against the live template in `f956c00` — engine accepts exactly {xhigh, medium, low}).
+2. Retention: `TASK_RETENTION_MS` env-configurable, default 7 days (`c0ebd32`).
+3. `.tmp_*` orphan sweep (age-gated) + rename-failure logging (`c0ebd32`).
+4. `promptTokens` recorded in session events (`263c7b3`): requests send `stream_options.include_usage`; real `prompt_tokens` land in metrics, chars-based fallback flagged `promptTokensEstimated`.
+5. Kill/orphan event emission so external deaths leave a trace: `markTaskOrphanedOnDisk` appends exactly one `{session_error, reason: orphaned}` event, double-terminal-guarded, cross-instance-safe (`2388236`).
+6. Doc drift reconciliation (`2449b84`) + constant-prefix prompt ordering.
+7. Concurrency raise: engine `MAX_SEQS` 1 → 2 with the harness semaphore kept 1:1, boot deadline 180 s → 480 s for the 2-seat CUDA-graph boot, single-slot test suites pinned, launcher records the full 8 → 1 → 2 trajectory with deadlock watch-fors (`b352f8b`).
+
+> ⚠️ True 2-job parallelism requires an MCP server restart: long-lived servers serve boot-time code (the running servers still enqueue at 1 seat). The engine side is live; the harness side activates on next server start.
 
 > ⚠️ Live-dispatch verification of (1) requires an MCP server restart (long-lived servers serve boot-time code). Unit tests cover the plumbing; restart before trusting `medium`-effort dispatches in production.
 
