@@ -83,10 +83,11 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
   - **NEVER prompt Qwen to artificially limit its tools or self-manage time.** Do NOT include phrases like "keep tool calls low", "stay under N actions", or "narrow your focus".
   - Once dispatched with a cleanly bounded objective, Qwen operates with **Full Objective Fulfillment**—taking as many tool actions and iterations as needed to thoroughly accomplish the deliverable without premature truncation.
 - **Large File Slicing**: When modifying large files (>300 LOC), direct the coworker to the specific function, component, or AST slice (e.g. `target: worker.ts#routeMessage`) rather than asking it to inspect the whole file.
+- **Prompt Budget**: Keep instructions **≤1,500 characters** with **one deliverable per dispatch**. Point at files and coordinates; never paste content the coworker can read locally.
 
 ### 2. Session Lifecycle & Speculative Decoding Decay Threshold
-- **Micro-Session Cadence**: Keep a `session_id` active for **2 to 3 focused turns** of cohesive work.
-- **Roll Cadence**: When a session accumulates extensive tool history, speculative decoding draft acceptance degrades, reducing token generation velocity. Step up to a fresh `session_id` (e.g. `<milestone>_stage2`) for the next phase to reset context back to the optimal window and maintain peak generation speed.
+- **Milestone-Based Session Cohesion**: Reuse one `session_id` across a cohesive milestone; the engine's prefix cache makes follow-on turns nearly free, so accumulated session size alone is not a reason to roll.
+- **Roll Triggers**: Roll to a fresh `session_id` (e.g. `<milestone>_stage2`) only on a milestone change, session history poisoning tool habits, or **~60–80 turns**. Never roll mid-task.
 
 ### 3. Architectural Specification Contract (Anti-Spoon-Feeding)
 - **Architectural Framing, Not Code Buffering**: The Lead Architect acts as a technical lead and system architect, NOT a copy-paste code buffer.
@@ -96,6 +97,13 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
   3. Failure condition, reproduction steps, or compiler error trace.
   4. Acceptance criteria and verification command (e.g. `npm run test:slice`).
 - **Verbatim Code Spoon-Feeding Prohibition**: The Lead Architect is **STRICTLY PROHIBITED** from writing out verbatim multi-line code implementations, full JSX component blocks, or replacement functions in coworker prompts. Local Qwen operates with 245K context and high-reasoning compute (`reasoning_effort: "xhigh"`); Qwen authors the code locally.
+
+### 4. Ground-Truth & Verification Discipline
+- **Session events are ground truth; planner transcripts are intent ledgers.** Before diagnosing a "duplicate" or a "stale task", or re-dispatching, verify against `~/.qwen/sessions/<id>/events.jsonl` and `~/.qwen/tasks/*.json`.
+- **Claim→Verify pairs**: Confirm anomaly and corruption-class findings with an adversarial verification slice before they enter any report, manifest, or commit message.
+- **Read-only means no files**: A read-only slice's deliverable is its final message. State "return the report as your final message; write no files" explicitly.
+- **Effort tiers are a per-dispatch knob**: `reasoning_effort` (default `xhigh`) — tier down consciously per task class (bounded mechanical work → `medium`; security/correctness verification and tricky debugging → `xhigh`). Never suppress silently.
+- Rationale and evidence for §3.1–§3.4: `docs/qwen-usage-audit-2026-09.md`.
 
 ---
 
@@ -115,6 +123,8 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
      - Third wait window: `--max-time 900` (15m $\to$ cumulative 95m)
      - Final wait window: `--max-time 300` (5m $\to$ cumulative 100m)
    - On timeout wakeup (exit code 28), the supervisor samples telemetry via `qwen_task(action: "status")` (`toolCallsCount`, `fileOps`, `lastActivitySecAgo`) to verify forward progress before re-arming the next wait interval.
+   - **Never cancel healthy work**: A cancel destroys 100% of an in-flight task's accumulated context and tool progress. Cancel only on explicit user instruction, budget exhaustion, or a confirmed wedge (heartbeat stale beyond the inactivity window AND zero tool-call progress).
+   - **Telemetry before any kill**: Advancing `toolCallsCount` means healthy regardless of wall-clock age. Silence in the orchestrator transcript is not evidence of death; verify from session events.
 
 ---
 
