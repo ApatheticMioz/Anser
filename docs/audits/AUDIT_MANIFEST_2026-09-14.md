@@ -9,7 +9,7 @@ Gate: milestone closes only when every row is `[RESOLVED: sha]`, `[DEFERRED: id]
 | Row | Finding | Slice | Status |
 |---|---|---|---|
 | F9, N4, N5 | `/wait` 500-on-failure misread as infra crash; 500 retry-storm; connection left open | M1 `task_registry.js` → 200 + `{isError,status,result}` JSON, clean termination | [RESOLVED: this commit] 62/62 canary, full `npm test` gate green (36-suite && chain, exit 0); live smoke deferred to post-restart verification |
-| F10, F13 | Binary file ingested as text (647 KB PDF poison pill) | M2 `sandbox_fs.js` readFile/searchCode → `file-type` magic-number guard | OPEN |
+| F10, F13 | Binary file ingested as text (647 KB PDF poison pill) | M2 `sandbox_fs.js` readFile/searchCode → `file-type` magic-number guard | [RESOLVED: this commit] `BinaryFileError` fail-fast + honest skipped-binary in searchCode; 6/6 canary, `npm test` exit 0 |
 | N1, N6 | Guard-truncated degenerate final messages: deliverable dropped, session false-`completed` (7× `" Register"` class) | M3 honest delivery + `degenerate_response_truncated` status + retry classification | OPEN |
 | F4, F12, F14, #11-rec1/2 | Unbounded bash probe loops on open-ended targets; anti-probe clause not harness-enforced | M4 single-pass directive in dispatch + >4-consecutive-non-mutating-bash advisory warning | OPEN |
 | F3, N8, #11-rec3 | Session over-retention (ctx-400 death: 196,609+49,152 > 245,760) | M5 60-warn/80-recommend/100-backstop + context-budget preflight w/ output clamp | OPEN |
@@ -38,7 +38,7 @@ Gate: milestone closes only when every row is `[RESOLVED: sha]`, `[DEFERRED: id]
 | Slice | Tests | Live verify | Commit |
 |---|---|---|---|
 | M1 | wait_endpoint.test.js 62/62; full `npm test` exit 0 | pending MCP-server restart smoke (F9 repro: failed task → curl -fsS exit 0 + isError body) | this commit |
-| M2 | — | — | — |
+| M2 | binary_guard.test.js 6/6; search_code_guard 9/9; security 123/123; full `npm test` exit 0 | pending MCP-server restart smoke (read_file on repo PDF → structured rejection) | this commit |
 | M3 | — | — | — |
 | M4 | — | — | — |
 | M5 | — | — | — |

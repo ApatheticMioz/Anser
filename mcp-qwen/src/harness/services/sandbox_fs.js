@@ -14,6 +14,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { IS_WINDOWS } from "../../config.js";
 import { normalizeWorkspacePath, toWindowsPath, toPosixWslPath, canonicalizePath } from "../../wsl_bridge.js";
+import { fileTypeFromBuffer, reasonableDetectionSizeInBytes } from "file-type";
 
 const execFileAsync = promisify(execFile);
 
@@ -81,6 +82,33 @@ export class GitApplyTimeoutError extends Error {
 }
 
 /**
+ * M2 / 2026-09-13 "poison pill" mitigation: raised by `readFile()` when the
+ * target is a binary file (detected by extension denylist or magic bytes).
+ *
+ * Fail-fast doctrine: a text-only model must NEVER ingest binary content
+ * (mojibake) into its context. Rather than silently skipping or passing
+ * through truncated/garbled bytes, `readFile` throws this explicit error so
+ * the caller (the model) gets a clear observation naming the file, the
+ * detected type, and the instruction to extract text via bash tooling
+ * (e.g. `pdftotext`, `strings`, `exiftool`) instead.
+ *
+ * @extends Error
+ * @property {string} file The resolved file path that was rejected.
+ * @property {string} detectedType The detected type label (mime/ext or the
+ *   denylist reason).
+ * @property {string} reason Why the file was classified as binary.
+ */
+export class BinaryFileError extends Error {
+  constructor(message, { file = "", detectedType = "binary", reason = "" } = {}) {
+    super(message);
+    this.name = "BinaryFileError";
+    this.file = file;
+    this.detectedType = detectedType;
+    this.reason = reason;
+  }
+}
+
+/**
  * F-2: returns true for `.env` and `.env.*` files (e.g. `.env.local`,
  * `.env.production`). These are excluded from the fallback directory walk to
  * prevent accidental secret ingestion when `git grep` is unavailable.
@@ -88,6 +116,127 @@ export class GitApplyTimeoutError extends Error {
  */
 function isEnvFile(name) {
   return name === ".env" || name.startsWith(".env.");
+}
+
+/**
+ * M2 / 2026-09-13 "poison pill" mitigation: a text-only model that ingests a
+ * binary file (PDF/PNG/...) into its context receives mojibake and can wedge
+ * the orchestrator permanently (a 647KB PDF did exactly this on 2026-09-13).
+ *
+ * This is the extension denylist fast-path. It is a cheap, synchronous
+ * pre-filter that catches the common case by file extension BEFORE any bytes
+ * are read. It is NOT the sole gate: `detectBinaryType()` below performs a
+ * real magic-byte check (via the `file-type` library) on the first KB of the
+ * file, which catches extensionless binaries (e.g. a file whose content
+ * begins with `%PDF` but has no `.pdf` extension).
+ *
+ * The set is intentionally conservative: it lists well-known binary formats
+ * that a text model must never ingest. It is a denylist, not an allowlist —
+ * an unknown extension is NOT treated as binary here; the magic-byte check
+ * is the authoritative gate.
+ */
+export const BINARY_EXTENSIONS = new Set([
+  "pdf",
+  "png",
+  "jpg",
+  "jpeg",
+  "webp",
+  "gif",
+  "ico",
+  "zip",
+  "gz",
+  "tar",
+  "7z",
+  "bz2",
+  "xz",
+  "wasm",
+  "exe",
+  "dll",
+  "so",
+  "dylib",
+  "bin",
+  "mp3",
+  "mp4",
+  "avi",
+  "mov",
+  "wav",
+  "woff",
+  "woff2",
+  "ttf",
+  "otf",
+  "sqlite",
+  "db",
+]);
+
+/**
+ * M2: returns true when `name`'s extension (case-insensitive) is in the
+ * binary denylist. A name with no extension returns false (the magic-byte
+ * check is the authoritative gate for those).
+ * @param {string} name
+ */
+export function isBinaryExtension(name) {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0 || dot === name.length - 1) return false;
+  const ext = name.slice(dot + 1).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
+}
+
+/**
+ * M2: authoritative binary detection via magic bytes, using the `file-type`
+ * library (NOT hand-rolled magic-byte sniffing). Reads at most the first
+ * `reasonableDetectionSizeInBytes` (4100) bytes of the file and returns the
+ * detected `{ ext, mime }` descriptor, or `null` when the bytes do not match
+ * any known binary signature (i.e. the file is plausibly text).
+ *
+ * @param {string} filePath
+ * @returns {Promise<{ext:string,mime:string}|null>}
+ */
+async function detectBinaryType(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, reasonableDetectionSizeInBytes);
+    if (len === 0) return null; // empty file is not a binary
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, 0);
+    return await fileTypeFromBuffer(buf);
+  } catch {
+    // Unreadable / vanished file: treat as non-binary here; the caller's own
+    // read will surface the real I/O error.
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // best-effort close
+      }
+    }
+  }
+}
+
+/**
+ * M2: combined binary gate. Returns a human-readable reason string when the
+ * file is binary, or `null` when it is plausibly text.
+ *
+ * Order of checks:
+ *   1. Extension denylist fast-path (cheap, synchronous).
+ *   2. Magic-byte check via `file-type` on the first KB (authoritative;
+ *      catches extensionless binaries).
+ *
+ * @param {string} filePath
+ * @returns {Promise<string|null>}
+ */
+async function classifyBinary(filePath) {
+  if (isBinaryExtension(path.basename(filePath))) {
+    return `extension '${path.basename(filePath)}' is a known binary type`;
+  }
+  const detected = await detectBinaryType(filePath);
+  if (detected) {
+    return `magic bytes identify it as ${detected.mime} (extension '${detected.ext}')`;
+  }
+  return null;
 }
 
 /**
@@ -266,6 +415,27 @@ export class SandboxFsService {
     const stat = fs.statSync(resolved);
     if (stat.isDirectory()) {
       throw new Error(`Path is a directory, not a file: ${filePath}`);
+    }
+
+    // M2 / 2026-09-13 "poison pill" mitigation: fail fast on binary files.
+    // A text-only model ingesting a PDF/PNG/etc. as UTF-8 produces mojibake
+    // that can wedge the orchestrator permanently. We detect the binary via
+    // the extension denylist fast-path and/or a magic-byte check (file-type)
+    // on the first KB, and throw an explicit BinaryFileError naming the file,
+    // the detected type, and the instruction to extract text via bash tooling
+    // instead. NO silent skip, NO truncated-content passthrough.
+    const binaryReason = await classifyBinary(resolved);
+    if (binaryReason) {
+      const detected = await detectBinaryType(resolved);
+      const detectedType = detected ? `${detected.mime} (.${detected.ext})` : "binary (extension denylist)";
+      throw new BinaryFileError(
+        `BinaryFileError: '${filePath}' is a binary file (${detectedType}); ` +
+          `reason: ${binaryReason}. A text-only model must not ingest binary content. ` +
+          `Do NOT read this file as text. To extract its text, use the bash tool with a ` +
+          `format-appropriate extractor (e.g. 'pdftotext file -' for PDF, 'strings file', 'exiftool file', 'unzip -l file') ` +
+          `and read the extracted text output instead.`,
+        { file: resolved, detectedType, reason: binaryReason }
+      );
     }
 
     const raw = fs.readFileSync(resolved, "utf8");
@@ -722,8 +892,16 @@ export class SandboxFsService {
       // Legitimate fallback: not a git repository. Search files avoiding
       // ignored directories AND `.env` / `.env.*` files (F-2 secret-leak
       // prevention). The total match count is capped at `max_results` (F-12).
+      //
+      // M2 / 2026-09-13 "poison pill" mitigation: binary files are SKIPPED
+      // honestly (reported in `skipped` as "skipped-binary") rather than read
+      // as UTF-8 and ingested as mojibake. Detection uses the extension
+      // denylist fast-path plus a magic-byte check (file-type) on the first
+      // KB of the RAW bytes (reading as a Buffer, not a UTF-8 string, so the
+      // magic bytes are not mangled). This does NOT error the whole search.
       const matches = [];
-      const walkSearch = (cur) => {
+      const skipped = [];
+      const walkSearch = async (cur) => {
         if (matches.length >= cap) return;
         let files;
         try {
@@ -737,7 +915,7 @@ export class SandboxFsService {
           if (isEnvFile(f.name)) continue; // F-2: never ingest .env / .env.*
           const full = path.join(cur, f.name);
           if (f.isDirectory()) {
-            walkSearch(full);
+            await walkSearch(full);
           } else if (f.isFile()) {
             // P4i: use statSync for the size check, NOT the dirent's f.size.
             let size = f.size;
@@ -749,23 +927,43 @@ export class SandboxFsService {
               }
             }
             if (size < 500_000) {
+              // M2: extension denylist fast-path (cheap, synchronous).
+              if (isBinaryExtension(f.name)) {
+                skipped.push(`${path.relative(resolved, full)} (skipped-binary: extension '${f.name}')`);
+                continue;
+              }
+              // Read the file ONCE as a raw Buffer so the magic-byte check
+              // sees the true bytes (a UTF-8 string read would mangle binary
+              // magic bytes into U+FFFD and defeat detection).
+              let buf;
               try {
-                const text = fs.readFileSync(full, "utf8");
-                if (text.includes(query)) {
-                  const lines = text.split("\n");
-                  lines.forEach((l, idx) => {
-                    if (l.includes(query) && matches.length < cap) {
-                      matches.push(`${path.relative(resolved, full)}:${idx + 1}: ${l.trim().slice(0, 200)}`);
-                    }
-                  });
-                }
-              } catch {}
+                buf = fs.readFileSync(full);
+              } catch {
+                continue;
+              }
+              // M2: magic-byte check on the first KB of the raw bytes
+              // (catches extensionless binaries, e.g. a file starting %PDF).
+              const head = buf.subarray(0, reasonableDetectionSizeInBytes);
+              const detected = await fileTypeFromBuffer(head);
+              if (detected) {
+                skipped.push(`${path.relative(resolved, full)} (skipped-binary: ${detected.mime} .${detected.ext})`);
+                continue;
+              }
+              const text = buf.toString("utf8");
+              if (text.includes(query)) {
+                const lines = text.split("\n");
+                lines.forEach((l, idx) => {
+                  if (l.includes(query) && matches.length < cap) {
+                    matches.push(`${path.relative(resolved, full)}:${idx + 1}: ${l.trim().slice(0, 200)}`);
+                  }
+                });
+              }
             }
           }
         }
       };
-      walkSearch(resolved);
-      return { query, count: matches.length, matches };
+      await walkSearch(resolved);
+      return { query, count: matches.length, matches, skipped };
     }
   }
 }
