@@ -27,7 +27,6 @@ const {
   wslHome,
   winHome,
   winHomeWsl,
-  gooseBin,
   streamProxyPath,
   stateDir,
   apiKeyCandidates,
@@ -61,7 +60,6 @@ function assertOk(cond, name) {
     process.env.QWEN_WSL_DISTRO = "Debian";
     process.env.QWEN_WSL_USER = "alice";
     process.env.QWEN_WSL_HOME = "/home/alice";
-    process.env.QWEN_GOOSE_BIN = "/opt/goose/bin/goose";
     process.env.QWEN_STREAM_PROXY_PATH = "/custom/stream_proxy.js";
     process.env.QWEN_WIN_HOME = "C:\\Users\\alice";
     process.env.QWEN_WIN_HOME_WSL = "/mnt/c/Users/alice";
@@ -69,7 +67,6 @@ function assertOk(cond, name) {
     assertOk(wslDistro() === "Debian", "env: QWEN_WSL_DISTRO wins");
     assertOk(wslUser() === "alice", "env: QWEN_WSL_USER wins");
     assertOk(wslHome() === "/home/alice", "env: QWEN_WSL_HOME wins");
-    assertOk(gooseBin() === "/opt/goose/bin/goose", "env: QWEN_GOOSE_BIN wins");
     assertOk(
       streamProxyPath() === "/custom/stream_proxy.js",
       "env: QWEN_STREAM_PROXY_PATH wins"
@@ -90,7 +87,6 @@ function assertOk(cond, name) {
     delete process.env.QWEN_WSL_DISTRO;
     delete process.env.QWEN_WSL_USER;
     delete process.env.QWEN_WSL_HOME;
-    delete process.env.QWEN_GOOSE_BIN;
     delete process.env.QWEN_STREAM_PROXY_PATH;
     delete process.env.QWEN_WIN_HOME;
     delete process.env.QWEN_WIN_HOME_WSL;
@@ -131,13 +127,13 @@ function assertOk(cond, name) {
 
     // Windows mode: spawn the command directly, cwd passed through as-is.
     const win = buildSpawnProfile({
-      command: "goose",
+      command: "node",
       args: ["run", "--name", "s1"],
       cwd: "D:\\LLM_Ecosystem\\mcp-qwen",
-      env: { GOOSE_PROVIDER: "openai" },
+      env: { ANSER_PROFILE: "test" },
       mode: "windows",
     });
-    assertOk(win.command === "goose", "windows: command is the raw command");
+    assertOk(win.command === "node", "windows: command is the raw command");
     assertOk(
       JSON.stringify(win.args) === JSON.stringify(["run", "--name", "s1"]),
       "windows: args preserved"
@@ -146,7 +142,7 @@ function assertOk(cond, name) {
       win.options.cwd === "D:\\LLM_Ecosystem\\mcp-qwen",
       "windows: cwd passed through as-is"
     );
-    assertOk(win.options.env.GOOSE_PROVIDER === "openai", "windows: env merged");
+    assertOk(win.options.env.ANSER_PROFILE === "test", "windows: env merged");
     assertOk(
       JSON.stringify(win.options.stdio) === JSON.stringify(["ignore", "pipe", "pipe"]),
       "windows: stdio defaults to ignore/pipe/pipe (never inherit)"
@@ -154,10 +150,10 @@ function assertOk(cond, name) {
 
     // WSL mode: wrap with wsl.exe -d <distro> --cd <posixCwd> --exec <cmd>.
     const wsl = buildSpawnProfile({
-      command: "goose",
+      command: "node",
       args: ["run", "--name", "s1"],
       cwd: "D:\\LLM_Ecosystem\\mcp-qwen",
-      env: { GOOSE_PROVIDER: "openai" },
+      env: { ANSER_PROFILE: "test" },
       mode: "wsl",
     });
     assertOk(wsl.command === "wsl.exe", "wsl: command is wsl.exe");
@@ -170,12 +166,12 @@ function assertOk(cond, name) {
     const execIdx = wsl.args.indexOf("--exec");
     assertOk(
       execIdx !== -1 &&
-        wsl.args[execIdx + 1] === "goose" &&
+        wsl.args[execIdx + 1] === "node" &&
         JSON.stringify(wsl.args.slice(execIdx + 2)) ===
           JSON.stringify(["run", "--name", "s1"]),
       "wsl: --exec <cmd> <args...> present"
     );
-    assertOk(wsl.options.env.GOOSE_PROVIDER === "openai", "wsl: env merged");
+    assertOk(wsl.options.env.ANSER_PROFILE === "test", "wsl: env merged");
     assertOk(
       JSON.stringify(wsl.options.stdio) === JSON.stringify(["ignore", "pipe", "pipe"]),
       "wsl: stdio defaults to ignore/pipe/pipe (never inherit)"

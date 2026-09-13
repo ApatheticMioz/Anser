@@ -43,11 +43,11 @@ and verifies the `mcp_config.json` entries. Re-run after any schema change in
 | `src/config.js` | All constants + env-var parsing (ports, timeouts, budgets) |
 | `src/platform.js` | Platform abstraction: WSL/Windows path translation, shell resolution, spawn-profile builder |
 | `src/wsl_bridge.js` | WSL bridge: path translators, `canonicalizePath`, `killProcessTree` (anchored sweep + verify) |
-| `src/semaphore.js` | Cross-process goose slot semaphore (disk-lease, O_EXCL claim, heartbeat, reclaim) |
+| `src/semaphore.js` | Cross-process task slot semaphore (disk-lease, O_EXCL claim, heartbeat, reclaim) |
 | `src/task_registry.js` | Task registry + HTTP status server (`:18021`): long-poll wait, cancel, orphan detection |
 | `src/server_lifecycle.js` | vLLM lifecycle: boot, wedge detection (stats silence + canary), auto-heal, stream-proxy ensure |
 | `src/tools.js` | MCP tool registration: `qwen_coworker`, `qwen_task`, `qwen_server` |
-| `src/goose_runner.js` | Task dispatch: watchdog, Evo lineage |
+| `src/anser_runner.js` | Task dispatch: watchdog, Evo lineage |
 | `src/skills.js` | Skills library: frontmatter parsing, keyword matching, budget-capped injection |
 | `src/evo_engine.js` | Evo lineage engine (git-commit-based, `getLineageContext`, `extractMetric`, `recordCandidate`) |
 | `src/repetition_detector.js` | Stateful SSE repetition detector (tiered char limits, block-level pattern) |
@@ -124,10 +124,10 @@ All variables are read at process start (module-level) unless noted.
 | `QWEN_REASONING_EFFORT` | `xhigh` | Fallback effort when a dispatch sends none; per-dispatch `reasoning_effort` overrides. Engine accepts exactly {xhigh, medium, low} |
 | `QWEN_RACE_MS` | `15000` (15 s) | Client-side race deadline before yielding `taskId` + `wait_command` |
 | `QWEN_MIN_TIMEOUT_MS` | `600000` (10 min) | Floor for task timeout |
-| `QWEN_INACTIVITY_TIMEOUT_MS` | `1800000` (30 min) | Goose subprocess inactivity watchdog |
+| `QWEN_INACTIVITY_TIMEOUT_MS` | `1800000` (30 min) | Task execution inactivity watchdog |
 | `QWEN_FIRST_TOKEN_TIMEOUT_MS` | `240000` (4 min) | **Reserved, no consumer yet** (retained as near-term knob per honesty-drift decision). Live zero-output protection is `QWEN_STREAM_IDLE_TIMEOUT_MS`, whose first-byte watchdog already covers this case |
 | `QWEN_TASK_RETENTION_MS` | `604800000` (7 days) | Task-telemetry retention window; floored at `DEFAULT_TIMEOUT_MS + 30min` so a live task's JSON is never unlinked mid-run |
-| `QWEN_MAX_CONCURRENT` | `2` | Global goose slot count (cross-process, disk-lease); kept 1:1 with the engine's `MAX_SEQS` |
+| `QWEN_MAX_CONCURRENT` | `2` | Global task slot count (cross-process, disk-lease); kept 1:1 with the engine's `MAX_SEQS` |
 | `QWEN_MAX_TURNS` | *(null = unbounded)* | Max agent turns per dispatch |
 | `QWEN_MAX_CONTINUATION_TURNS` | `8` | Max re-prompts after `finish_reason: "length"` |
 | `QWEN_EMPTY_STREAM_RETRIES` | `2` | Retries for empty/zero-byte generations before honest failure |
@@ -139,7 +139,6 @@ All variables are read at process start (module-level) unless noted.
 | `QWEN_WSL_HOME` | `/home/<user>` | WSL home directory |
 | `QWEN_WIN_HOME` | `os.homedir()` | Windows host home |
 | `QWEN_WIN_HOME_WSL` | *(derived from `QWEN_WIN_HOME`)* | Windows home as seen from WSL (`/mnt/c/Users/...`) |
-| `QWEN_GOOSE_BIN` | *(probed via `which`/`where`)* | Goose executable path |
 | `QWEN_POSIX_SHELL` | *(probed: Git Bash, then PATH)* | POSIX shell for the `bash` tool |
 | `QWEN_SHELL_MODE` | *(unset = POSIX)* | Set to `cmd` to force `cmd.exe` instead of bash |
 | `QWEN_SHELL_DRY_RUN` | *(unset)* | Set to `1` to simulate shell commands (no spawn) |
@@ -302,12 +301,9 @@ flight (`hasLiveWork()` in `src/task_registry.js`).
 If the MCP server process dies, its tasks become orphans. On the next
 `readTaskFromDisk`, `isTaskOrphaned` checks the owner PID liveness and
 heartbeat age; orphans are marked `FAILED` with a `WORKER_PROCESS_TERMINATED`
-error. `qwen_task(action="cancel_all")` kills each task's goose child via an
+error. `qwen_task(action="cancel_all")` sweeps session processes via an
 anchored per-session sweep (pgrep → `/proc` cmdline boundary verify → kill),
-cancels all in-memory and disk tasks, and clears slot leases. (The old
-machine-wide `taskkill /F /IM goose.exe` was removed in P15 — it killed other
-instances' live goose children; the anchored sweep only matches a session id
-at an exact `--name <id>` boundary.)
+cancels all in-memory and disk tasks, and clears slot leases.
 
 ### Stream-proxy lifecycle
 
@@ -322,7 +318,7 @@ at an exact `--name <id>` boundary.)
 
 ### Reasoning loops
 
-Three layers of defense:
+Two layers of defense:
 - **Stream-proxy repetition breaker** (`src/repetition_detector.js`):
   detects literal character/phrase repetition in SSE deltas (both
   `delta.content` and `delta.reasoning`/`delta.reasoning_content`) and
@@ -332,9 +328,6 @@ Three layers of defense:
   (default 32768), the stream is ended locally with `finish_reason: "length"`
   + `hadReasoning: true`, routing the runner into the reasoning-cutoff
   continuation directive ("stop deliberating, emit edits now").
-- **Idle watchdog** (`src/goose_runner.js`): the legacy-goose path monitors
-  vLLM token counters; if no tokens advance for the inactivity threshold,
-  the subprocess is killed.
 
 ### Kill certainty
 
@@ -362,7 +355,7 @@ Three layers of defense:
 | 4 | `ast_batch.test.js` | `npm run test:batch` | Offline | Batch replace (directory/glob target, dry_run preview) |
 | 5 | `edit_file_guard.test.js` | `npm test` | Offline | edit_file guards: zero-occurrence, AmbiguousTargetError, LineEndingMismatchError |
 | 6 | `evo.test.js` | `npm run test:evo` | Live / Skip | Full Evo system (kernel, sandbox, AST, shell, Evo, live vLLM; honest-skip offline) |
-| 7 | `semaphore.test.js` | `npm run test:semaphore` | Offline | Cross-process goose slot semaphore (lease files in private temp dir) |
+| 7 | `semaphore.test.js` | `npm run test:semaphore` | Offline | Cross-process task slot semaphore (lease files in private temp dir) |
 | 8 | `runner_continuation.test.js` | `npm run test:continuation` | Offline | Continuation-on-cutoff: length, empty-generation, reasoning-landing |
 | 9 | `wedge_guard.test.js` | `npm run test:wedge` | Offline | Busy-gate + heal backstop (fully offline) |
 | 10 | `platform.test.js` | `npm test` | Offline | Platform abstraction: WSL/Windows, spawn profiles, resolvers |
@@ -381,8 +374,8 @@ Three layers of defense:
 | 23 | `schema_parity.test.js` | `npm run test:schema_parity` | Offline | Schema drift lock: live-served zod schemas vs `update_schemas.py` JSON |
 | 24 | `stream_proxy.test.js` | `npm run test:proxy` | Live / Mock | SSE stream proxy: repetition tiering, UTF-8 reassembly, real proxy regression |
 | 25 | `utf8_proxy.test.js` | `npm run test:proxy` | Live / Mock | Multi-byte UTF-8 split across chunks reassembly verification |
-| 26 | `benchmark.test.js` | `npm run test:benchmark` | Live / Skip | Head-to-head Evo vs legacy-Goose microkernel benchmark |
-| 27 | `goose_runner_mapping.test.js` | `npm test` | Offline | status→isError mapping: `completed`/`completed_ceiling` = success, fail-closed on unknown/null |
+| 26 | `benchmark.test.js` | `npm run test:benchmark` | Live / Skip | Head-to-head Evo benchmark |
+| 27 | `runner_mapping.test.js` | `npm test` | Offline | status→isError mapping: `completed`/`completed_ceiling` = success, fail-closed on unknown/null |
 | 28 | `lifecycle_locks.test.js` | `npm run test:all` | Offline | Exclusive lock acquire/reject/stale-recovery, PID-ownership release, atomic wedge counter |
 | 29 | `signal_hardening.test.js` | `npm run test:all` | Offline | vLLM headroom clamping, `ContextExhaustedError`, `readTaskFromDisk` transientLock/ENOENT |
 | 30 | `honesty_drift.test.js` | `npm test` | Offline | `listModels` honest error, corrupt-task quarantine, dead-constant culling |

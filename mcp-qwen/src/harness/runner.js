@@ -1,7 +1,7 @@
 /**
  * Anser Runtime Engine (Microkernel Orchestrator)
  *
- * Replaces legacy Goose CLI with:
+ * Capabilities:
  * - Pure Node.js runtime (no binary compilation or subprocess shell wrappers)
  * - Anser Context lifecycle with reversible plugin mount/unmount
  * - SSE streaming with real-time token dispatch to Antigravity

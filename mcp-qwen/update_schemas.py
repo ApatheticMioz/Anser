@@ -90,7 +90,7 @@ tools = {
     'qwen_coworker': {
         'name': 'qwen_coworker',
         'description': (
-            'Primary agentic interface for local Qwen3.8-27B running inside the Goose agent harness for $0. '
+            'Primary agentic interface for local Qwen3.8-27B running inside the Anser microkernel harness for $0. '
             'Has native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. '
             'Executes multi-turn Socratic collaboration, codebase exploration, threat modeling, deep research, and Evo candidate mutations. '
             'USAGE - multi-turn chat is the primary mode:\n'

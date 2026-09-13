@@ -122,7 +122,7 @@ export const TASK_RETENTION_MS = (() => {
 // 2026-09-12: default raised 1 -> 2 to match the engine launcher's MAX_SEQS=2
 // (user-authorized; upstream huge-profile validated seat count). Keep 1:1 with
 // scripts/wsl/start_huge.sh. QWEN_MAX_CONCURRENT still overrides.
-export const MAX_CONCURRENT_GOOSE = process.env.QWEN_MAX_CONCURRENT
+export const MAX_CONCURRENT_TASKS = process.env.QWEN_MAX_CONCURRENT
   ? Math.max(1, parseInt(process.env.QWEN_MAX_CONCURRENT, 10))
   : 2;
 
@@ -143,7 +143,7 @@ export const QWEN_STATE_DIR = process.env.QWEN_STATE_DIR || (() => {
 })();
 
 export const TASK_DIR = path.join(QWEN_STATE_DIR, "tasks");
-export const SLOTS_DIR = path.join(TASK_DIR, "goose_slots");
+export const SLOTS_DIR = path.join(TASK_DIR, "slots");
 
 // Wedge detection & Auto-Heal (Preserves GPU headroom against core deadlocks)
 export const WEDGE_STATS_SILENCE_S = process.env.QWEN_WEDGE_SILENCE_S

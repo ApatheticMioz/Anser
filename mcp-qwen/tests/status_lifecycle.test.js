@@ -18,7 +18,7 @@
  *                fetch wrapper, and the re-listen wiring (dark -> win, our
  *                identity -> stay follower, EADDRINUSE -> stay follower, no
  *                throw).
- *   D6  (FX5-A)  cancel releases the goose slot: a cancelled task frees its
+ *   D6  (FX5-A)  cancel releases the task slot: a cancelled task frees its
  *                slot immediately, a second acquire succeeds, and releasing an
  *                already-released slot is an idempotent no-op (distinguishable
  *                result, never a throw).
@@ -63,7 +63,7 @@ const {
 // import-time value (frozen at false). Read it through the live namespace
 // object (taskRegistry.statusServerOwned) so the test observes the real
 // current ownership state.
-const { acquireGooseSlot, releaseGooseSlot, listGooseSlots } = await import(
+const { acquireTaskSlot, releaseTaskSlot, listTaskSlots } = await import(
   "../src/semaphore.js"
 );
 const { stopServer, setWslRunner } = await import("../src/server_lifecycle.js");
@@ -214,11 +214,11 @@ console.log("\n[F2] qwen_task status elapsed (queued + executing)");
 }
 
 // ---------------------------------------------------------------------------
-// D6 (FX5-A): cancel releases the goose slot; release is idempotent.
+// D6 (FX5-A): cancel releases the task slot; release is idempotent.
 // ---------------------------------------------------------------------------
-console.log("\n[D6] cancel releases the goose slot (idempotent release)");
+console.log("\n[D6] cancel releases the task slot (idempotent release)");
 {
-  // A fake queued task that holds the single goose slot.
+  // A fake queued task that holds the single task slot.
   const task = {
     id: "task_d6_slot",
     sessionId: "d6",
@@ -233,32 +233,32 @@ console.log("\n[D6] cancel releases the goose slot (idempotent release)");
   };
   tasks.set(task.id, task);
 
-  const slot = await acquireGooseSlot(task);
-  check("D6: task acquired a goose slot", !!slot);
+  const slot = await acquireTaskSlot(task);
+  check("D6: task acquired a task slot", !!slot);
   if (slot) {
     // runQueued records the live handle on the task entry; mirror that here.
     task.slot = slot;
   }
-  check("D6: slot is held (1 active lease)", listGooseSlots().length === 1, `n=${listGooseSlots().length}`);
+  check("D6: slot is held (1 active lease)", listTaskSlots().length === 1, `n=${listTaskSlots().length}`);
 
   // Cancel it (cancelAllTasks cancels every not-done in-memory task).
   const cancelled = await cancelAllTasks("test cancel");
   check("D6: cancelAllTasks cancelled the task", cancelled >= 1, `count=${cancelled}`);
   check("D6: task marked done+cancelled", task.done === true && task.status === "cancelled");
-  check("D6: slot released on cancel (0 active leases)", listGooseSlots().length === 0, `n=${listGooseSlots().length}`);
+  check("D6: slot released on cancel (0 active leases)", listTaskSlots().length === 0, `n=${listTaskSlots().length}`);
 
   // A second acquire now succeeds (the slot is free again).
-  const slot2 = await acquireGooseSlot({ id: "task_d6_second" });
+  const slot2 = await acquireTaskSlot({ id: "task_d6_second" });
   check("D6: second acquire succeeds after cancel", !!slot2);
-  if (slot2) releaseGooseSlot(slot2);
-  check("D6: no leases remain after second release", listGooseSlots().length === 0);
+  if (slot2) releaseTaskSlot(slot2);
+  check("D6: no leases remain after second release", listTaskSlots().length === 0);
 
   // Idempotent release: releasing the already-released slot is a no-op with a
   // distinguishable result, NOT a throw.
   let idem;
   let idemThrew = false;
   try {
-    idem = releaseGooseSlot(slot);
+    idem = releaseTaskSlot(slot);
   } catch (err) {
     idemThrew = true;
     idem = { __err: err };
@@ -270,7 +270,7 @@ console.log("\n[D6] cancel releases the goose slot (idempotent release)");
     JSON.stringify(idem)
   );
   // Releasing null is also a clean no-op.
-  const nullRes = releaseGooseSlot(null);
+  const nullRes = releaseTaskSlot(null);
   check("D6: release(null) is a clean no-op", nullRes.released === false && nullRes.reason === "no_slot", JSON.stringify(nullRes));
 
   tasks.delete(task.id);
@@ -303,20 +303,20 @@ console.log("\n[D6b] inline qwen_task cancel releases the slot");
     done: false,
     isError: false,
     result: null,
-    child: null, // native task: no goose subprocess; killProcessTree is a no-op
+    child: null, // native task: in-process microkernel; killProcessTree is a no-op
     abortController: null,
   };
   tasks.set(task.id, task);
 
-  const slot = await acquireGooseSlot(task);
-  check("D6b: task acquired a goose slot", !!slot);
+  const slot = await acquireTaskSlot(task);
+  check("D6b: task acquired a task slot", !!slot);
   task.slot = slot; // runQueued records the live handle; mirror it here.
-  check("D6b: slot is held (1 active lease)", listGooseSlots().length === 1, `n=${listGooseSlots().length}`);
+  check("D6b: slot is held (1 active lease)", listTaskSlots().length === 1, `n=${listTaskSlots().length}`);
 
   const cancelRes = await tools["qwen_task"]({ action: "cancel", task_id: task.id });
   check("D6b: tool reported the cancellation", /cancelled/.test(cancelRes?.content?.[0]?.text || ""));
   check("D6b: task marked done+cancelled", task.done === true && task.status === "cancelled");
-  check("D6b: slot released by inline cancel (0 active leases)", listGooseSlots().length === 0, `n=${listGooseSlots().length}`);
+  check("D6b: slot released by inline cancel (0 active leases)", listTaskSlots().length === 0, `n=${listTaskSlots().length}`);
   check("D6b: task.slot handle cleared", task.slot === null);
   tasks.delete(task.id);
 }

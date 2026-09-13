@@ -1,18 +1,28 @@
 import { z } from "zod";
 import http from "node:http";
+import path from "node:path";
 import {
   BASE_URL,
   STATUS_PORT,
   MAX_LEN_HUGE,
   RACE_MS,
   IS_WINDOWS,
-  MAX_CONCURRENT_GOOSE,
+  MAX_CONCURRENT_TASKS,
+  QWEN_STATE_DIR,
+  TASK_DIR,
   AUTO_HEAL,
   WEDGE_STATS_SILENCE_S,
   REASONING_EFFORT_TIERS,
   TASK_RETENTION_MS,
 } from "./config.js";
-import { normalizeWorkspacePath, canonicalizePath, killProcessTree, killGooseSession } from "./wsl_bridge.js";
+import {
+  normalizeWorkspacePath,
+  canonicalizePath,
+  killProcessTree,
+  killSessionProcessTree,
+  toPosixWslPath,
+  toWindowsPath,
+} from "./wsl_bridge.js";
 import {
   serverInfo,
   readEngineMetrics,
@@ -24,7 +34,7 @@ import {
   readWedgeCounter,
   setHealGatekeeper,
 } from "./server_lifecycle.js";
-import { listGooseSlots, releaseGooseSlot } from "./semaphore.js";
+import { listTaskSlots, releaseTaskSlot } from "./semaphore.js";
 import {
   tasks,
   listTasksFromDisk,
@@ -35,7 +45,7 @@ import {
   statusServerOwned,
   hasLiveWork,
 } from "./task_registry.js";
-import { startGooseTask, resolveSessionId } from "./goose_runner.js";
+import { startAnserTask, resolveSessionId } from "./anser_runner.js";
 
 export function registerTools(server) {
   // Wire the heal backstop: refuse to stop/reboot the engine while live work
@@ -47,9 +57,9 @@ export function registerTools(server) {
   server.registerTool(
     "qwen_coworker",
     {
-      title: "Autonomous Senior Coworker (Goose Agent + Universal 245K vLLM)",
+      title: "Autonomous Senior Coworker (Anser Microkernel + Universal 245K vLLM)",
       description:
-        "Primary autonomous execution coworker for local Qwen3.8-27B via Goose agent harness ($0 local text execution). " +
+        "Primary autonomous execution coworker for local Qwen3.8-27B via Anser microkernel harness ($0 local text execution). " +
         "Has full native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. " +
         "Executes codebase exploration, refactoring, implementation, diagnostics, live web/docs research, and git operations.\n\n" +
         "ORCHESTRATION RULES:\n" +
@@ -139,8 +149,8 @@ export function registerTools(server) {
       // provenance fix: if the MCP server process was launched with a
       // junction/symlink cwd (e.g. D:\mnt\d\LLM_Ecosystem\mcp-qwen -> D:\),
       // process.cwd() returns the junction literal, and every downstream
-      // service (SandboxFsService, AstService, EvoOperator, the spawned
-      // goose/runner) would inherit that literal and produce false
+      // service (SandboxFsService, AstService, EvoOperator, the runner)
+      // would inherit that literal and produce false
       // SymlinkEscapeError/PathEscapeError. Canonicalizing here - before the
       // cwd is persisted to the task entry, hashed into the session id, and
       // passed to the runner - makes the entire pipeline operate on the real
@@ -150,7 +160,7 @@ export function registerTools(server) {
       const workingDir = canonicalizePath(normalizeWorkspacePath(cwd ?? process.cwd()));
       const resolvedSession = resolveSessionId(workingDir, session_id);
 
-      const { taskId, taskEntry, executionPromise, totalTimeoutMs } = startGooseTask({
+      const { taskId, taskEntry, executionPromise, totalTimeoutMs } = startAnserTask({
         cwd: workingDir,
         prompt,
         sessionId: resolvedSession,
@@ -180,12 +190,22 @@ export function registerTools(server) {
       const curlBin = IS_WINDOWS ? "curl.exe" : "curl";
       const waitCmd = `${curlBin} -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
       const elapsedSec = Math.round(RACE_MS / 1000);
+      const sessionEventsWin = path.join(QWEN_STATE_DIR, "sessions", resolvedSession, "events.jsonl");
+      const sessionEventsWsl = toPosixWslPath(sessionEventsWin);
+      const taskFileWin = path.join(TASK_DIR, `${taskId}.json`);
+      const taskFileWsl = toPosixWslPath(taskFileWin);
       const responseText = [
         `### Qwen Task Dispatched (Background Execution)`,
         `- **Task ID**: \`${taskId}\``,
         `- **Session**: \`${resolvedSession}\``,
         `- **Working Directory**: \`${workingDir}\``,
         `- **Time Elapsed**: ${elapsedSec}s (Task continuing in background with ${Math.round(totalTimeoutMs / 60000)} min budget)`,
+        `- **Unified Event Ledger**:`,
+        `  - Windows: \`${sessionEventsWin}\``,
+        `  - WSL: \`${sessionEventsWsl}\``,
+        `- **Task State File**:`,
+        `  - Windows: \`${taskFileWin}\``,
+        `  - WSL: \`${taskFileWsl}\``,
         ``,
         `> [!TIP]`,
         `> **Zero-Turn Reactive Wait**: Execute the wait command via \`run_command\` (Antigravity) or \`Bash\` (Claude Code). It sleeps at $0 token cost and automatically wakes you on completion.`,
@@ -276,7 +296,7 @@ export function registerTools(server) {
           content: [
             {
               type: "text",
-              text: `Cancelled ${count} active/queued task(s), killed all Goose processes, and cleared slot leases.`,
+              text: `Cancelled ${count} active/queued task(s), stopped execution, and cleared slot leases.`,
             },
           ],
         };
@@ -343,13 +363,13 @@ export function registerTools(server) {
         const curlBin = IS_WINDOWS ? "curl.exe" : "curl";
         const hint = `\n\nWait command (blocks at $0 until done):\n\`${curlBin} -fS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``;
         if (task.status === "queued") {
-          const holders = listGooseSlots().map((l) => l.taskId ?? `pid ${l.pid}`);
+          const holders = listTaskSlots().map((l) => l.taskId ?? `pid ${l.pid}`);
           const heldBy = holders.length ? ` Currently held by: ${holders.join(", ")}.` : "";
           return {
             content: [
               {
                 type: "text",
-                text: `Task \`${task_id}\` is QUEUED for a global goose slot (${elapsedS}s waiting; MAX_CONCURRENT_GOOSE=${MAX_CONCURRENT_GOOSE} machine-wide).${heldBy}${hint}`,
+                text: `Task \`${task_id}\` is QUEUED for a global execution slot (${elapsedS}s waiting; MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS} machine-wide).${heldBy}${hint}`,
               },
             ],
             isError: false,
@@ -371,7 +391,7 @@ export function registerTools(server) {
         if (memTask && !memTask.done) {
           killProcessTree(memTask.child, memTask.sessionId);
           // P10: trigger the native runner's abort signal. For a
-          // native task `memTask.child` is null (no goose subprocess),
+          // native task `memTask.child` is null (in-process microkernel),
           // so killProcessTree is a no-op and the ONLY way to stop the
           // in-flight LLM call is the abort signal. Aborting it makes the
           // provider's fetch reject, which lands in the runner's catch and
@@ -384,12 +404,12 @@ export function registerTools(server) {
               memTask.abortController.abort();
             } catch {}
           }
-          // FX5-A (D6): release the goose slot immediately. For a wedged
+          // FX5-A (D6): release the task slot immediately. For a wedged
           // task the runner's finally never fires (the fn never returns), so
-          // the slot must be freed here. releaseGooseSlot is idempotent — a
+          // the slot must be freed here. releaseTaskSlot is idempotent — a
           // cancel landing after natural completion is a no-op.
           if (memTask.slot) {
-            releaseGooseSlot(memTask.slot);
+            releaseTaskSlot(memTask.slot);
             memTask.slot = null;
           }
           memTask.status = "cancelled";
@@ -466,7 +486,7 @@ export function registerTools(server) {
             // over-killed, and the hardcoded `-d "Ubuntu"` wsl.exe call is
             // gone with the switch.
             try {
-              await killGooseSession(diskTask.sessionId);
+              await killSessionProcessTree(diskTask.sessionId);
             } catch {}
           }
           diskTask.status = "cancelled";

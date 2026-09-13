@@ -123,12 +123,12 @@ async function testAnchoredPattern() {
   const script = [
     "#!/bin/bash",
     "ID=p10test_target",
-    "exec -a \"goose run --name $ID\" sleep 30 &",
-    "exec -a \"goose run --name ${ID}123\" sleep 30 &",
+    "exec -a \"task_session $ID\" sleep 30 &",
+    "exec -a \"task_session ${ID}123\" sleep 30 &",
     "sleep 0.6",
-    "for p in $(pgrep -f \"goose run --name $ID\" 2>/dev/null); do",
+    "for p in $(pgrep -f \"task_session $ID\" 2>/dev/null); do",
     "  cmd=$(tr '\\0' ' ' < /proc/$p/cmdline 2>/dev/null)",
-    "  if echo \"$cmd\" | grep -qE \"goose run --name $ID( |\\$)\"; then",
+    "  if echo \"$cmd\" | grep -qE \"task_session $ID( |\\$)\"; then",
     "    kill -9 $p 2>/dev/null",
     "    echo \"KILLED $p :: $cmd\"",
     "  else",
@@ -136,11 +136,11 @@ async function testAnchoredPattern() {
     "  fi",
     "done",
     "sleep 0.3",
-    "for p in $(pgrep -f \"goose run --name $ID\" 2>/dev/null); do",
+    "for p in $(pgrep -f \"task_session $ID\" 2>/dev/null); do",
     "  cmd=$(tr '\\0' ' ' < /proc/$p/cmdline 2>/dev/null)",
     "  echo \"SURVIVOR $p :: $cmd\"",
     "done",
-    "for p in $(pgrep -f \"goose run --name $ID\" 2>/dev/null); do",
+    "for p in $(pgrep -f \"task_session $ID\" 2>/dev/null); do",
     "  kill -9 $p 2>/dev/null",
     "done",
     "true",
@@ -153,9 +153,9 @@ async function testAnchoredPattern() {
   const wslScriptPath = toPosixWslPath(scriptPath);
   try {
     const { stdout } = await runWslCommand(`bash ${wslScriptPath}`);
-    const killed = /KILLED \d+ :: goose run --name p10test_target( |$)/.test(stdout);
-    const decoySurvived = /SURVIVOR \d+ :: goose run --name p10test_target123/.test(stdout);
-    const decoyKilled = /KILLED \d+ :: goose run --name p10test_target123/.test(stdout);
+    const killed = /KILLED \d+ :: task_session p10test_target( |$)/.test(stdout);
+    const decoySurvived = /SURVIVOR \d+ :: task_session p10test_target123/.test(stdout);
+    const decoyKilled = /KILLED \d+ :: task_session p10test_target123/.test(stdout);
     assert(killed, "exact-match target (id at boundary) was killed");
     assert(decoySurvived, "decoy (id as substring) SURVIVED the anchored kill");
     assert(!decoyKilled, "decoy was NOT over-killed");

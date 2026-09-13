@@ -8,9 +8,9 @@
  *
  * Capabilities:
  * 1. Inbound Multimodal Guard:
- *    When clients (e.g. Goose's read_image tool) send image_url/image blocks,
- *    intercepts and converts them to descriptive text placeholders before reaching
- *    vLLM, preventing "Bad request (400): At most 0 image(s) may be provided in one prompt".
+ *    When clients send image_url/image blocks, intercepts and converts them
+ *    to descriptive text placeholders before reaching vLLM, preventing
+ *    "Bad request (400): At most 0 image(s) may be provided in one prompt".
  * 2. Stateful UTF-8 Reconstruction:
  *    Maintains per-stream TextDecoder with { stream: true } to assemble split
  *    multi-byte UTF-8 sequences (math symbols, superscripts 2³, Greek letters,
@@ -18,7 +18,7 @@
  * 3. Mid-Stream Error Translation:
  *    Intercepts mid-stream vLLM error payloads (`data: {"error": ...}`) that
  *    lack `choices` and converts them into valid completion delta chunks before
- *    Goose's serde parser sees them, eliminating `Stream decode error`.
+ *    client parsers see them, eliminating `Stream decode error`.
  * 4. Transparent Pass-Through:
  *    Non-SSE / non-chat requests (GET /v1/models, embeddings, health) are piped directly.
  * 5. Zero External Dependencies:

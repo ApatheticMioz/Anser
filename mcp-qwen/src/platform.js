@@ -111,6 +111,9 @@ export function wslHome() {
 /** Windows host home directory (e.g. C:\Users\<user>). Env QWEN_WIN_HOME; default os.homedir(). */
 export function winHome() {
   if (process.env.QWEN_WIN_HOME) return process.env.QWEN_WIN_HOME;
+  if (IS_WINDOWS) return os.homedir();
+  const wslWin = winHomeWsl();
+  if (wslWin) return toWindowsPath(wslWin);
   return os.homedir();
 }
 
@@ -119,41 +122,27 @@ export function winHome() {
  * used to share the .qwen state dir between the Windows MCP server and the
  * WSL engine. Env QWEN_WIN_HOME_WSL overrides. When unset, derived from
  * QWEN_WIN_HOME if it is a Windows path (C:\Users\X -> /mnt/c/Users/X);
- * otherwise returns "" so callers fall back to the WSL user's own home.
+ * when running inside WSL, auto-probes /mnt/c/Users/<user>; otherwise returns
+ * "" so callers fall back to the WSL user's own home.
  */
 export function winHomeWsl() {
   if (process.env.QWEN_WIN_HOME_WSL) return process.env.QWEN_WIN_HOME_WSL;
   const win = process.env.QWEN_WIN_HOME || (IS_WINDOWS ? os.homedir() : "");
   const m = win.match(/^([a-zA-Z]):[\\\/](.*)$/);
   if (m) return `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, "/")}`;
-  return "";
-}
-
-// ---------------------------------------------------------------------------
-// Goose binary
-// ---------------------------------------------------------------------------
-
-let _gooseBin = null;
-function _probeGooseBin() {
-  try {
-    const cmd = IS_WINDOWS ? "where.exe" : "which";
-    const out = execFileSync(cmd, ["goose"], {
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const first = out.toString().split(/\r?\n/)[0].trim();
-    return first || "goose";
-  } catch {
-    return "goose";
+  if (!IS_WINDOWS) {
+    const candidates = [
+      `/mnt/c/Users/${wslUser()}`,
+      `/mnt/c/Users/${process.env.USER || ""}`,
+      `/mnt/c/Users/${process.env.LOGNAME || ""}`,
+    ];
+    for (const c of candidates) {
+      try {
+        if (c && c !== "/mnt/c/Users/" && fs.existsSync(c)) return c;
+      } catch {}
+    }
   }
-}
-
-/** Goose executable. Env QWEN_GOOSE_BIN; else which/where probe; else "goose". */
-export function gooseBin() {
-  if (process.env.QWEN_GOOSE_BIN) return process.env.QWEN_GOOSE_BIN;
-  if (_gooseBin) return _gooseBin;
-  _gooseBin = _probeGooseBin();
-  return _gooseBin;
+  return "";
 }
 
 // ---------------------------------------------------------------------------

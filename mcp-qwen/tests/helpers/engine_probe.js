@@ -24,6 +24,9 @@ import { VLLM_PORT } from "../../src/config.js";
  * @returns {Promise<boolean>}
  */
 export async function isEngineAvailable({ port = VLLM_PORT, timeoutMs = 3000 } = {}) {
+  if (process.env.TEST_OFFLINE) {
+    return false;
+  }
   try {
     const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
       signal: AbortSignal.timeout(timeoutMs),
@@ -43,6 +46,12 @@ export async function isEngineAvailable({ port = VLLM_PORT, timeoutMs = 3000 } =
  * @returns {Promise<boolean>} true when the engine is available.
  */
 export async function requireEngineOrSkip(label = "") {
+  if (process.env.TEST_OFFLINE) {
+    console.log(
+      `[SKIP] TEST_OFFLINE set${label ? ` (${label})` : ""} - skipping live-engine test`
+    );
+    process.exit(0);
+  }
   const up = await isEngineAvailable();
   if (!up) {
     console.log(

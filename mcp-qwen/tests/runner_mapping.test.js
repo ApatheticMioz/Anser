@@ -1,8 +1,8 @@
 /**
- * Goose-runner status -> isError mapping verification (offline, pure).
+ * Anser runner status -> isError mapping verification (offline, pure).
  *
  * The mapping is the single source of truth `isSuccessStatus(status)` in
- * src/goose_runner.js. It must:
+ * src/anser_runner.js. It must:
  *   - treat "completed" and "completed_ceiling" as SUCCESS (isError = false),
  *   - treat every other known status as FAILURE (isError = true),
  *   - FAIL CLOSED on unknown / null / undefined statuses.
@@ -13,7 +13,7 @@
  * regression would go undetected.
  */
 import assert from "node:assert/strict";
-import { isSuccessStatus } from "../src/goose_runner.js";
+import { isSuccessStatus } from "../src/anser_runner.js";
 
 const SUCCESS_STATUSES = ["completed", "completed_ceiling"];
 const FAILURE_STATUSES = [
@@ -40,7 +40,7 @@ function check(label, fn) {
   }
 }
 
-console.log("=== Goose Runner status->isError Mapping Verification (offline) ===\n");
+console.log("=== Anser Runner status->isError Mapping Verification (offline) ===\n");
 
 for (const status of SUCCESS_STATUSES) {
   check(`success status "${status}" -> isSuccessStatus true`, () => {
@@ -68,7 +68,7 @@ for (const input of FAIL_CLOSED_INPUTS) {
 }
 
 console.log(
-  `\nGoose Runner Mapping Verification: ${passed} / ${passed + failed} checks passed`
+  `\nAnser Runner Mapping Verification: ${passed} / ${passed + failed} checks passed`
 );
 if (failed > 0) {
   console.log("Verdict: MAPPING CHECK(S) FAILED.");

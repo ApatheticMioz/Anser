@@ -9,7 +9,7 @@
 [![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#model-serving--speculative-decoding)
 [![Serving](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#model-serving--speculative-decoding)
 [![Security](https://img.shields.io/badge/Security-137%2F137%20Vectors%20Contained-success.svg)](#zero-trust-sandboxed-file-operations)
-[![SWE-rebench: Old (Goose)](https://img.shields.io/badge/SWE--rebench-32.0%25%20%5BOLD%20%7C%20Goose%5D-inactive.svg)](#old-swe-rebench-validation-benchmark-legacy-goose-runner)
+[![SWE-rebench: Prototype](https://img.shields.io/badge/SWE--rebench-32.0%25%20%5BPrototype%5D-inactive.svg)](#old-swe-rebench-validation-benchmark-prototype-runner)
 
 > **Anser** lets a high-reasoning cloud orchestrator (the *Lead Architect*)
 > drive a **locally-served Qwen3.8-27B** — 245K context on a single 24 GB GPU,
@@ -27,7 +27,7 @@
 4. [Quickstart (3 Steps)](#quickstart-3-steps)
 5. [Model Serving, Speculative Decoding & Quantization](#model-serving--speculative-decoding)
 6. [Production Marathon Telemetry [OLD / Pre-Release Baselines]](#production-marathon-telemetry-old--pre-release-baselines)
-7. [SWE-rebench Validation Benchmark [OLD / Legacy Goose]](#old-swe-rebench-validation-benchmark-legacy-goose-runner)
+7. [SWE-rebench Validation Benchmark [OLD / Early Prototype]](#old-swe-rebench-validation-benchmark-prototype-runner)
 8. [Zero-Trust Sandboxed File Operations](#zero-trust-sandboxed-file-operations)
 9. [Testing & Verification](#testing--verification)
 10. [Repository Structure](#repository-structure)
@@ -256,13 +256,13 @@ Detailed audit of the transcripts reveals **6 critical operational friction mode
 
 ---
 
-## [OLD] SWE-rebench Validation Benchmark (Legacy Goose Runner)
+## [OLD] SWE-rebench Validation Benchmark (Early Prototype) <a id="old-swe-rebench-validation-benchmark-prototype-runner"></a>
 
 > [!WARNING]
-> **[OLD / HISTORICAL — Legacy Goose Runner]**:
-> Mentioning SWE-bench here is strictly for historical prototype record-keeping from early experiments. This benchmark was conducted using the **legacy Goose runner** (`goose.exe`) on an early prototype configuration, *not* the current Anser microkernel or its native pair-programming protocol. It is retained strictly as an uncurated historical baseline and does not reflect current Anser performance or capabilities.
+> **[OLD / HISTORICAL — Early Prototype Runner]**:
+> Mentioning SWE-bench here is strictly for historical prototype record-keeping from early experiments. This benchmark was conducted using the **legacy prototype runner** on an early prototype configuration, *not* the current Anser microkernel or its native pair-programming protocol. It is retained strictly as an uncurated historical baseline and does not reflect current Anser performance or capabilities.
 
-To evaluate real-world software engineering generalization without data contamination on that early prototype, the legacy Goose+Qwen stack was benchmarked against [SWE-rebench](https://swe-rebench.com/) (Nebius, `nebius/SWE-rebench-leaderboard`), using fresh GitHub issues created after model training cutoffs (March 2026 split):
+To evaluate real-world software engineering generalization without data contamination on that early prototype, the legacy prototype stack was benchmarked against [SWE-rebench](https://swe-rebench.com/) (Nebius, `nebius/SWE-rebench-leaderboard`), using fresh GitHub issues created after model training cutoffs (March 2026 split):
 
 - **Resolved Rate (Best-of-1)**: **32.0% (16/50)** on uncurated fresh GitHub issues.
 - **Attempted Resolution Rate**: **57.1% (16/28)** for issues completed within the 900s timeout budget.

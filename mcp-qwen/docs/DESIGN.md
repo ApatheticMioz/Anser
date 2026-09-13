@@ -19,7 +19,7 @@ Why in-process first:
   pipe setup) dominated latency on DrvFs.
 - **No `.cmd` shim problem.** Node's `spawn` cannot resolve Windows `.cmd`
   shims without a shell, and shell mode breaks argv-array purity (the same
-  class of bug that broke Goose's own extension spawning — see L7). The napi
+  class of bug that broke legacy extension spawning — see L7). The napi
   binding is a native module loaded with `import`; there is nothing to
   resolve.
 - **Deterministic "no matches" semantics.** The CLI's exit-1/empty-stdout
@@ -35,7 +35,7 @@ locked by `tests/ast_engine.test.js`.
 ### 1.2 Why `MAX_SEQS=1` shapes the whole design
 
 > **2026-09-12 addendum:** the seat count was raised to 2 (engine launcher +
-> `MAX_CONCURRENT_GOOSE` fallback), staying at the upstream huge-profile
+> `MAX_CONCURRENT_TASKS` fallback), staying at the upstream huge-profile
 > validated count. The machinery below was designed under 1 seat and remains
 > correct at 2: the busy-gate keys off live `/metrics` gauges, not the seat
 > count, and the single-slot semaphore simply became a two-slot lease.
@@ -62,9 +62,9 @@ fact drives most of the liveness machinery:
   queue waits.
 - **The disk-lease semaphore** (`src/semaphore.js`): each Claude surface
   spawns its own MCP server process, so an in-process semaphore is useless
-  across sessions. Slot leases in `~/.qwen/tasks/goose_slots/` are claimed
+  across sessions. Slot leases in `~/.qwen/tasks/slots/` are claimed
   with an atomic `O_EXCL` open, heartbeated every 15s, and reclaimed on
-  dead-pid or 5-min silence. Default 1 = one goose machine-wide.
+  dead-pid or 5-min silence. Default 1 = one task machine-wide.
 - **The zero-turn wait** (`src/task_registry.js`, `:18021`): because a
   single slot means long queue waits, the client is handed a
   `curl .../task/<id>/wait` long-poll that blocks at $0 token cost instead
@@ -79,12 +79,12 @@ fact drives most of the liveness machinery:
 `qwen_coworker` dispatches through the Anser in-process microkernel
 (`src/harness/core/kernel.js`): a pure-Node kernel with sandboxed services,
 direct SSE streaming to the client, and the Evo operator. The legacy
-`goose.exe` CLI subprocess path has been retired; the in-process runtime is
+CLI subprocess path has been completely removed; the in-process runtime is
 the sole production engine.
 
-- **No binary dependency.** The retired legacy path depended on a Goose
-  install, a working `wsl.exe` spawn, and Goose's own session/extension
-  machinery — each a separate failure surface (fabricated `GOOSE_WORKING_DIR`
+- **No binary dependency.** The retired legacy path depended on an external
+  install, a working `wsl.exe` spawn, and external session/extension
+  machinery — each a separate failure surface (fabricated working directory
   paths, `npx.cmd` shim failures, `--resume` crashes on missing sessions).
 - **Direct streaming.** The provider (`src/harness/services/provider_vllm.js`)
   reads SSE from the stream proxy directly, so token-level telemetry
@@ -177,7 +177,7 @@ spellings of the same file are different strings.
 **Structural fix:** `canonicalizePath()` in `src/wsl_bridge.js` resolves
 through `fs.realpathSync` (longest-existing-prefix fallback for
 not-yet-created paths, never throws). It is applied at the single task-entry
-point (`src/tools.js`, `src/goose_runner.js`) and in every service
+point (`src/tools.js`, `src/anser_runner.js`) and in every service
 constructor, so the entire pipeline operates on the real path; containment
 compares real-vs-real. Real escapes (`../outside`, symlink-to-outside)
 still resolve outside the real root and are caught. Locked by
@@ -185,8 +185,8 @@ still resolve outside the real root and are caught. Locked by
 
 ### L3. Substring over-kill in `pkill` (P10)
 
-**What happened:** the legacy kill path fired
-`pkill -9 -f 'goose run --name <id>'`. A session id that is a *substring*
+**What happened:** the legacy kill path fired an unanchored process kill.
+A session id that is a *substring*
 of another session's id (e.g. `abc` vs `abc123`) matched the wrong process;
 separately, the kill was fire-and-forget, so a surviving process was never
 detected.
@@ -225,7 +225,7 @@ lockstep; the test makes drift a red build, not a silent divergence.
 ### L5. Offline test contention with live leases (Gemini Issue 3)
 
 **What happened:** the semaphore test suite used the shared
-`~/.qwen/tasks/goose_slots/` directory. When a live MCP server process held
+`~/.qwen/tasks/slots/` directory. When a live MCP server process held
 a slot lease, the test's "wipe stale leases" step deleted the live holder's
 lease, and the test's own claims collided with the live process's
 heartbeat — the suite was flaky in exactly the way that matters (it
@@ -264,8 +264,8 @@ The same multi-instance reasoning drives the disk-lease semaphore (L:
 
 ### L7. `wsl.exe` login shell executed backticks (v4.5.3)
 
-**What happened:** in `ps` output, Goose arguments appeared as
-`Prefer native Goose tools (, , , , )` — the tool directives had been
+**What happened:** in `ps` output, command arguments appeared as
+`Prefer native tools (, , , , )` — the tool directives had been
 consumed. Spawning `wsl.exe -d Ubuntu -- <cmd>` ran through the login shell
 `bash`, which executed backtick-quoted text as command substitution.
 
@@ -327,8 +327,8 @@ exploration, zero files written, timeout).
 **Structural fix:** two axes (`src/config.js`): a hard 4-hour total budget
 (`DEFAULT_TIMEOUT_MS`) plus a 30-minute zero-stream inactivity watchdog
 (`INACTIVITY_TIMEOUT_MS`) as the real liveness guard — kill on silence,
-not on age. The legacy-goose watchdog additionally cross-checks vLLM token
-counters (`src/goose_runner.js`): if the engine's own counters are
+not on age. The runner watchdog additionally cross-checks vLLM token
+counters (`src/anser_runner.js`): if the engine's own counters are
 advancing, the silence is prefill, not death.
 
 ### L11. A written warning did not change behavior (2026-08-23)
@@ -350,9 +350,9 @@ than strengthening the warning.
 
 ### L12. Fabricated working directory (2026-08-23)
 
-**What happened:** a real run wrote to `C:\Users\hassan\goose\...` — not
-this machine's user, not the given `cwd`. Goose's `developer` extension
-resolves its working directory from the process-wide `GOOSE_WORKING_DIR`
+**What happened:** a real run wrote to a divergent user path — not
+this machine's user, not the given `cwd`. A legacy extension
+resolved its working directory from a process-wide environment variable,
 env var, not `std::env::current_dir()`; the spawn set `cwd` but never the
 env var, so the model's turn-context claimed one directory while the
 extension's file-tool root diverged, and the model guessed a plausible path
@@ -361,8 +361,8 @@ instead of surfacing the contradiction.
 **Root cause:** two independent sources of "where am I" (process cwd vs
 env var) that can disagree, with the model unable to see the mismatch.
 
-**Structural fix:** the spawn env sets `GOOSE_WORKING_DIR: cwd`
-(`src/goose_runner.js`) and the absolute cwd is restated as the first line
+**Structural fix:** the spawn env sets the working directory explicitly
+(`src/anser_runner.js`) and the absolute cwd is restated as the first line
 of the task prompt as defense in depth. (The Anser in-process runtime
 has no such duality: the sandbox root is a single constructor argument.)
 

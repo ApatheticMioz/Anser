@@ -6,7 +6,7 @@ REM load this architecture (qwen3_5 unsupported), and llama.cpp only ships
 REM prebuilt CUDA binaries for Windows, not Linux - so this sidesteps
 REM needing a CUDA toolkit build in WSL altogether.
 REM Deliberately SAME port (18020) and served-model-name (qwen3.8-27b) as
-REM scripts\main\ - so Goose's env vars never need to change between them -
+REM scripts\main\ - so client env vars never need to change between them -
 REM only one can ever be up at once anyway since both need the whole GPU.
 REM For the non-reasoning variant, use start_noreason.bat instead.
 REM Single-line command deliberately - a prior multi-line ^ continuation

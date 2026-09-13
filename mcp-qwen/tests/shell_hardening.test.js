@@ -7,15 +7,19 @@
  *   (b) sessionId with ; / backtick / space / newline / $ / " -> throws.
  *   (c) legitimate ids (anser_verify_m0_s1, qwen_sh_123_abc, task-ui-ovh)
  *       -> pass through unchanged; the default-generated id matches the charset.
- *   (d) killGooseSessionSync with a quote-bearing id against a MOCKED
- *       runWslCommandSync: the constructed pgrep pattern contains the quote as
- *       the 4-char close/escaped/reopen sequence (' \ ' ') and has NO raw
- *       unescaped quote inside the single-quoted region.
- *   (d2) a real-bash execution of the constructed command for an injection
- *       payload does NOT execute the injected command (canary file not created).
- *   (e) getApiKeySync with no key file (candidate paths redirected to a fresh
- *       temp dir) -> returns null, and the request-builder path (serverInfo)
- *       omits the Authorization header.
+ *   (d) killSessionProcessTreeSync with a quote-bearing id against a MOCKED
+ *       runWslCommandSync runner: asserts the constructed command uses the
+ *       4-character close/escaped-single-quote/reopen sequence (`'\''`),
+ *       contains NO raw unescaped single quotes inside the single-quoted
+ *       pgrep argument, and round-trips to the original id.
+ *   (d2) Same as (d) against a REAL bash on this box (Git Bash on Windows,
+ *       native bash on Linux): asserts an injection payload containing
+ *       semicolons and subshell markers (`x'; echo INJECTED; echo 'y`) does
+ *       NOT execute the injected command.
+ *   (e) serverInfo with malicious model name: the JSON injection payload is
+ *       safely escaped by JSON.stringify and does not break the payload.
+ *   (f) regex-metacharacter session id: the pgrep pattern is regex-escaped
+ *       (so `.*` is literal, not "match any process") AND shell-escaped.
  *
  * Run: node tests/shell_hardening.test.js
  */
@@ -25,21 +29,18 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
-// Isolate the key-file candidate paths in a fresh temp dir BEFORE importing
-// config.js / platform.js / wsl_bridge.js / server_lifecycle.js so
-// getApiKeySync finds no key file. NOTE: QWEN_STATE_DIR alone does NOT affect
-// apiKeyCandidates (they are home-based), so the home env vars are redirected
-// too - this is the ISOLATED pattern from semaphore.test.js, extended to the
-// actual candidate-path env vars.
-const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "fx2_state_"));
+// ---------------------------------------------------------------------------
+// Isolate ALL on-disk state in a fresh temp dir BEFORE any src import.
+// ---------------------------------------------------------------------------
+const TMP_STATE = fs.mkdtempSync(path.join(os.tmpdir(), "shell_hardening_"));
 process.env.QWEN_STATE_DIR = TMP_STATE;
 process.env.QWEN_WSL_HOME = TMP_STATE;
 process.env.QWEN_WIN_HOME = TMP_STATE;
 process.env.HOME = TMP_STATE;
 
-const { getApiKeySync, killGooseSessionSync, setWslCommandSyncRunner } =
+const { getApiKeySync, killSessionProcessTreeSync, setWslCommandSyncRunner } =
   await import("../src/wsl_bridge.js");
-const { resolveSessionId } = await import("../src/goose_runner.js");
+const { resolveSessionId } = await import("../src/anser_runner.js");
 const { serverInfo } = await import("../src/server_lifecycle.js");
 
 let passed = 0;
@@ -121,11 +122,11 @@ check("c: default-generated id matches the charset", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (d) killGooseSessionSync with a quote-bearing id (mocked runner)
+// (d) killSessionProcessTreeSync with a quote-bearing id (mocked runner)
 // ---------------------------------------------------------------------------
 // Extract the escaped id from a constructed pgrep command.
 function extractEscapedId(cmd) {
-  const m = cmd.match(/^pgrep -f 'goose run --name (.*)' 2>\/dev\/null \|\| true$/);
+  const m = cmd.match(/^pgrep -f '(.*)' 2>\/dev\/null \|\| true$/);
   return m ? m[1] : null;
 }
 
@@ -137,10 +138,10 @@ await checkAsync("d: quote-bearing id -> pgrep pattern escaped, no raw quote", a
   });
   try {
     const id = "it" + Q + "s";
-    killGooseSessionSync(id);
+    killSessionProcessTreeSync(id);
     assert.ok(calls.length >= 1, "mocked runner was called");
     const cmd = calls[0];
-    assert.ok(cmd.startsWith("pgrep -f 'goose run --name "), `cmd starts with the pgrep pattern: ${cmd}`);
+    assert.ok(cmd.startsWith("pgrep -f '"), `cmd starts with the pgrep pattern: ${cmd}`);
     const escaped = extractEscapedId(cmd);
     assert.ok(escaped !== null, `extracted the escaped id from: ${cmd}`);
     // The 4-char escape round-trips to the original id.
@@ -183,7 +184,7 @@ await checkAsync("d2: injection payload does not execute in a real bash", async 
     calls.push(cmd);
     return "";
   });
-  killGooseSessionSync(id);
+  killSessionProcessTreeSync(id);
   setWslCommandSyncRunner(null);
   const cmd = calls[0];
   // Sanity (mutation-check for d2 itself): rebuild the command with the RAW
@@ -209,7 +210,7 @@ await checkAsync("d2: injection payload does not execute in a real bash", async 
 
 // ---------------------------------------------------------------------------
 // (f) regex-metachar id -> pgrep pattern is BOTH regex-escaped (pgrep -f
-//     matches an ERE: an unescaped `.*` would match every goose process on
+//     matches an ERE: an unescaped `.*` would match every process on
 //     the box and the sweep would kill sibling sessions) AND shell-escaped.
 // ---------------------------------------------------------------------------
 await checkAsync("f: regex-metachar id -> pattern regex-escaped AND shell-escaped", async () => {
@@ -220,7 +221,7 @@ await checkAsync("f: regex-metachar id -> pattern regex-escaped AND shell-escape
   });
   try {
     const id = "a.*b" + Q + "c";
-    killGooseSessionSync(id);
+    killSessionProcessTreeSync(id);
     assert.ok(calls.length >= 1, "mocked runner was called");
     const escaped = extractEscapedId(calls[0]);
     assert.ok(escaped !== null, `extracted the escaped id from: ${calls[0]}`);

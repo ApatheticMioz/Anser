@@ -100,6 +100,7 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 
 ### 4. Ground-Truth & Verification Discipline
 - **Session events are ground truth; planner transcripts are intent ledgers.** Before diagnosing a "duplicate" or a "stale task", or re-dispatching, verify against `~/.qwen/sessions/<id>/events.jsonl` and `~/.qwen/tasks/*.json`.
+- **Cross-OS State Paths**: State is unified across Windows (`C:\Users\<user>\.qwen\`) and WSL (`/mnt/c/Users/<user>/.qwen\`, symlinked from `~/.qwen`). All tasks execute inside the in-process Anser microkernel.
 - **Claim→Verify pairs**: Confirm anomaly and corruption-class findings with an adversarial verification slice before they enter any report, manifest, or commit message.
 - **Read-only means no files**: A read-only slice's deliverable is its final message. State "return the report as your final message; write no files" explicitly.
 - **Effort tiers are a per-dispatch knob**: `reasoning_effort` (default `xhigh`) — tier down consciously per task class (bounded mechanical work → `medium`; security/correctness verification and tricky debugging → `xhigh`). Never suppress silently.

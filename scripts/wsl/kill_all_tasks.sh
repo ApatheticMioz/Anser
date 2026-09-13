@@ -13,14 +13,13 @@ if [ -n "$WIN_HOST_IP" ] && [ "$WIN_HOST_IP" != "127.0.0.1" ]; then
 fi
 
 echo "[kill_all_tasks:wsl] 2. Terminating running worker processes..."
-pkill -9 -f 'goose run' 2>/dev/null || true
 pkill -9 -f 'evo_runner.py' 2>/dev/null || true
 pkill -9 -f 'tests/canary.test.js' 2>/dev/null || true
 pkill -9 -f 'tests/evo.test.js' 2>/dev/null || true
 
 echo "[kill_all_tasks:wsl] 3. Purging slot leases..."
-rm -f ~/.qwen/tasks/goose_slots/*.json 2>/dev/null || true
-for user_qwen in /mnt/c/Users/*/.qwen/tasks/goose_slots; do
+rm -f ~/.qwen/tasks/slots/*.json 2>/dev/null || true
+for user_qwen in /mnt/c/Users/*/.qwen/tasks/slots; do
   if [ -d "$user_qwen" ]; then
     rm -f "$user_qwen"/*.json 2>/dev/null || true
   fi

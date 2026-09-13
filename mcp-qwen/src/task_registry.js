@@ -10,11 +10,14 @@ import {
 } from "./config.js";
 import {
   pidAlive,
-  listGooseSlots,
-  clearReclaimableGooseSlots,
-  releaseGooseSlot,
+  listTaskSlots,
+  clearReclaimableTaskSlots,
+  releaseTaskSlot,
 } from "./semaphore.js";
-import { killProcessTree, killGooseSessionSync } from "./wsl_bridge.js";
+import {
+  killProcessTree,
+  killSessionProcessTreeSync,
+} from "./wsl_bridge.js";
 import { EventLoggerService } from "./harness/services/event_logger.js";
 
 try {
@@ -349,7 +352,7 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
   let count = 0;
   // 1. Cancel in-memory tasks and notify waiters
   // P15: collect the session ids of the in-memory tasks we cancel here so the
-  // anchored sweep below reaches their goose children too.
+  // anchored sweep below reaches their session children too.
   const memSessionIds = new Set();
   for (const task of tasks.values()) {
     if (!task.done) {
@@ -363,11 +366,11 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
         } catch {}
         task.abortController = null;
       }
-      // FX5-A (D6): release the task's goose slot immediately on cancel.
-      // releaseGooseSlot is idempotent, so a cancel landing after natural
+      // FX5-A (D6): release the task's execution slot immediately on cancel.
+      // releaseTaskSlot is idempotent, so a cancel landing after natural
       // completion (slot already freed by runQueued's finally) is a no-op.
       if (task.slot) {
-        releaseGooseSlot(task.slot);
+        releaseTaskSlot(task.slot);
         task.slot = null;
       }
       task.status = "cancelled";
@@ -398,24 +401,20 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
     }
   }
 
-  // 3. P15: anchored per-session sweep instead of a machine-wide
-  // `pkill -9 -f "goose run"` / `taskkill /F /IM goose.exe`. The old
-  // machine-wide kill violated the multi-instance rule (it killed OTHER
-  // instances' live goose children and wiped their slot leases). The anchored
-  // sweep (pgrep -> /proc cmdline boundary verify -> kill) only matches a
-  // session id at an exact `--name <id>` boundary, so substring decoys and
-  // other instances' sessions survive. Sync kills are fast; cancel_all still
-  // returns promptly.
+  // 3. P15: anchored per-session sweep.
+  // The anchored sweep (pgrep -> /proc cmdline boundary verify -> kill) only matches
+  // a session id at an exact boundary, so substring decoys and other instances'
+  // sessions survive. Sync kills are fast; cancel_all still returns promptly.
   const sweepIds = new Set([...memSessionIds, ...diskSessionIds]);
   for (const sessionId of sweepIds) {
     try {
-      killGooseSessionSync(sessionId);
+      killSessionProcessTreeSync(sessionId);
     } catch {}
   }
 
   // 4. Clean up slot lease locks (only this process's own or dead owners'
   // leases — never another live instance's lease)
-  clearReclaimableGooseSlots();
+  clearReclaimableTaskSlots();
 
   return count;
 }
@@ -657,10 +656,10 @@ export const statusHttpServer = http.createServer((req, res) => {
             task.abortController.abort();
           } catch {}
         }
-        // FX5-A (D6): release the task's goose slot immediately on cancel
+        // FX5-A (D6): release the task's execution slot immediately on cancel
         // (idempotent — a cancel after natural completion is a no-op).
         if (task.slot) {
-          releaseGooseSlot(task.slot);
+          releaseTaskSlot(task.slot);
           task.slot = null;
         }
         task.status = "cancelled";
@@ -695,7 +694,7 @@ export const statusHttpServer = http.createServer((req, res) => {
         // instead of a raw unanchored `pkill -9 -f` — a session id that is a
         // substring of another session's id must never be over-killed.
         try {
-          killGooseSessionSync(diskTask.sessionId);
+          killSessionProcessTreeSync(diskTask.sessionId);
         } catch {}
       }
       diskTask.status = "cancelled";

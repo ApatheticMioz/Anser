@@ -54,7 +54,7 @@ import { injectSkills } from "./skills.js";
  *   - unknown / null / undefined  — fail closed: treat as an error.
  *
  * This is the single source of truth for the status -> isError mapping used by
- * the task-completion path in startGooseTask. It is a pure function so it can
+ * the task-completion path in startAnserTask. It is a pure function so it can
  * be unit-tested offline without spawning a live engine.
  *
  * @param {string|undefined|null} status
@@ -69,7 +69,7 @@ export function isSuccessStatus(status) {
 // executor tags are `qwen_sh_<ts>_<rand>`; clients use `<milestone>_s1`,
 // `task-ui-ovh`, etc. All of these are [A-Za-z0-9._:-]. A session id is
 // interpolated into a single-quoted POSIX shell string (the anchored
-// `pgrep -f 'goose run --name <id>'` sweep in wsl_bridge.js), so any
+// pgrep sweep in wsl_bridge.js), so any
 // character outside this charset (a single quote, `;`, backtick, space,
 // newline, ...) is a shell-injection vector. We REFUSE such ids loudly
 // (fail-fast) rather than silently sanitizing them.
@@ -93,7 +93,7 @@ export function resolveSessionId(cwd, requestedSessionId) {
   // P15: the default session id must be unique per task, not just per cwd.
   // The old `workspace_<hash8(cwd)>` was shared by EVERY instance and EVERY
   // task in the same directory, so (a) a cancel sweep of one instance's task
-  // could match and kill ANOTHER instance's live goose child with the same
+  // could match and kill ANOTHER instance's live child with the same
   // id, and (b) two clients in one directory wrote to the same
   // ~/.qwen/sessions/<id>/events.jsonl (cross-client ledger bleed). The
   // pid + timestamp suffixes make each default id unique while keeping the
@@ -101,7 +101,7 @@ export function resolveSessionId(cwd, requestedSessionId) {
   return `workspace_${hash}_${process.pid.toString(36)}_${Date.now().toString(36)}`;
 }
 
-export function startGooseTask({
+export function startAnserTask({
   cwd,
   prompt,
   sessionId,

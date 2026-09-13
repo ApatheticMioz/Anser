@@ -4,7 +4,7 @@
  *
  * Architecture:
  * - Lead Architect: Claude 5 Sonnet in Claude Code / Gemini 3.8 Flash in Antigravity
- * - Autonomous Execution Coworker: Qwen3.8-27B via Goose Agent Harness ($0 text-only execution)
+ * - Autonomous Execution Coworker: Qwen3.8-27B via Anser Microkernel Harness ($0 text-only execution)
  * - Serving: Universal 245K context (vLLM + DFlash2 + KVarN @ localhost:18020)
  * - Zero-Turn Async Architecture: Blocking Long-Poll HTTP Coordinator (localhost:18021)
  * - 3 Consolidated SOTA Tools: qwen_coworker, qwen_task, qwen_server
@@ -17,12 +17,12 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAX_CONCURRENT_GOOSE, TASK_DIR } from "./src/config.js";
+import { MAX_CONCURRENT_TASKS, TASK_DIR } from "./src/config.js";
 import { killProcessTree, killProcessTreeSync } from "./src/wsl_bridge.js";
 import {
-  acquireGooseSlot,
-  releaseGooseSlot,
-  listGooseSlots,
+  acquireTaskSlot,
+  releaseTaskSlot,
+  listTaskSlots,
   slotFilePath,
   readLease,
 } from "./src/semaphore.js";
@@ -72,7 +72,7 @@ function setupProcessLifecycleHandlers() {
           }
         }
       }
-      for (let i = 0; i < MAX_CONCURRENT_GOOSE; i++) {
+      for (let i = 0; i < MAX_CONCURRENT_TASKS; i++) {
         const file = slotFilePath(i);
         const lease = readLease(file);
         if (lease && lease.pid === process.pid) {
@@ -121,9 +121,9 @@ async function main() {
 }
 
 export {
-  acquireGooseSlot,
-  releaseGooseSlot,
-  listGooseSlots,
+  acquireTaskSlot,
+  releaseTaskSlot,
+  listTaskSlots,
   TASK_DIR,
   isTaskOrphaned,
   markTaskOrphanedOnDisk,

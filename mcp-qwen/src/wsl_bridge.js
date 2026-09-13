@@ -126,17 +126,6 @@ export function canonicalizePath(p) {
   }
 }
 
-export function getGooseExecutable() {
-  if (IS_WINDOWS) {
-    return path.join(winHome(), ".local", "bin", "goose.exe");
-  }
-  const wslGoose = `${wslHome()}/.local/bin/goose`;
-  if (existsSync(wslGoose)) {
-    return wslGoose;
-  }
-  return "goose";
-}
-
 let cachedApiKey = null;
 export function getApiKeySync() {
   if (cachedApiKey) return cachedApiKey;
@@ -157,7 +146,7 @@ export function getApiKeySync() {
 // P10 — Kill certainty + honest lifecycle
 // ---------------------------------------------------------------------------
 //
-// The legacy kill paths fired a broad `pkill -9 -f 'goose run --name <id>'`
+// The legacy kill paths fired a broad unanchored `pkill -9 -f`
 // and never verified the kill landed. Two failure modes were observed live:
 //   (a) over-kill: a session id that is a SUBSTRING of another session's id
 //       (e.g. "abc" vs "abc123") matched the wrong process;
@@ -216,7 +205,7 @@ function escapeSingleQuote(s) {
  * escapes must compose, in this order:
  *   1. escapeRe    — neutralize ERE metacharacters (`.` `*` `[` `(` `$` ...)
  *                    so the pattern matches ONLY the literal id. Without this,
- *                    a crafted id like `.*` would match every goose process
+ *                    a crafted id like `.*` would match every process
  *                    on the box and the sweep would kill sibling sessions.
  *   2. escapeSingleQuote — neutralize single quotes so the pattern cannot
  *                    break out of the surrounding single-quoted shell string.
@@ -270,21 +259,19 @@ function runWslCommandSync(cmd) {
 }
 
 /**
- * Anchored goose-session sweep (async). Lists candidate pids with a broad
- * `pgrep -f`, verifies each candidate's full command line has the session id
- * at an exact boundary (space or end-of-line), and SIGKILLs only the
- * verified pids. A decoy whose command line merely CONTAINS the id as a
- * substring (e.g. "goose run --name <id>123") is never matched.
+ * Anchored session sweep (async). Lists candidate pids with a broad `pgrep -f`,
+ * verifies each candidate's full command line has the session id at an exact boundary,
+ * and SIGKILLs only the verified pids.
  *
  * @param {string} sessionId
  * @returns {Promise<number[]>} the verified pids that were killed
  */
-export async function killGooseSession(sessionId) {
+export async function killSessionProcessTree(sessionId) {
   const id = String(sessionId);
   let candidates = [];
   try {
     const { stdout } = await runWslCommand(
-      `pgrep -f 'goose run --name ${pgrepEscapeId(id)}' 2>/dev/null || true`
+      `pgrep -f '${pgrepEscapeId(id)}' 2>/dev/null || true`
     );
     candidates = stdout
       .split(/\s+/)
@@ -295,9 +282,7 @@ export async function killGooseSession(sessionId) {
   }
   if (candidates.length === 0) return [];
 
-  // Exact-boundary verification: the id must be followed by a space or
-  // end-of-line in the full command line.
-  const boundaryRe = new RegExp(`goose run --name ${escapeRe(id)}( |$)`);
+  const boundaryRe = new RegExp(`(^|[\\s/'"=])${escapeRe(id)}( |$|['"])`);
   const verified = [];
   for (const pid of candidates) {
     try {
@@ -315,15 +300,15 @@ export async function killGooseSession(sessionId) {
 }
 
 /**
- * Anchored goose-session sweep (synchronous) for the shutdown path.
+ * Anchored session sweep (synchronous) for the shutdown path.
  * @param {string} sessionId
  */
-export function killGooseSessionSync(sessionId) {
+export function killSessionProcessTreeSync(sessionId) {
   const id = String(sessionId);
   let candidates = [];
   try {
     const out = runWslCommandSync(
-      `pgrep -f 'goose run --name ${pgrepEscapeId(id)}' 2>/dev/null || true`
+      `pgrep -f '${pgrepEscapeId(id)}' 2>/dev/null || true`
     ).toString();
     candidates = out
       .split(/\s+/)
@@ -333,7 +318,7 @@ export function killGooseSessionSync(sessionId) {
     return;
   }
   if (candidates.length === 0) return;
-  const boundaryRe = new RegExp(`goose run --name ${escapeRe(id)}( |$)`);
+  const boundaryRe = new RegExp(`(^|[\\s/'"=])${escapeRe(id)}( |$|['"])`);
   const verified = [];
   for (const pid of candidates) {
     try {
@@ -424,7 +409,7 @@ function verifyDeadSync(pid) {
  *
  * @param {import("node:child_process").ChildProcess|null} child the direct
  *   child handle (its .pid is the target of the verified kill).
- * @param {string|null} [sessionId] optional goose session id for the anchored
+ * @param {string|null} [sessionId] optional session id for the anchored
  *   WSL sweep.
  * @returns {Promise<{killed: boolean, escalations: number}>}
  *   - killed: true if the target pid was confirmed dead after verification.
@@ -440,7 +425,7 @@ export async function killProcessTree(child, sessionId) {
 
   // 1. Anchored session-id sweep (best-effort; never over-kills a decoy).
   if (sessionId) {
-    await killGooseSession(sessionId);
+    await killSessionProcessTree(sessionId);
   }
 
   // 2. Direct child pid kill + post-kill verification + escalation.
@@ -467,7 +452,7 @@ export async function killProcessTree(child, sessionId) {
 
 /**
  * Sweeps and terminates any WSL processes matching a given session or command tag.
- * Handles both Goose sessions ("goose run --name <tag>") and tagged shell commands.
+ * Handles both session-tagged processes and tagged shell commands.
  *
  * @param {string} tag
  */
