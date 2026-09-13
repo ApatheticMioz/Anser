@@ -128,6 +128,9 @@ export function registerTools(server) {
             "Per-dispatch reasoning-effort tier forwarded to the engine chat template (xhigh = maximal deliberation, medium = balanced, low = brief). Omit to use the QWEN_REASONING_EFFORT env default (xhigh). Only the engine's supported tiers are accepted; invalid values are rejected."
           ),
       },
+      annotations: {
+        readOnlyHint: true,
+      },
     },
     async ({
       prompt,
@@ -251,6 +254,9 @@ export function registerTools(server) {
           .describe(
             "Task ID (required for 'status', optional for 'cancel'/'cancel_all' to cancel all tasks)"
           ),
+      },
+      annotations: {
+        readOnlyHint: true,
       },
     },
     async ({ action, task_id }) => {
@@ -530,6 +536,9 @@ export function registerTools(server) {
           .describe(
             "Force stop even if a task is actively executing. ONLY permitted if the human USER explicitly requested stopping/rebooting the server or cancelling all tasks. Prohibited for autonomous agent decisions."
           ),
+      },
+      annotations: {
+        readOnlyHint: true,
       },
     },
     async ({ action, force }) => {

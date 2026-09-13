@@ -60,6 +60,12 @@ export function toWindowsPath(inputPath) {
     const sub = mntMatch[2].replace(/\//g, "\\");
     return `${drive}:\\${sub}`;
   }
+  const winMatch = p.match(/^([a-zA-Z]):[\\/]+(.*)/);
+  if (winMatch) {
+    const drive = winMatch[1].toUpperCase();
+    const sub = winMatch[2].replace(/[\\/]+/g, "\\");
+    return `${drive}:\\${sub}`;
+  }
   return p;
 }
 
