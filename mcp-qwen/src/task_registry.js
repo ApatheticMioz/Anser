@@ -332,17 +332,52 @@ export function cleanOldTasks() {
 export function notifyWaiters(task) {
   saveTaskToDisk(task);
   if (!task.waiters || task.waiters.length === 0) return;
-  const payload =
-    task.result?.text ||
-    (task.isError ? "Task failed." : "Task completed with no output.");
+  // M1 (F9/N4/N5): terminal wait responses are ALWAYS HTTP 200 + JSON,
+  // identical in shape to GET /task/:id. A task FAILURE is a normal terminal
+  // state, not an infra crash — the old 500 + text/markdown caused
+  // curl --fail (exit 22) retry-storms on the orchestrator side.
+  // Connection:close ensures the socket terminates cleanly after the body.
+  const now = Date.now();
+  const elapsed_s = Math.round(
+    ((task.finishedAt || now) - task.createdAt) / 1000
+  );
+  const lastActivitySecAgo = task.lastActivityAt
+    ? Math.max(0, Math.round((now - task.lastActivityAt) / 1000))
+    : null;
+  const body = JSON.stringify(
+    {
+      found: true,
+      id: task.id,
+      sessionId: task.sessionId,
+      cwd: task.cwd,
+      status: task.status,
+      done: task.done,
+      isError: task.isError,
+      reasoningEffort: task.reasoningEffort ?? null,
+      elapsed_s,
+      startedAt: task.startedAt,
+      lastActivitySecAgo,
+      streamBytes: task.streamBytes || 0,
+      streamTail: (task.streamTail || "")
+        .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
+        .replace(/\s+/g, " ")
+        .slice(-250),
+      fileOps: task.fileOps || [],
+      toolCallsCount: task.toolCallsCount || 0,
+      result: task.result || null,
+    },
+    null,
+    2
+  );
   for (const res of task.waiters) {
     try {
-      res.writeHead(task.isError ? 500 : 200, {
-        "Content-Type": "text/markdown; charset=utf-8",
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Connection": "close",
         "X-Task-ID": task.id,
         "X-Task-Status": task.status,
       });
-      res.end(payload);
+      res.end(body);
     } catch {}
   }
   task.waiters = [];
@@ -480,7 +515,10 @@ export const statusHttpServer = http.createServer((req, res) => {
         // D11 (FX6): a corrupt task file is an explicit corruption signal,
         // never conflated with a clean not-found. Surface it as a 500 with
         // the file and the parse error.
-        res.writeHead(500, { "Content-Type": "application/json" });
+        res.writeHead(500, {
+          "Content-Type": "application/json",
+          "Connection": "close",
+        });
         return res.end(
           JSON.stringify({
             found: true,
@@ -498,14 +536,49 @@ export const statusHttpServer = http.createServer((req, res) => {
     }
 
     const isDone = task ? task.done : diskTask.done;
-    const isError = task ? task.isError : diskTask.isError;
-    const resText =
-      (task ? task.result?.text : diskTask.result?.text) ||
-      (isError ? "Task failed." : "Task completed.");
-
     if (isDone) {
-      res.writeHead(isError ? 500 : 200, { "Content-Type": "text/markdown; charset=utf-8" });
-      return res.end(resText);
+      // M1 (F9/N4/N5): terminal wait responses are ALWAYS HTTP 200 + JSON,
+      // identical in shape to GET /task/:id. A task FAILURE is a normal
+      // terminal state, not an infra crash — the old 500 + text/markdown
+      // caused curl --fail (exit 22) retry-storms on the orchestrator side.
+      // Connection:close ensures the socket terminates cleanly after the body.
+      const t = task || diskTask;
+      const now = Date.now();
+      const elapsed_s = Math.round(((t.finishedAt || now) - t.createdAt) / 1000);
+      const lastActivitySecAgo = t.lastActivityAt
+        ? Math.max(0, Math.round((now - t.lastActivityAt) / 1000))
+        : null;
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Connection": "close",
+      });
+      return res.end(
+        JSON.stringify(
+          {
+            found: true,
+            id: t.id,
+            sessionId: t.sessionId,
+            cwd: t.cwd,
+            status: t.status,
+            done: t.done,
+            isError: t.isError,
+            reasoningEffort: t.reasoningEffort ?? null,
+            elapsed_s,
+            startedAt: t.startedAt,
+            lastActivitySecAgo,
+            streamBytes: t.streamBytes || 0,
+            streamTail: (t.streamTail || "")
+              .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
+              .replace(/\s+/g, " ")
+              .slice(-250),
+            fileOps: t.fileOps || [],
+            toolCallsCount: t.toolCallsCount || 0,
+            result: t.result || null,
+          },
+          null,
+          2
+        )
+      );
     }
 
     if (task) {
@@ -533,7 +606,10 @@ export const statusHttpServer = http.createServer((req, res) => {
         // debounced into a fabricated "Task failed."
         clearInterval(diskPoll);
         try {
-          res.writeHead(500, { "Content-Type": "application/json" });
+          res.writeHead(500, {
+            "Content-Type": "application/json",
+            "Connection": "close",
+          });
           res.end(
             JSON.stringify({
               id: taskId,
@@ -558,18 +634,64 @@ export const statusHttpServer = http.createServer((req, res) => {
 
       if (!current || current.done) {
         clearInterval(diskPoll);
-        const err = current ? current.isError : true;
-        const out = current?.result?.text || (err ? "Task failed." : "Task completed.");
+        // M1 (F9/N4/N5): same contract as the memory path — ALWAYS HTTP 200 +
+        // JSON (shape identical to GET /task/:id), Connection:close for clean
+        // socket termination. A missing file after the debounce window is a
+        // terminal failure, not an infra crash.
+        const t = current || {
+          id: taskId,
+          done: true,
+          isError: true,
+          status: "failed",
+          result: { isError: true, text: "Task file disappeared during wait." },
+        };
+        const now = Date.now();
+        const elapsed_s = Math.round(((t.finishedAt || now) - t.createdAt) / 1000);
+        const lastActivitySecAgo = t.lastActivityAt
+          ? Math.max(0, Math.round((now - t.lastActivityAt) / 1000))
+          : null;
         try {
-          res.writeHead(err ? 500 : 200, { "Content-Type": "text/markdown; charset=utf-8" });
-          res.end(out);
+          res.writeHead(200, {
+            "Content-Type": "application/json",
+            "Connection": "close",
+          });
+          res.end(
+            JSON.stringify(
+              {
+                found: true,
+                id: t.id,
+                sessionId: t.sessionId,
+                cwd: t.cwd,
+                status: t.status,
+                done: t.done,
+                isError: t.isError,
+                reasoningEffort: t.reasoningEffort ?? null,
+                elapsed_s,
+                startedAt: t.startedAt,
+                lastActivitySecAgo,
+                streamBytes: t.streamBytes || 0,
+                streamTail: (t.streamTail || "")
+                  .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
+                  .replace(/\s+/g, " ")
+                  .slice(-250),
+                fileOps: t.fileOps || [],
+                toolCallsCount: t.toolCallsCount || 0,
+                result: t.result || null,
+              },
+              null,
+              2
+            )
+          );
         } catch {}
         return;
       }
       if (Date.now() - waitStartTime > DEFAULT_TIMEOUT_MS) {
         clearInterval(diskPoll);
         try {
-          res.writeHead(504, { "Content-Type": "text/markdown; charset=utf-8" });
+          res.writeHead(504, {
+            "Content-Type": "text/markdown; charset=utf-8",
+            "Connection": "close",
+          });
           res.end("Task wait timed out after maximum duration budget.");
         } catch {}
       }
