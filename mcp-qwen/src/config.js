@@ -209,6 +209,55 @@ export const EMPTY_STREAM_RETRIES = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRIES;
 })();
 
+// M6b (P1, completes M6): depth-aware empty-stream retry budget. The flat
+// EMPTY_STREAM_RETRIES above (default 2) is correct for normal turns, but a
+// DEEP-context prompt (estimated prompt chars >= EMPTY_STREAM_RETRY_DEPTH_CHARS)
+// has a much longer recovery latency on retry: re-prefilling 100k+ tokens takes
+// minutes, so a transient empty-stream cluster (the audit §5.2 signature: 36
+// empty streams, 3 unrecovered, ALL during extended deliberation at high
+// context) exhausts the flat budget of 2 before it clears. When the prompt is
+// deep, the runner arms this longer DEEP budget instead so a transient cluster
+// has room to clear; the base budget still bounds normal (shallow) turns. Both
+// are overridable via env for tests / operators.
+export const DEFAULT_EMPTY_STREAM_RETRIES_DEEP = 4;
+export const EMPTY_STREAM_RETRIES_DEEP = (() => {
+  const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRIES_DEEP, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRIES_DEEP;
+})();
+
+// M6b: prompt-CHARS depth threshold for the empty-stream retry budget. A turn
+// whose re-prefill size (JSON.stringify(messages).length, the same measure the
+// runner already records as deathContext.promptChars) reaches this value is
+// treated as "deep" and gets the DEEP retry budget. Default 525000 chars
+// (~150k tokens at ~3.5 chars/token) matches the observed death signature
+// (all three unrecovered empty streams were >100k ctx). Overridable via
+// QWEN_EMPTY_STREAM_RETRY_DEPTH_CHARS.
+export const DEFAULT_EMPTY_STREAM_RETRY_DEPTH_CHARS = 525_000;
+export const EMPTY_STREAM_RETRY_DEPTH_CHARS = (() => {
+  const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRY_DEPTH_CHARS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRY_DEPTH_CHARS;
+})();
+
+// M6b: exponential backoff between empty-stream retries. Before each retry the
+// runner sleeps base * 2^(retryNumber-1) ms, capped at capMs. With the defaults
+// (base 2000ms, cap 30000ms) this is exactly "2^retryNumber seconds capped at
+// 30s": retry 1 waits 2s, retry 2 waits 4s, retry 3 waits 8s, retry 4 waits
+// 16s, retry 5+ waits 30s (capped). The backoff gives a transient empty-stream
+// cluster time to clear before the next (expensive, deep) re-prefill. Both are
+// overridable via env so tests can shrink the sleep to milliseconds (the
+// recorded backoffMs still reflects the configured value).
+export const DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS = 2000;
+export const EMPTY_STREAM_RETRY_BACKOFF_BASE_MS = (() => {
+  const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS;
+})();
+
+export const DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_CAP_MS = 30_000;
+export const EMPTY_STREAM_RETRY_BACKOFF_CAP_MS = (() => {
+  const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRY_BACKOFF_CAP_MS, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_CAP_MS;
+})();
+
 // M3b: degenerate-final guard. When the stream proxy circuit-breaks a runaway
 // repetition loop it appends a GUARD_MARKER sentinel and ends the stream with
 // finish_reason "stop". The provider accumulates that marker into the turn's

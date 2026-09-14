@@ -24,6 +24,10 @@ import { normalizeWorkspacePath, canonicalizePath } from "../wsl_bridge.js";
 import {
   MAX_CONTINUATION_TURNS,
   EMPTY_STREAM_RETRIES,
+  EMPTY_STREAM_RETRIES_DEEP,
+  EMPTY_STREAM_RETRY_DEPTH_CHARS,
+  EMPTY_STREAM_RETRY_BACKOFF_BASE_MS,
+  EMPTY_STREAM_RETRY_BACKOFF_CAP_MS,
   DEGENERATE_FINAL_SUBSTANTIVE_CHARS,
   DEGENERATE_FINAL_MAX_TURNS,
   getReasoningEffort,
@@ -57,6 +61,19 @@ const MUTATING_TOOLS = new Set([
   "evo_revert_candidate",
 ]);
 const BASH_TOOLS = new Set(["bash", "exec_command"]);
+
+// M6b: exponential backoff between empty-stream retries. Before each retry the
+// runner sleeps base * 2^(retryNumber-1) ms, capped at capMs. With the defaults
+// (base 2000ms, cap 30000ms) this is exactly "2^retryNumber seconds capped at
+// 30s": retry 1 waits 2s, retry 2 waits 4s, retry 3 waits 8s, retry 4 waits
+// 16s, retry 5+ waits 30s (capped). The backoff gives a transient empty-stream
+// cluster time to clear before the next (expensive, deep) re-prefill. The
+// computed ms is returned so the caller can record it in the retry event.
+function emptyStreamRetryBackoffMs(retryNumber) {
+  const exp = Math.max(0, retryNumber - 1);
+  const ms = EMPTY_STREAM_RETRY_BACKOFF_BASE_MS * 2 ** exp;
+  return Math.min(ms, EMPTY_STREAM_RETRY_BACKOFF_CAP_MS);
+}
 
 const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the Anser harness.
 You pair with the Lead Architect (Gemini / Claude) to explore, design, edit, test, and optimize software systems.
@@ -352,6 +369,21 @@ export class AnserRunner {
           },
         });
 
+        // M6b: hoist the re-prefill size (promptChars) and the effective
+        // empty-stream retry budget ONCE per turn, above both retry branches,
+        // so the P2b/P2d empty-stream path and the M3b degenerate-final path
+        // share the same number. promptChars is the same measure the death
+        // context records (JSON.stringify(messages).length). The budget is
+        // depth-aware: a DEEP-context prompt (>= EMPTY_STREAM_RETRY_DEPTH_CHARS)
+        // gets the longer DEEP budget (a 100k+ token re-prefill has a much
+        // longer recovery latency, so a flat budget of 2 exhausts before a
+        // transient cluster clears); a shallow prompt keeps the base budget.
+        const promptChars = JSON.stringify(messages).length;
+        const emptyStreamRetryBudget =
+          promptChars >= EMPTY_STREAM_RETRY_DEPTH_CHARS
+            ? EMPTY_STREAM_RETRIES_DEEP
+            : EMPTY_STREAM_RETRIES;
+
         // --- Empty-generation guard (P2b) -----------------------------------
         // An aborted / zero-byte stream yields NO content, NO tool calls, and
         // NO real finish_reason frame. The provider default-fills that missing
@@ -389,27 +421,33 @@ export class AnserRunner {
 
         if (isEmptyGeneration || isEmptyStop) {
           // P7b forensics context: record WHERE in the task the death happened
-          // and WHAT the engine claimed to be doing. promptChars approximates
-          // the re-prefill size (large prompts = minutes of cold TTFT);
-          // reasoningTokens on the dead turn exposes invisible thinking loops
-          // (the P7b root cause burned 49152 reasoning tokens before dying).
+          // and WHAT the engine claimed to be doing. promptChars (hoisted above,
+          // shared with the M3b degenerate path) approximates the re-prefill size
+          // (large prompts = minutes of cold TTFT); reasoningTokens on the dead
+          // turn exposes invisible thinking loops (the P7b root cause burned
+          // 49152 reasoning tokens before dying).
           const deathContext = {
             turnIndex: turnsTaken,
-            promptChars: JSON.stringify(messages).length,
+            promptChars,
             metrics: turnResult.metrics ?? null,
             reasoningTokens: turnResult.reasoningTokens ?? 0,
           };
-          if (emptyStreamRetries < EMPTY_STREAM_RETRIES) {
+          if (emptyStreamRetries < emptyStreamRetryBudget) {
             emptyStreamRetries++;
+            // M6b: exponential backoff before the next (expensive, deep)
+            // re-prefill so a transient empty-stream cluster has time to clear.
+            const backoffMs = emptyStreamRetryBackoffMs(emptyStreamRetries);
             logger.append({
               type: "empty_stream_retry",
               retryNumber: emptyStreamRetries,
-              maxRetries: EMPTY_STREAM_RETRIES,
+              maxRetries: emptyStreamRetryBudget,
               // "empty_generation" = P2b (no real finish_reason);
               // "empty_stop" = P2d (finish "stop" with zero content + zero tool calls).
               reason: isEmptyStop ? "empty_stop" : "empty_generation",
+              backoffMs,
               ...deathContext,
             });
+            await new Promise((r) => setTimeout(r, backoffMs));
             continue;
           }
           // Budget exhausted: the engine keeps returning empty generations.
@@ -467,23 +505,29 @@ export class AnserRunner {
           ) {
             const deathContext = {
               turnIndex: turnsTaken,
-              promptChars: JSON.stringify(messages).length,
+              // M6b: shared with the P2b/P2d path (hoisted above both branches).
+              promptChars,
               metrics: turnResult.metrics ?? null,
               reasoningTokens: turnResult.reasoningTokens ?? 0,
               substantiveChars: substantiveLen,
             };
-            if (emptyStreamRetries < EMPTY_STREAM_RETRIES) {
+            if (emptyStreamRetries < emptyStreamRetryBudget) {
               emptyStreamRetries++;
+              // M6b: exponential backoff before the next (expensive, deep)
+              // re-prefill so a transient empty-stream cluster has time to clear.
+              const backoffMs = emptyStreamRetryBackoffMs(emptyStreamRetries);
               logger.append({
                 type: "empty_stream_retry",
                 retryNumber: emptyStreamRetries,
-                maxRetries: EMPTY_STREAM_RETRIES,
+                maxRetries: emptyStreamRetryBudget,
                 // "degenerate_final" = M3b (guard-truncated final with a
                 // substantive remainder below the threshold, no tool calls,
                 // short session).
                 reason: "degenerate_final",
+                backoffMs,
                 ...deathContext,
               });
+              await new Promise((r) => setTimeout(r, backoffMs));
               continue;
             }
             // Budget exhausted: the engine keeps returning degenerate
