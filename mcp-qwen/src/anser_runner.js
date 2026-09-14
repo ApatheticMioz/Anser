@@ -225,6 +225,7 @@ export function startAnserTask({
       finalTaskPrompt += `- Text-Only Engine: You are a pure text model with Universal 245K context. Do NOT call \`read_image\` on binary images (.png, .jpg). Multimodal image inspection is handled exclusively by the Lead Architect.\n`;
       finalTaskPrompt += `- CRITICAL: Do NOT call \`extensionmanager__read_resource\` or \`read_resource\` to read files. It is strictly an internal MCP resource provider and will fail on filesystem paths.\n`;
       finalTaskPrompt += `- Direct Execution: Never merely announce in conversational text that you will write or edit files in a future step. You must directly invoke the file modification tools (\`write\` or \`edit\`) in this turn to write the deliverable to disk.\n`;
+      finalTaskPrompt += `- Single-Pass Mutation: When the dispatch asks for a modification, execute it directly in ONE pass with the native file tools (\`write\`/\`edit\`/\`apply_patch\`/\`ast_replace\`) — do NOT run iterative probe or measurement scripts to discover the change. State a hypothesis, make the edit, then run the stated verification command ONCE afterward.\n`;
       finalTaskPrompt += `- Full Objective Fulfillment: Take as many tool actions and iterations as needed to thoroughly accomplish the task without prematurely truncating your output.\n`;
       if (IS_WINDOWS && !cwdInWsl) {
         finalTaskPrompt += `- Windows Line Endings: Workspace files may use CRLF (\\r\\n). If \`edit\` encounters matching issues, inspect exact line endings with \`head\` or write the normalized file.\n`;

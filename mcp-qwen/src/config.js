@@ -223,3 +223,18 @@ export const DEGENERATE_FINAL_MAX_TURNS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DEGENERATE_FINAL_MAX_TURNS;
 })();
 
+// M4: probe-budget watchdog (issue #11 recs 1+2; F4/F12/F14). On open-ended
+// layout targets the model ran 30+ consecutive inline-python measurement bash
+// calls (~90 min) instead of making the edit. The runner now counts
+// CONSECUTIVE non-mutating bash calls (bash/exec_command with no file-mutating
+// tool call in between); when the count exceeds this budget it injects an
+// ADVISORY (not an error, not a cancellation) reminding the model that
+// mutation dispatches are single-pass, and re-arms the counter for the next
+// run of N. Default 4 (the warning fires on the 5th consecutive non-mutating
+// bash call). Overridable via QWEN_PROBE_BUDGET.
+export const DEFAULT_PROBE_BUDGET = 4;
+export const PROBE_BUDGET = (() => {
+  const parsed = parseInt(process.env.QWEN_PROBE_BUDGET, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_BUDGET;
+})();
+

@@ -27,8 +27,33 @@ import {
   DEGENERATE_FINAL_SUBSTANTIVE_CHARS,
   DEGENERATE_FINAL_MAX_TURNS,
   getReasoningEffort,
+  PROBE_BUDGET,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
+
+// M4: probe-budget watchdog (issue #11 recs 1+2; F4/F12/F14). On open-ended
+// layout targets the model ran 30+ consecutive inline-python measurement bash
+// calls (~90 min) instead of making the edit. The runner counts CONSECUTIVE
+// non-mutating bash calls (bash/exec_command with no file-mutating tool call in
+// between); when the streak exceeds PROBE_BUDGET it injects an ADVISORY (not an
+// error, not a cancellation) and re-arms the counter. Style reference: the
+// advisory-only EvoWatchdog circuit breaker (src/harness/evo/watchdog.js).
+//
+// MUTATING_TOOLS reset the streak (a file edit means the model is in mutation
+// mode, not probe mode). BASH_TOOLS increment it. Every other tool
+// (read_file, list_dir, search_code, ast_search, evo_evaluate_candidate,
+// evo_status) is neutral — it neither increments nor resets the streak.
+const MUTATING_TOOLS = new Set([
+  "write_file",
+  "edit_file",
+  "apply_patch",
+  "ast_replace",
+  "ast_replace_batch",
+  "evo_propose_candidate",
+  "evo_select_candidate",
+  "evo_revert_candidate",
+]);
+const BASH_TOOLS = new Set(["bash", "exec_command"]);
 
 const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the Anser harness.
 You pair with the Lead Architect (Gemini / Claude) to explore, design, edit, test, and optimize software systems.
@@ -59,6 +84,29 @@ Operating Guidelines:
 export const CONTINUATION_DIRECTIVE =
   "Your previous output was cut off by the token ceiling. " +
   "Resume exactly where you stopped. Do not repeat already-emitted content.";
+
+/**
+ * M4: advisory injected when the model has run more than PROBE_BUDGET
+ * consecutive non-mutating bash calls (issue #11 recs 1+2; F4/F12/F14).
+ *
+ * This is ADVISORY ONLY — it is neither an error nor a cancellation. It is
+ * pushed as a user-role message into the conversation (the same in-band
+ * pattern as CONTINUATION_DIRECTIVE) so the model sees it on the next turn.
+ * It reminds the model that mutation dispatches are single-pass: state a
+ * hypothesis, make the edit with a native file tool, then run the stated
+ * verification command once. Unbounded probing (30+ inline-python measurement
+ * calls) wastes the session. The counter re-arms after injection, so a
+ * genuinely iterative task (e.g. a benchmark sweep) is only nudged, never
+ * blocked.
+ */
+export const PROBE_BUDGET_ADVISORY =
+  "[Probe-Budget Advisory] You have run several consecutive shell (bash) calls " +
+  "without making a file change. Mutation dispatches are SINGLE-PASS: state a " +
+  "hypothesis, make the edit directly with a native file tool (write_file / " +
+  "edit_file / apply_patch / ast_replace), then run the stated verification " +
+  "command ONCE. Do not run iterative probe or measurement scripts to " +
+  "discover the answer — that wastes the session. If you are stuck, state the " +
+  "hypothesis you are testing and make the edit now.";
 
 
 export class AnserRunner {
@@ -199,6 +247,11 @@ export class AnserRunner {
     let totalCompletionTokens = 0;
     let continuationsInjected = 0;
     let emptyStreamRetries = 0;
+    // M4: consecutive non-mutating bash calls (probe streak). Reset by any
+    // mutating tool call; incremented by each bash/exec_command call; neutral
+    // for every other tool. When it exceeds PROBE_BUDGET an advisory is
+    // injected and the counter re-arms (resets to 0) for the next run of N.
+    let probeStreak = 0;
 
     try {
       while (true) {
@@ -548,6 +601,40 @@ export class AnserRunner {
             isError: toolExecution.isError,
             latencyMs: toolExecution.latencyMs,
           });
+
+          // --- M4: probe-budget watchdog (issue #11 recs 1+2) ---------------
+          // Count CONSECUTIVE non-mutating bash calls. A bash/exec_command call
+          // increments the streak; a file-mutating tool call (write/edit/patch/
+          // ast_replace/evo mutation) resets it (the model is in mutation mode,
+          // not probe mode); every other tool (read_file, list_dir, search_code,
+          // ast_search, evo_evaluate, evo_status) is neutral — it neither
+          // increments nor resets. When the streak exceeds PROBE_BUDGET, inject
+          // an ADVISORY (not an error, not a cancellation) and re-arm the
+          // counter for the next run of N. This is the harness-enforced form of
+          // the single-pass mutation directive (F4/F12/F14: 30+ consecutive
+          // inline-python measurement bash calls on open-ended layout targets).
+          const toolName = tc.function.name;
+          if (MUTATING_TOOLS.has(toolName)) {
+            probeStreak = 0;
+          } else if (BASH_TOOLS.has(toolName)) {
+            probeStreak++;
+            if (probeStreak > PROBE_BUDGET) {
+              messages.push({
+                role: "user",
+                content: PROBE_BUDGET_ADVISORY,
+              });
+              logger.append({
+                type: "probe_budget_warning",
+                consecutiveNonMutatingBash: probeStreak,
+                budget: PROBE_BUDGET,
+                advisory: PROBE_BUDGET_ADVISORY,
+              });
+              // Re-arm: reset for the next run of N consecutive non-mutating
+              // bash calls (the advisory is advisory-only; it does not cancel
+              // or error the session).
+              probeStreak = 0;
+            }
+          }
         }
 
         // If the turn was cut off by the token ceiling AND it carried tool
