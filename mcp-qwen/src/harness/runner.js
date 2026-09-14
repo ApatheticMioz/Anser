@@ -35,6 +35,7 @@ import {
   SESSION_TURNS_WARN,
   SESSION_TURNS_RECOMMEND,
   CONTEXT_WARN_TOKENS,
+  PROMPT_BUDGET_CHARS,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
 
@@ -307,6 +308,29 @@ export class AnserRunner {
     let sessionWarnLatched = false;
     let sessionRecommendLatched = false;
     let contextDepthLatched = false;
+
+    // --- M7 (P2, F1/F2): dispatch prompt-budget telemetry ------------------
+    // The audit's failure cluster (27/45 dispatches over budget; monolithic
+    // mega-prompt failures) correlates with dispatch prompts over ~1,500 chars.
+    // The runner is the only component with the session event sink (anser_runner
+    // has none — established M5b), so it is the right place to surface this.
+    // When the finalTaskPrompt (the `prompt` that arrives as run({prompt}))
+    // exceeds PROMPT_BUDGET_CHARS, emit ONE advisory `prompt_over_budget`
+    // event (fields: promptChars, budget) into the session event ledger.
+    //
+    // ADVISORY TELEMETRY ONLY — it never alters flow: it does not cancel,
+    // error, truncate, or re-prompt. The prompt is passed to the model
+    // verbatim; the event merely makes the over-budget condition observable in
+    // the same sink that carries session_warning / context_depth_warning /
+    // probe_budget_warning. Emitted ONCE per run() (before the turn loop), so
+    // it cannot re-fire on subsequent turns.
+    if (prompt.length > PROMPT_BUDGET_CHARS) {
+      logger.append({
+        type: "prompt_over_budget",
+        promptChars: prompt.length,
+        budget: PROMPT_BUDGET_CHARS,
+      });
+    }
 
     try {
       while (true) {

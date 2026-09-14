@@ -258,6 +258,26 @@ export const EMPTY_STREAM_RETRY_BACKOFF_CAP_MS = (() => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_CAP_MS;
 })();
 
+// M7 (P2, F1/F2): dispatch prompt-budget telemetry. The audit's failure
+// cluster (27/45 dispatches over budget; monolithic mega-prompt failures)
+// correlates with dispatch prompts over ~1,500 chars. The runner is the only
+// component with the session event sink (anser_runner has none — established
+// M5b), so it is the right place to surface this. When the finalTaskPrompt
+// (the `prompt` that arrives as run({prompt})) exceeds this budget the runner
+// emits ONE advisory `prompt_over_budget` event (fields: promptChars, budget)
+// at the start of run(). This is ADVISORY TELEMETRY ONLY — it never alters
+// flow, never cancels or errors the session, and never truncates the prompt.
+// It exists so the over-budget failure cluster is observable in the session
+// event ledger (the same sink that carries session_warning /
+// context_depth_warning / probe_budget_warning). Default 1500 chars matches
+// the audit's observed over-budget threshold. Overridable via
+// QWEN_PROMPT_BUDGET_CHARS for tests / operators.
+export const DEFAULT_PROMPT_BUDGET_CHARS = 1500;
+export const PROMPT_BUDGET_CHARS = (() => {
+  const parsed = parseInt(process.env.QWEN_PROMPT_BUDGET_CHARS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROMPT_BUDGET_CHARS;
+})();
+
 // M3b: degenerate-final guard. When the stream proxy circuit-breaks a runaway
 // repetition loop it appends a GUARD_MARKER sentinel and ends the stream with
 // finish_reason "stop". The provider accumulates that marker into the turn's
