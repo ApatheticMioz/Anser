@@ -144,3 +144,13 @@ By Step 781 (20:03 UTC), all 16 items in the revision manifest were confirmed cl
    Without explicit instructions to use `edit_file` in a single pass, high-reasoning models on plotting tasks will default to writing scratch Python scripts and running bash loops indefinitely.
 3. **Out-of-Band IDE Supervision is Invaluable**:
    Running Antigravity as a detached supervisor watching Claude Code's session logs enabled instant diagnosis of the 400 error, root-cause identification of the 93-minute stall, and clean recovery without destroying work.
+
+---
+
+## Errata (appended 2026-09-14 — append-only corrections, history never rewritten)
+
+1. **Headline metrics elsewhere in this audit window are inflated ~3×** by session-cumulative double-counting (valid sums: 23.29 h wall-clock, 1,536 tool calls, 1,351 turns). Exporter fixed in `scripts/qwen_tasks_analysis.mjs` (`6368fb4`); see the errata section of `CROSS_SESSION_VLLM_AND_QWEN_DISPATCH_AUDIT_2026-09-13.md` for the full correction.
+2. **Refinement of the "anti-probe clause" takeaway**: post-audit forensics (`behavior-forensics-s2`) show the mutation-side bash abandonment this document describes is historical (issue #4 class) — `edit_file` friction today measures 2 misses in 213 calls. The live failure mode is *verification-driven* probing without numeric acceptance targets (the 93-minute layout grid-search). Mitigations now harness-enforced: single-pass mutation directive + probe-budget advisory watchdog (M4, `79dbb1f`, `QWEN_PROBE_BUDGET=4`) and a numeric-acceptance-target requirement in the protocol spec contract (`CLAUDE.md`/`GEMINI.md` §3.3).
+3. **Binary-read prohibition is now harness-enforced**, closing the poison-pill class this document describes: `BinaryFileError` magic-number fail-fast on coworker-side reads (M2, `d65aeb4`), plus the prohibition codified in `CLAUDE.md`/`GEMINI.md` §2.3.
+4. **The `/task/<id>/wait` 500-on-failure carried a `text/markdown` body, not JSON**; fixed by M1 (`d481340`) — failure returns HTTP 200 + JSON, so `curl -fsS` exit codes no longer misrepresent task failure as infra crash.
+5. **Mitigation ledger**: `docs/audits/AUDIT_MANIFEST_2026-09-14.md`.

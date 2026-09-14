@@ -276,3 +276,13 @@ Three tasks encountered `engine_empty_response` status:
 4. **Codebase Status**:
    - All 31 offline suites and 36 total suites in `mcp-qwen` pass with 100% green tests.
    - The legacy `goose` technical debt has been completely purged; all runners, docs, and test suites now uniformly reference `anser`.
+
+---
+
+## Errata (appended 2026-09-14 — append-only corrections, history never rewritten)
+
+1. **Headline metrics are inflated ~3× by session-cumulative double-counting.** The exporter stamped session-cumulative fields (turns, thinkingTokens, completionTokens, totalBash) on *every* dispatch row of a reused session, so cross-session sums counted shared sessions once per dispatch. Valid corrected sums for this audit window: **23.29 h wall-clock, 1,536 tool calls, 1,351 turns (not 3,997), 1.71 M thinking tokens (not 5.19 M), 920 bash calls (not 2,479)**. Fixed at the source: exporter rebuilt as `scripts/qwen_tasks_analysis.mjs` (commit `6368fb4`), cumulative fields stamped on the last dispatch row only.
+2. **`paper_p2_figures` "FAILED / 131 tool calls" conflates per-dispatch and session-cumulative counts.** 131 is the session-cumulative tool count across 4 dispatch rows; each individual dispatch stayed within normal bounds, and only one dispatch failed (engine-side `EngineCore` crash). The other rows completed.
+3. **The `/task/<id>/wait` 500-on-failure carried a `text/markdown` body, not JSON** (the JSON `{taskId, isError, status, result}` shape belongs to `GET /task/:id` with 200, as this document stated). Fixed by M1 (commit `d481340`): task failure now returns HTTP 200 + application/json in the exact `GET /task/:id` shape with a clean connection close, so `curl -fsS` exits 0 and orchestrators read failure as data, not infra error.
+4. **The exported `promptTokens` column was 0 in every row** although real per-turn prompt tokens exist in session events (since `263c7b3`). The exporter read the wrong field. The rebuilt exporter reports the MAX per-turn depth (null when unknown, never 0); e.g. `paper_p3_figures` is 196,455 final context depth, not 26.9 M.
+5. **Mitigation ledger**: all findings from this audit are reconciled in `docs/audits/AUDIT_MANIFEST_2026-09-14.md` with per-slice commits (M1–M9 + protocol amendments).

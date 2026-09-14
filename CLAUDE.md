@@ -44,6 +44,7 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
    - Local Qwen runs in pure text mode (`--language-model-only`). Never pass image paths or visual inspection tasks to `qwen_coworker`.
    - In Plan Mode (GLM-5.3), visual inspection is prohibited; analyze text source code, data formats, and configs directly.
    - In Execution Mode (5.3-flash), the orchestrator inspects visual outputs directly, extracts design tokens or visual defects into structured text, and passes textual specifications to the coworker.
+   - Never `Read` binary files (`.pdf`, `.png`, `.jpg`, `.webp`, …) on a text-only orchestrator or engine: binary bytes are not valid text payloads and poison the transcript on contact (the 647KB PDF → Zhipu 400 [1210] poison pill, 2026-09-13). The Anser harness enforces this with a magic-number fail-fast (`BinaryFileError`) on coworker-side reads — extract text or route to a multimodal-capable orchestrator.
 4. **Ground Truth Hierarchy**:
    - Ground truth consists exclusively of active source code, configuration files, raw data matrices, and verifiable build artifacts.
    - Secondary documentation, historical audit reports, and markdown notes are historical claim ledgers, NOT ground truth. Never anchor on secondary claims without verifying underlying code.
@@ -101,7 +102,9 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
   2. Functional requirement, interface contract, and invariant boundaries.
   3. Failure condition, reproduction steps, or compiler error trace.
   4. Acceptance criteria and verification command (e.g. `npm run test:slice`).
+  5. Numeric acceptance targets for layout/geometry/visual-quality work (e.g. "zero `get_tightbbox()` overlaps", "margin >= 12pt") - subjective descriptors ("make it look balanced") force unbounded measurement probe loops (the 93-minute grid-search failure class).
 - **Verbatim Code Spoon-Feeding Prohibition**: The Lead Architect is **STRICTLY PROHIBITED** from writing out verbatim multi-line code implementations, full JSX component blocks, or replacement functions in coworker prompts. Local Qwen operates with 245K context and high-reasoning compute (`reasoning_effort: "xhigh"`); Qwen authors the code locally.
+- **Harness-Enforced Guardrails (Anser)**: the harness mechanically enforces what this protocol prescribes - a Single-Pass Mutation directive is injected into every dispatch; consecutive non-mutating `bash` probing beyond budget (default 4, `QWEN_PROBE_BUDGET`) injects an advisory and emits `probe_budget_warning`; oversized prompts (>1,500 chars) emit `prompt_over_budget` telemetry; session rollover advisories fire at 60 turns (`session_warning`) and 80 turns (`SessionTurnLimitRecommendation` appended in-band) with the 100-turn hard cap as backstop; binary reads fail fast with `BinaryFileError`. Protocol docs instruct; the harness enforces.
 
 ### 4. Ground-Truth & Verification Discipline
 - **Session events are ground truth; planner transcripts are intent ledgers.** Before diagnosing a "duplicate" or a "stale task", or re-dispatching, verify against `~/.qwen/sessions/<id>/events.jsonl` and `~/.qwen/tasks/*.json`.
