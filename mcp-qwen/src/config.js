@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { winHomeWsl } from "./platform.js";
+import { winHomeWsl } from "./wsl_env.js";
+import { IS_WINDOWS } from "./env.js";
 
-export const IS_WINDOWS = process.platform === "win32";
+// IS_WINDOWS is the single source of truth for platform detection, now owned
+// by the leaf env.js. Re-exported here so the 14 existing consumers that
+// import it from config.js are unaffected.
+export { IS_WINDOWS };
 
 export const VLLM_PORT = parseInt(process.env.VLLM_PORT || "18020", 10);
 export const STATUS_PORT = parseInt(process.env.STATUS_PORT || "18021", 10);

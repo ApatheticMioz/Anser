@@ -15,6 +15,7 @@
  */
 
 import assert from "node:assert";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,7 +29,6 @@ const {
   winHome,
   winHomeWsl,
   streamProxyPath,
-  stateDir,
   apiKeyCandidates,
   buildSpawnProfile,
   setWslUserProbe,
@@ -267,7 +267,13 @@ function assertOk(cond, name) {
 }
 
 // ---------------------------------------------------------------------------
-// (f) re-exported translators + apiKeyCandidates + stateDir sanity
+// (f) re-exported translators + apiKeyCandidates + QWEN_STATE_DIR sanity
+//
+// The state dir is no longer re-exported from platform.js (stateDir() was
+// removed). It is now read straight from config.js — the module that owns
+// QWEN_STATE_DIR. Importing config.js here is safe in EITHER entry order
+// (config-first or platform-first) because the config.js -> platform.js
+// cycle has been broken by the wsl_env.js / env.js leaf extraction.
 // ---------------------------------------------------------------------------
 {
   assertOk(
@@ -299,10 +305,38 @@ function assertOk(cond, name) {
     );
     setWslUserProbe(null);
     _resetWslUserCache();
-    assertOk(typeof stateDir() === "string" && stateDir().length > 0, "stateDir() re-exported");
+    // QWEN_STATE_DIR is owned by config.js; read it directly (no platform.js
+    // re-export). This import must not throw in either entry order.
+    const { QWEN_STATE_DIR } = await import("../src/config.js");
+    assertOk(
+      typeof QWEN_STATE_DIR === "string" && QWEN_STATE_DIR.length > 0,
+      "config.js QWEN_STATE_DIR is a non-empty string"
+    );
   } finally {
     process.env = saved;
   }
+}
+
+// ---------------------------------------------------------------------------
+// (g) REGRESSION GUARD: the config.js -> platform.js import edge must never
+// return. That edge is what created the module-eval cycle that put wsl_env's
+// `_wslUser` cache in the temporal dead zone on Linux CI (ReferenceError).
+// config.js now imports winHomeWsl from the leaf wsl_env.js and IS_WINDOWS
+// from the leaf env.js, so it must contain NO import of platform.js.
+// ---------------------------------------------------------------------------
+{
+  const configSrc = fs.readFileSync(
+    path.join(REPO_ROOT, "src", "config.js"),
+    "utf8"
+  );
+  // Match any import (static or dynamic) that pulls from platform.js.
+  const poisonedEdge = /from\s+["']\.\/platform\.js["']|import\(\s*["']\.\/platform\.js["']\s*\)/.test(
+    configSrc
+  );
+  assertOk(
+    !poisonedEdge,
+    "regression guard: config.js has NO import of ./platform.js (cycle must stay broken)"
+  );
 }
 
 // ---------------------------------------------------------------------------
