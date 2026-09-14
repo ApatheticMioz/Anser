@@ -238,3 +238,39 @@ export const PROBE_BUDGET = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_BUDGET;
 })();
 
+// M5a: session-cumulative turn thresholds (issue #11 rec 3). The session's
+// total turn count spans tasks: the prior assistant_message events (from
+// logger.readAll(), the same source getConversationHistory() reads) plus this
+// run's turnsTaken. The runner's run loop checks the cumulative count each
+// turn. At SESSION_TURNS_WARN it emits a one-shot `session_warning` event; at
+// SESSION_TURNS_RECOMMEND it emits a one-shot `session_turn_limit_recommended`
+// event AND pushes a single in-band user-role advisory telling the model to
+// complete the task and roll to a fresh session next dispatch. These are
+// ADVISORY ONLY — they never cancel or error the session, and the hard
+// MAX_TURNS cap (anser_runner) is untouched. Overridable via
+// QWEN_SESSION_WARN_TURNS / QWEN_SESSION_RECOMMEND_TURNS.
+export const DEFAULT_SESSION_TURNS_WARN = 60;
+export const SESSION_TURNS_WARN = (() => {
+  const parsed = parseInt(process.env.QWEN_SESSION_WARN_TURNS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SESSION_TURNS_WARN;
+})();
+
+export const DEFAULT_SESSION_TURNS_RECOMMEND = 80;
+export const SESSION_TURNS_RECOMMEND = (() => {
+  const parsed = parseInt(process.env.QWEN_SESSION_RECOMMEND_TURNS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SESSION_TURNS_RECOMMEND;
+})();
+
+// M5a: context-depth warning threshold (issue #11 rec 3). When a turn's
+// promptTokens (the re-prefill size) reaches this value the runner emits a
+// one-shot `context_depth_warning` event. If the M4 probeStreak counter is
+// active at that moment the event gains `probeStreakActive: true` — a signal
+// sum for the anti-rabbit-hole system (a deep context AND a live probe streak
+// means the model is stuck in a long, deep, non-mutating loop). Overridable
+// via QWEN_CONTEXT_WARN_TOKENS.
+export const DEFAULT_CONTEXT_WARN_TOKENS = 65536;
+export const CONTEXT_WARN_TOKENS = (() => {
+  const parsed = parseInt(process.env.QWEN_CONTEXT_WARN_TOKENS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_WARN_TOKENS;
+})();
+

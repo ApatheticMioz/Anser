@@ -28,6 +28,9 @@ import {
   DEGENERATE_FINAL_MAX_TURNS,
   getReasoningEffort,
   PROBE_BUDGET,
+  SESSION_TURNS_WARN,
+  SESSION_TURNS_RECOMMEND,
+  CONTEXT_WARN_TOKENS,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
 
@@ -107,6 +110,24 @@ export const PROBE_BUDGET_ADVISORY =
   "command ONCE. Do not run iterative probe or measurement scripts to " +
   "discover the answer — that wastes the session. If you are stuck, state the " +
   "hypothesis you are testing and make the edit now.";
+
+/**
+ * M5a: advisory injected (ONCE per run) when the session's cumulative turn
+ * count crosses SESSION_TURNS_RECOMMEND (issue #11 rec 3). The session's
+ * total turns span tasks (prior assistant_message events + this run's
+ * turnsTaken); past the recommended rollover boundary the context is deep
+ * enough that a fresh session is cheaper than continuing. This is ADVISORY
+ * ONLY — it is pushed as a single user-role message into the conversation
+ * (the same in-band pattern as PROBE_BUDGET_ADVISORY / CONTINUATION_DIRECTIVE)
+ * telling the model to complete the current task and roll to a fresh session
+ * on the next dispatch. It never cancels or errors the session, and the hard
+ * MAX_TURNS cap (anser_runner) is untouched.
+ */
+export const SESSION_ROLLOVER_ADVISORY =
+  "[Session-Rollover Advisory] This session has crossed the recommended " +
+  "turn-count boundary for a single session. Complete the current task, then " +
+  "roll to a FRESH session on the next dispatch — a new session starts with a " +
+  "clean, low-cost context instead of re-prefilling this deep one.";
 
 
 export class AnserRunner {
@@ -253,6 +274,22 @@ export class AnserRunner {
     // injected and the counter re-arms (resets to 0) for the next run of N.
     let probeStreak = 0;
 
+    // M5a: session-cumulative turn count (issue #11 rec 3). The session's
+    // total turns SPAN tasks: the prior assistant_message events (from
+    // logger.readAll() — the same source getConversationHistory() reads) plus
+    // this run's turnsTaken. The run loop checks the cumulative count each
+    // turn and latches a one-shot flag per tier so each event fires at most
+    // once per run (mirroring the probeStreak advisory pattern).
+    // Fail-fast (Anser doctrine): the logger contract REQUIRES readAll().
+    // A logger without it is a contract violation and must throw loudly —
+    // no silent fallback to 0.
+    let sessionTurns = logger
+      .readAll()
+      .filter((e) => e.type === "assistant_message").length;
+    let sessionWarnLatched = false;
+    let sessionRecommendLatched = false;
+    let contextDepthLatched = false;
+
     try {
       while (true) {
         if (signal?.aborted) {
@@ -266,6 +303,35 @@ export class AnserRunner {
         }
 
         turnsTaken++;
+
+        // --- M5a: session-cumulative turn thresholds (issue #11 rec 3) -----
+        // The session's total turns span tasks (prior assistant_message events
+        // + this run's turnsTaken). Each tier latches once per run (one-shot),
+        // mirroring the probeStreak advisory pattern: advisory-only, never
+        // cancel or error the session, and the hard MAX_TURNS cap is untouched.
+        sessionTurns = sessionTurns + 1;
+        if (!sessionWarnLatched && sessionTurns >= SESSION_TURNS_WARN) {
+          sessionWarnLatched = true;
+          logger.append({
+            type: "session_warning",
+            sessionTurns,
+            threshold: SESSION_TURNS_WARN,
+          });
+        }
+        if (!sessionRecommendLatched && sessionTurns >= SESSION_TURNS_RECOMMEND) {
+          sessionRecommendLatched = true;
+          logger.append({
+            type: "session_turn_limit_recommended",
+            sessionTurns,
+          });
+          // ONE in-band user-role advisory: complete this task, then roll to a
+          // fresh session on the next dispatch.
+          messages.push({
+            role: "user",
+            content: SESSION_ROLLOVER_ADVISORY,
+          });
+        }
+
         const tools = ctx.listTools();
 
         const turnResult = await llm.streamChat({
@@ -432,6 +498,29 @@ export class AnserRunner {
             });
             break;
           }
+        }
+
+        // --- M5a: context-depth warning (issue #11 rec 3) ------------------
+        // When the re-prefill size (promptTokens) reaches the threshold, emit a
+        // one-shot context_depth_warning. Placed post-streamChat (via
+        // turnResult.metrics.promptTokens) so it fires on every real turn
+        // regardless of how the provider surfaces metrics. ESCALATION: if the
+        // M4 probeStreak counter is active at that moment, the event gains
+        // probeStreakActive:true — a signal sum for the anti-rabbit-hole system
+        // (a deep context AND a live probe streak = the model is stuck in a
+        // long, deep, non-mutating loop).
+        if (
+          !contextDepthLatched &&
+          typeof turnResult.metrics?.promptTokens === "number" &&
+          turnResult.metrics.promptTokens >= CONTEXT_WARN_TOKENS
+        ) {
+          contextDepthLatched = true;
+          logger.append({
+            type: "context_depth_warning",
+            promptTokens: turnResult.metrics.promptTokens,
+            threshold: CONTEXT_WARN_TOKENS,
+            ...(probeStreak > 0 ? { probeStreakActive: true } : {}),
+          });
         }
 
         // Record assistant response. reasoningTokens is surfaced as a top-level

@@ -274,6 +274,7 @@ function makeHangingLlm() {
 
 const noopLogger = {
   append: () => {},
+  readAll: () => [],
   getConversationHistory: () => [],
 };
 
