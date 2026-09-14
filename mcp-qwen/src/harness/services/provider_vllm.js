@@ -16,6 +16,8 @@ import {
   MAX_LEN_HUGE,
   getReasoningEffort,
   STREAM_IDLE_TIMEOUT_MS,
+  STREAM_IDLE_TIMEOUT_MS_DEEP,
+  STREAM_IDLE_DEPTH_TOKENS,
   MAX_REASONING_TOKENS,
 } from "../../config.js";
 
@@ -103,7 +105,7 @@ export class VllmProviderService {
    *   content: string,
    *   toolCalls: Array<{ id: string, name: string, arguments: string }>,
    *   finishReason: string | null,
-   *   metrics: { promptTokens: number, completionTokens: number, ttftMs: number, totalMs: number, tokensPerSec: number, reasoningTokens: number, hadReasoning: boolean, reasoningCeilingHit: boolean, streamIdleTimeoutMs: number, promptTokensEstimated?: boolean }
+   *   metrics: { promptTokens: number, completionTokens: number, ttftMs: number, totalMs: number, tokensPerSec: number, reasoningTokens: number, hadReasoning: boolean, reasoningCeilingHit: boolean, streamIdleTimeoutMs: number, streamIdleTier: "shallow" | "deep", promptTokensEstimated?: boolean }
    * }>}
    */
   async streamChat({
@@ -226,9 +228,15 @@ export class VllmProviderService {
    * Reads the SSE body of an established streaming response.
    *
    * P7b hardening:
-   * - Stream-idle watchdog: if no MEANINGFUL SSE frame arrives within
-   *   STREAM_IDLE_TIMEOUT_MS, the request is aborted and the turn fails
-   *   loudly instead of blocking forever. Proxy keep-alive comment frames
+   * - Stream-idle watchdog: if no MEANINGFUL SSE frame arrives within the
+   *   armed idle window, the request is aborted and the turn fails loudly
+   *   instead of blocking forever. M6a depth-aware tier: the window is
+   *   STREAM_IDLE_TIMEOUT_MS (shallow) for normal turns, but
+   *   STREAM_IDLE_TIMEOUT_MS_DEEP when the estimated prompt tokens reach
+   *   STREAM_IDLE_DEPTH_TOKENS — a deep-context turn legitimately spends
+   *   >15 min in one healthy thinking pass, so the shallow 900s window must
+   *   not kill it mid-deliberation. The fired tier is named in the thrown
+   *   error and in metrics.streamIdleTier. Proxy keep-alive comment frames
    *   (": keep-alive") deliberately do NOT reset the watchdog — they keep
    *   the TCP hop alive without masking true engine silence.
    * - Reasoning ceiling: when estimated reasoning tokens exceed
@@ -266,6 +274,17 @@ export class VllmProviderService {
     let engineUsage = null;
     const toolCallsMap = new Map(); // index -> { id, name, arguments }
 
+    // M6a (P1, F6/N3): depth-aware idle tier. A deep-context prompt (estimated
+    // prompt tokens >= STREAM_IDLE_DEPTH_TOKENS) legitimately spends >15 min in
+    // a single healthy thinking turn before any content is emitted, so it gets
+    // the longer DEEP window; normal turns keep the SHALLOW window. The tier is
+    // chosen from the chars-based estimate already computed in streamChat
+    // (the same value used for the context-headroom clamp), so no extra work.
+    const isDeep = estimatedPromptTokens >= STREAM_IDLE_DEPTH_TOKENS;
+    const idleTimeoutMs = isDeep ? STREAM_IDLE_TIMEOUT_MS_DEEP : STREAM_IDLE_TIMEOUT_MS;
+    const idleTier = isDeep ? "deep" : "shallow";
+    let deepTierLogged = false;
+
     const disarmIdle = () => {
       if (idleTimer) {
         clearTimeout(idleTimer);
@@ -276,9 +295,17 @@ export class VllmProviderService {
       disarmIdle();
       idleTimer = setTimeout(() => {
         idleTimedOut = true;
-        controller.abort(new Error(`stream idle > ${STREAM_IDLE_TIMEOUT_MS}ms`));
-      }, STREAM_IDLE_TIMEOUT_MS);
+        controller.abort(new Error(`stream idle > ${idleTimeoutMs}ms (${idleTier} tier)`));
+      }, idleTimeoutMs);
       if (typeof idleTimer.unref === "function") idleTimer.unref();
+      // M6a honesty: log ONCE when the deep tier arms so an operator can see a
+      // deep-context turn is on the longer window (expected, not a bug).
+      if (isDeep && !deepTierLogged) {
+        deepTierLogged = true;
+        console.error(
+          `[VllmProvider] Deep-context turn (est. prompt ${estimatedPromptTokens} tokens >= ${STREAM_IDLE_DEPTH_TOKENS}): arming ${idleTimeoutMs}ms (${idleTier} tier) stream-idle watchdog.`
+        );
+      }
     };
 
     let currentSseEvent = null;
@@ -291,7 +318,7 @@ export class VllmProviderService {
         } catch (err) {
           if (idleTimedOut) {
             throw new Error(
-              `vLLM stream idle timeout: no meaningful SSE frame for ${STREAM_IDLE_TIMEOUT_MS}ms`
+              `vLLM stream idle timeout (${idleTier} tier, ${idleTimeoutMs}ms): no meaningful SSE frame`
             );
           }
           throw err;
@@ -491,7 +518,11 @@ export class VllmProviderService {
       reasoningTokens,
       hadReasoning,
       reasoningCeilingHit,
-      streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
+      // M6a: report the ACTUAL idle window that armed for this turn (deep vs
+      // shallow tier), not the static shallow default, so telemetry reflects
+      // what the watchdog was really set to.
+      streamIdleTimeoutMs: idleTimeoutMs,
+      streamIdleTier: idleTier,
       ...(promptTokensEstimated ? { promptTokensEstimated: true } : {}),
     };
 
