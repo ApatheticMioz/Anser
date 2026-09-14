@@ -5,6 +5,7 @@ import {
   MIN_TIMEOUT_MS,
   EXTENSION_BONUS_TIMEOUT_MS,
   MAX_TURNS,
+  SESSION_TURNS_RECOMMEND,
   getReasoningEffort,
 } from "./config.js";
 import {
@@ -69,6 +70,40 @@ import { injectSkills } from "./skills.js";
  */
 export function isSuccessStatus(status) {
   return status === "completed" || status === "completed_ceiling";
+}
+
+/**
+ * M5b: pure helper that assembles the ORCHESTRATOR-facing result text.
+ *
+ * The runner's M5a `session_turn_limit_recommended` event lands in the session
+ * event log, which the orchestrator rarely reads; the dispatch result text is
+ * what it DOES read. When the session's CUMULATIVE turn count (prior
+ * assistant_message events + this run's turnsTaken) reaches
+ * SESSION_TURNS_RECOMMEND, we append a structured advisory line so the
+ * orchestrator can roll to a fresh session_id on the next dispatch.
+ *
+ * ADVISORY ONLY: this never alters status/isError and never cancels the task —
+ * it only augments the returned text. It is a pure function (no I/O, no
+ * globals) so it can be unit-tested offline, mirroring the `isSuccessStatus`
+ * pattern. A non-numeric / absent sessionTurns (e.g. a runner that predates
+ * the M5b field) fails safe: the text is returned unchanged.
+ *
+ * @param {string} finalText The runner's final text (the model's deliverable).
+ * @param {number|undefined|null} sessionTurns The session-cumulative turn count.
+ * @returns {string} The result text, with the advisory line appended when the
+ *   session has reached the recommend threshold.
+ */
+export function buildResultText(finalText, sessionTurns) {
+  let text = finalText;
+  if (
+    typeof sessionTurns === "number" &&
+    sessionTurns >= SESSION_TURNS_RECOMMEND
+  ) {
+    text =
+      `${text}\n` +
+      `[SessionTurnLimitRecommendation: session at ${sessionTurns} turns — roll to a fresh session_id before the next dispatch]`;
+  }
+  return text;
 }
 
 // FX2: the charset the system itself generates for session ids. The default
@@ -293,9 +328,25 @@ export function startAnserTask({
         taskEntry.finishedAt = Date.now();
         taskEntry.status = runResult.status;
         taskEntry.isError = !isSuccess;
+        // M5b: surface the 80-turn session-rollover recommendation to the
+        // ORCHESTRATOR in the dispatch result text. The runner's M5a
+        // `session_turn_limit_recommended` event lands in the session event
+        // log, which the orchestrator rarely reads; the result text is what
+        // it does read. When the session's CUMULATIVE turn count (prior
+        // assistant_message events + this run's turnsTaken) reaches
+        // SESSION_TURNS_RECOMMEND, buildResultText appends a structured
+        // advisory line. ADVISORY ONLY: it never alters status/isError and
+        // never cancels the task — the hard MAX_TURNS cap is untouched.
+        //
+        // NOTE: no anser_runner-level event sink exists in this module (no
+        // EventLoggerService / logger), so per the M5b spec we do NOT emit a
+        // `session_turn_limit_recommended` event from this layer and do NOT
+        // invent a new sink — the M5a runner-side event (harness/runner.js)
+        // already records it in the session log.
+        const resultText = buildResultText(runResult.finalText, runResult.sessionTurns);
         taskEntry.result = {
           isError: !isSuccess,
-          text: runResult.finalText,
+          text: resultText,
           toolCalls: taskEntry.toolCallsCount,
           fileOps: taskEntry.fileOps,
           durationMs: runResult.durationMs,

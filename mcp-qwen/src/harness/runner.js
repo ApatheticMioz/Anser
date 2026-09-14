@@ -167,7 +167,8 @@ export class AnserRunner {
     *     | 'length_limit_reached' | 'degenerate_response_truncated',
    *   durationMs: number,
    *   totalCompletionTokens: number,
-   *   sessionId: string
+   *   sessionId: string,
+   *   sessionTurns: number
    * }>}
    */
   async run({
@@ -782,6 +783,12 @@ export class AnserRunner {
     return {
       finalText,
       turnsTaken,
+      // M5b: the session-CUMULATIVE turn count (prior assistant_message events
+      // + this run's turnsTaken). Exposed so the dispatch layer (anser_runner)
+      // can surface the 80-turn rollover recommendation to the ORCHESTRATOR in
+      // the result text — today it only lands in session events, which the
+      // orchestrator rarely reads. Advisory data only; never alters status.
+      sessionTurns,
       status,
       durationMs: Date.now() - t0,
       totalCompletionTokens,

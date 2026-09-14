@@ -22,6 +22,11 @@
  *       probeStreak counter is active (probeStreak > 0), carries
  *       `probeStreakActive: true` (the anti-rabbit-hole signal sum).
  *   (e) sub-threshold: a short, shallow run emits NONE of the M5a events.
+ *   (f) M5b: the run() return object carries the session-cumulative
+ *       `sessionTurns`, and the dispatch layer's `buildResultText` appends the
+ *       80-turn rollover recommendation to the ORCHESTRATOR-facing result text
+ *       when sessionTurns >= SESSION_TURNS_RECOMMEND (80) — and does NOT when
+ *       below. Advisory-only; it never alters status/isError.
  *
  * No vLLM, no network. The LLM provider and event logger are injected via the
  * runner's constructor seams (this._llm / this._logger). The prior session
@@ -53,6 +58,10 @@ const {
   SESSION_TURNS_RECOMMEND,
   CONTEXT_WARN_TOKENS,
 } = await import("../src/config.js");
+// M5b: the pure helper the dispatch layer (startAnserTask) uses to assemble the
+// ORCHESTRATOR-facing result text. Imported AFTER the env vars above so the
+// module-level SESSION_TURNS_RECOMMEND it reads is the deterministic 80.
+const { buildResultText } = await import("../src/anser_runner.js");
 
 // ---------------------------------------------------------------------------
 // Isolated temp workspace (the sandbox root for the real file tools).
@@ -474,6 +483,127 @@ async function vectorE() {
 }
 
 // ---------------------------------------------------------------------------
+// Vector (f): M5b — the 80-turn rollover recommendation is VISIBLE TO THE
+// ORCHESTRATOR in the dispatch result text.
+//
+// The M5a `session_turn_limit_recommended` event lands in the session event
+// log, which the orchestrator rarely reads. M5b makes the recommendation
+// visible in the dispatch result text (what the orchestrator DOES read) by:
+//   1. the runner's run() return object carrying the session-cumulative
+//      `sessionTurns` (prior assistant_message events + this run's turnsTaken),
+//   2. the dispatch layer's `buildResultText` appending a structured advisory
+//      line when sessionTurns >= SESSION_TURNS_RECOMMEND (80).
+//
+// This vector proves the full data flow end-to-end (offline):
+//   (i)   a session with 79 prior assistant turns running 1 turn this run
+//         (cumulative 80) -> run() returns sessionTurns === 80, and
+//         buildResultText(finalText, 80) appends the recommendation line.
+//   (ii)  a fresh session running 2 turns (cumulative 2) -> run() returns
+//         sessionTurns === 2, and buildResultText(finalText, 2) does NOT
+//         append the line (text unchanged).
+//   (iii) buildResultText is advisory-only: it never alters the underlying
+//         finalText (the deliverable is preserved verbatim, the line is
+//         appended after it) and never touches status/isError (those are set
+//         independently in startAnserTask from runResult.status).
+// ---------------------------------------------------------------------------
+async function vectorF() {
+  // (i) 80-crossing: 79 prior assistant turns + 1 this run -> cumulative 80.
+  // (The runner increments sessionTurns at the START of each turn, so a
+  // single-turn run over a 79-turn session lands exactly on 80.)
+  const llm80 = makeMockLlm([
+    { content: "Done after the 80-crossing run.", finishReason: "stop" },
+  ]);
+  const logger80 = makeMockLogger(79); // 79 prior assistant turns
+  const runner80 = new AnserRunner({ llm: llm80, logger: logger80 });
+
+  const res80 = await runner80.run({
+    prompt: "Continue the long session.",
+    sessionId: "rollover_f80",
+    cwd: TMP_DIR,
+    maxTurns: 20,
+  });
+
+  // The run() return object carries the session-cumulative turn count.
+  assert.strictEqual(
+    res80.sessionTurns,
+    80,
+    "f(i): run() returns sessionTurns === 80 (79 prior + 1 this run)"
+  );
+  // The dispatch layer appends the recommendation line at >= 80.
+  const text80 = buildResultText(res80.finalText, res80.sessionTurns);
+  assert.ok(
+    text80.includes(
+      `[SessionTurnLimitRecommendation: session at 80 turns — roll to a fresh session_id before the next dispatch]`
+    ),
+    "f(i): result text carries the recommendation line at sessionTurns === 80"
+  );
+  // Advisory-only: the deliverable is preserved verbatim, the line is appended
+  // AFTER it (never replaces or mutates the model's output).
+  assert.ok(
+    text80.startsWith(res80.finalText),
+    "f(i): the original finalText is preserved verbatim (line appended after it)"
+  );
+
+  // (ii) sub-threshold: fresh session, 2 turns this run -> cumulative 2.
+  const llm2 = makeMockLlm([
+    { content: "", toolCalls: [makeReadCall("call_f2", 1)], finishReason: "stop" },
+    { content: "Done with a short run.", finishReason: "stop" },
+  ]);
+  const logger2 = makeMockLogger(0); // fresh session
+  const runner2 = new AnserRunner({ llm: llm2, logger: logger2 });
+
+  const res2 = await runner2.run({
+    prompt: "A short task.",
+    sessionId: "rollover_f2",
+    cwd: TMP_DIR,
+    maxTurns: 20,
+  });
+
+  // The run() return object carries the (low) session-cumulative turn count.
+  assert.strictEqual(
+    res2.sessionTurns,
+    2,
+    "f(ii): run() returns sessionTurns === 2 (fresh session, 2 this run)"
+  );
+  // The dispatch layer does NOT append the line below the threshold.
+  const text2 = buildResultText(res2.finalText, res2.sessionTurns);
+  assert.strictEqual(
+    text2,
+    res2.finalText,
+    "f(ii): result text is UNCHANGED (no recommendation line) below 80"
+  );
+  assert.ok(
+    !text2.includes("SessionTurnLimitRecommendation"),
+    "f(ii): no recommendation marker present below the threshold"
+  );
+
+  // (iii) advisory-only: buildResultText never alters the deliverable and
+  // never touches status/isError (those are set independently in
+  // startAnserTask from runResult.status). The line is purely additive.
+  assert.strictEqual(
+    buildResultText("deliverable", 80).startsWith("deliverable"),
+    true,
+    "f(iii): buildResultText is additive (never mutates the deliverable)"
+  );
+  assert.strictEqual(
+    buildResultText("deliverable", 79),
+    "deliverable",
+    "f(iii): buildResultText is a no-op below the threshold"
+  );
+  // A non-numeric / absent sessionTurns (a runner predating the M5b field)
+  // fails safe: the text is returned unchanged.
+  assert.strictEqual(
+    buildResultText("deliverable", undefined),
+    "deliverable",
+    "f(iii): buildResultText fails safe on absent sessionTurns"
+  );
+
+  console.log(
+    "  [PASS] (f) M5b: run() carries sessionTurns; result text carries the recommendation at >=80, not below (advisory-only)"
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Run all vectors.
 // ---------------------------------------------------------------------------
 async function main() {
@@ -492,6 +622,7 @@ async function main() {
     ["(c)", vectorC],
     ["(d)", vectorD],
     ["(e)", vectorE],
+    ["(f)", vectorF],
   ];
 
   for (const [label, fn] of vectors) {
