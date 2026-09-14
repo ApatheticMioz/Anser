@@ -49,6 +49,13 @@ import { injectSkills } from "./skills.js";
  *                                   thinking and emitted no visible content.
  *   - "length_limit_reached"      — the model hit the ceiling and produced no
  *                                   usable content.
+ *   - "degenerate_response_truncated" — the stream proxy circuit-broke a
+ *                                   runaway repetition loop and the final
+ *                                   message was just the guard marker (or a
+ *                                   tiny sliver of text + marker) with no tool
+ *                                   calls in a short session; the retry budget
+ *                                   was exhausted. The original partial+marker
+ *                                   is preserved in finalText for honesty.
  *   - "turn_limit_reached"        — the maxTurns cap was hit.
  *   - "aborted"                   — the client cancelled the run.
  *   - unknown / null / undefined  — fail closed: treat as an error.

@@ -26,7 +26,7 @@
  */
 
 import http from "http";
-import { RepetitionDetector } from "./src/repetition_detector.js";
+import { RepetitionDetector, GUARD_MARKER_TEMPLATE } from "./src/repetition_detector.js";
 import { PROXY_MAX_BODY_BYTES } from "./src/config.js";
 
 const UPSTREAM_PORT = parseInt(process.env.VLLM_PORT || "18020", 10);
@@ -211,7 +211,9 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
                         choices: [
                           {
                             index: 0,
-                            delta: { content: `\n\n[StreamProxy Guard: Runaway repetition loop (${rep.type}: ${JSON.stringify(rep.pattern)}) detected and safely truncated]\n\n` },
+                            // M3b: marker text comes from the GUARD_MARKER_TEMPLATE
+                            // sentinel (single source of truth in repetition_detector.js).
+                            delta: { content: GUARD_MARKER_TEMPLATE.replaceAll("${type}", rep.type).replaceAll("${pattern}", JSON.stringify(rep.pattern)) },
                             finish_reason: "stop",
                           },
                         ],

@@ -184,3 +184,42 @@ export const EMPTY_STREAM_RETRIES = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRIES;
 })();
 
+// M3b: degenerate-final guard. When the stream proxy circuit-breaks a runaway
+// repetition loop it appends a GUARD_MARKER sentinel and ends the stream with
+// finish_reason "stop". The provider accumulates that marker into the turn's
+// content, so a turn whose ENTIRE message is just the marker (or a tiny
+// sliver of text plus the marker) lands in the runner as a "stop" turn with
+// content — and the old code reported a false "completed" (the M3a defect:
+// 7 false-success sessions, e.g. task_mitig-m3a-s3 with 0 tool calls and a
+// marker-only result).
+//
+// The runner now strips the marker and measures the substantive remainder:
+//   - remainder < DEGENERATE_FINAL_SUBSTANTIVE_CHARS AND no tool calls this
+//     turn AND the session is still short (turnsTaken <=
+//     DEGENERATE_FINAL_MAX_TURNS)  -> DEGENERATE: retry via the empty-stream
+//     path (reason "degenerate_final"); on budget exhaustion report the honest
+//     status "degenerate_response_truncated" (isError) with the original
+//     partial+marker preserved for honesty.
+//   - remainder >= DEGENERATE_FINAL_SUBSTANTIVE_CHARS -> keep "completed"
+//     (the marker stays visible in the result; the deliverable is real).
+//
+// 200 chars is well below any legitimate final answer but far above the
+// marker's own length (~110 chars), so a marker-only or near-marker final is
+// always caught while a real (even short) answer is never misclassified.
+export const DEFAULT_DEGENERATE_FINAL_SUBSTANTIVE_CHARS = 200;
+export const DEGENERATE_FINAL_SUBSTANTIVE_CHARS = (() => {
+  const parsed = parseInt(process.env.QWEN_DEGENERATE_FINAL_SUBSTANTIVE_CHARS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DEGENERATE_FINAL_SUBSTANTIVE_CHARS;
+})();
+
+// A degenerate final is only "short" if the session has not already run many
+// turns. A long session that ends with a marker-truncated final has clearly
+// done real work (many tool calls / turns) and is NOT degenerate — it is a
+// normal (if truncated) completion. Default 3 keeps the guard scoped to the
+// early-dead-session signature (the M3a repro died on turn 1).
+export const DEFAULT_DEGENERATE_FINAL_MAX_TURNS = 3;
+export const DEGENERATE_FINAL_MAX_TURNS = (() => {
+  const parsed = parseInt(process.env.QWEN_DEGENERATE_FINAL_MAX_TURNS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DEGENERATE_FINAL_MAX_TURNS;
+})();
+

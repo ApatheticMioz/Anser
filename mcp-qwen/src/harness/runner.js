@@ -24,8 +24,11 @@ import { normalizeWorkspacePath, canonicalizePath } from "../wsl_bridge.js";
 import {
   MAX_CONTINUATION_TURNS,
   EMPTY_STREAM_RETRIES,
+  DEGENERATE_FINAL_SUBSTANTIVE_CHARS,
+  DEGENERATE_FINAL_MAX_TURNS,
   getReasoningEffort,
 } from "../config.js";
+import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
 
 const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the Anser harness.
 You pair with the Lead Architect (Gemini / Claude) to explore, design, edit, test, and optimize software systems.
@@ -92,7 +95,7 @@ export class AnserRunner {
    *   turnsTaken: number,
    *   status: 'completed' | 'completed_ceiling' | 'aborted' | 'turn_limit_reached'
     *     | 'failed' | 'engine_empty_response' | 'reasoning_budget_exhausted'
-    *     | 'length_limit_reached',
+    *     | 'length_limit_reached' | 'degenerate_response_truncated',
    *   durationMs: number,
    *   totalCompletionTokens: number,
    *   sessionId: string
@@ -294,6 +297,88 @@ export class AnserRunner {
           status = "engine_empty_response";
           logger.append({ type: "engine_empty_response", ...deathContext });
           break;
+        }
+
+        // --- Degenerate-final guard (M3b) -----------------------------------
+        // The stream proxy circuit-breaks a runaway repetition loop by
+        // appending a GUARD_MARKER sentinel and ending the stream with
+        // finish_reason "stop". The provider accumulates that marker into the
+        // turn's content, so a turn whose ENTIRE message is just the marker
+        // (or a tiny sliver of text plus the marker) lands here as a "stop"
+        // turn WITH content — and the old code reported a false "completed"
+        // (the M3a defect: 7 false-success sessions, e.g. task_mitig-m3a-s3
+        // with 0 tool calls and a marker-only result).
+        //
+        // We strip the marker and measure the substantive remainder:
+        //   - remainder < DEGENERATE_FINAL_SUBSTANTIVE_CHARS AND no tool calls
+        //     this turn AND the session is still short (turnsTaken <=
+        //     DEGENERATE_FINAL_MAX_TURNS)  -> DEGENERATE: retry via the
+        //     empty-stream path (reason "degenerate_final"); on budget
+        //     exhaustion report the honest status "degenerate_response_truncated"
+        //     with the original partial+marker preserved for honesty.
+        //   - remainder >= DEGENERATE_FINAL_SUBSTANTIVE_CHARS -> NOT degenerate:
+        //     fall through to normal recording + break (a real, if truncated,
+        //     deliverable; the marker stays visible in the result).
+        //
+        // Placed BEFORE the assistant_message recording (like the P2b/P2d
+        // empty guards) so a degenerate turn is never recorded as an assistant
+        // message and the retry is clean.
+        const guardMarkerIdx =
+          typeof turnResult.content === "string"
+            ? turnResult.content.indexOf(GUARD_MARKER_PREFIX)
+            : -1;
+        if (guardMarkerIdx !== -1) {
+          // Strip the marker (prefix ... closing bracket) and measure the
+          // substantive remainder (the real text before/after the marker).
+          const closeIdx = turnResult.content.indexOf("]", guardMarkerIdx);
+          const substantive =
+            closeIdx === -1
+              ? turnResult.content.slice(0, guardMarkerIdx)
+              : turnResult.content.slice(0, guardMarkerIdx) +
+                turnResult.content.slice(closeIdx + 1);
+          const substantiveLen = substantive.trim().length;
+          const noToolCalls =
+            !turnResult.toolCalls || turnResult.toolCalls.length === 0;
+          const shortSession = turnsTaken <= DEGENERATE_FINAL_MAX_TURNS;
+          if (
+            substantiveLen < DEGENERATE_FINAL_SUBSTANTIVE_CHARS &&
+            noToolCalls &&
+            shortSession
+          ) {
+            const deathContext = {
+              turnIndex: turnsTaken,
+              promptChars: JSON.stringify(messages).length,
+              metrics: turnResult.metrics ?? null,
+              reasoningTokens: turnResult.reasoningTokens ?? 0,
+              substantiveChars: substantiveLen,
+            };
+            if (emptyStreamRetries < EMPTY_STREAM_RETRIES) {
+              emptyStreamRetries++;
+              logger.append({
+                type: "empty_stream_retry",
+                retryNumber: emptyStreamRetries,
+                maxRetries: EMPTY_STREAM_RETRIES,
+                // "degenerate_final" = M3b (guard-truncated final with a
+                // substantive remainder below the threshold, no tool calls,
+                // short session).
+                reason: "degenerate_final",
+                ...deathContext,
+              });
+              continue;
+            }
+            // Budget exhausted: the engine keeps returning degenerate
+            // guard-truncated finals. Report the honest status instead of a
+            // false "completed". Preserve the original partial+marker in
+            // finalText for honesty (the client sees exactly what the engine
+            // produced, including the guard marker).
+            status = "degenerate_response_truncated";
+            finalText = turnResult.content;
+            logger.append({
+              type: "degenerate_response_truncated",
+              ...deathContext,
+            });
+            break;
+          }
         }
 
         // Record assistant response. reasoningTokens is surfaced as a top-level

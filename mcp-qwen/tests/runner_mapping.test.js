@@ -21,6 +21,7 @@ const FAILURE_STATUSES = [
   "engine_empty_response",
   "reasoning_budget_exhausted",
   "length_limit_reached",
+  "degenerate_response_truncated",
   "turn_limit_reached",
   "aborted",
 ];

@@ -16,6 +16,23 @@
  * bound are intentionally left unchanged.
  */
 
+// M3b: the exact marker text the stream proxy appends to a stream it has
+// circuit-broken for runaway repetition (stream_proxy.js breakerChunk). This
+// is the SINGLE SOURCE OF TRUTH for that string: the proxy emits it, and the
+// Anser runner (src/harness/runner.js) detects it in the accumulated final
+// text to classify guard-truncated degenerate finals honestly (retry, then
+// "degenerate_response_truncated") instead of a false "completed".
+//
+// The marker is a template: the breaker interpolates the detected repetition
+// type and pattern (e.g. "character" / "\"a\"" or "pattern" / "the the ").
+// The runner matches on the stable prefix (GUARD_MARKER_PREFIX) so it is
+// robust to the interpolated detail, and strips the full marker (prefix +
+// detail + closing bracket) when measuring the substantive remainder.
+export const GUARD_MARKER_PREFIX =
+  "[StreamProxy Guard: Runaway repetition loop (";
+export const GUARD_MARKER_TEMPLATE =
+  "\n\n[StreamProxy Guard: Runaway repetition loop (${type}: ${pattern}) detected and safely truncated]\n\n";
+
 // Characters that legitimately appear in long consecutive runs inside
 // legitimate model output (git-diff '+' hunks, code, URLs, JSON, math).
 export const CODE_REPEAT_CHARS = new Set(

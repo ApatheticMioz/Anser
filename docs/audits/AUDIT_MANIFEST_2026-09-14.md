@@ -10,7 +10,7 @@ Gate: milestone closes only when every row is `[RESOLVED: sha]`, `[DEFERRED: id]
 |---|---|---|---|
 | F9, N4, N5 | `/wait` 500-on-failure misread as infra crash; 500 retry-storm; connection left open | M1 `task_registry.js` → 200 + `{isError,status,result}` JSON, clean termination | [RESOLVED: this commit] 62/62 canary, full `npm test` gate green (36-suite && chain, exit 0); live smoke deferred to post-restart verification |
 | F10, F13 | Binary file ingested as text (647 KB PDF poison pill) | M2 `sandbox_fs.js` readFile/searchCode → `file-type` magic-number guard | [RESOLVED: this commit] `BinaryFileError` fail-fast + honest skipped-binary in searchCode; 6/6 canary, `npm test` exit 0 |
-| N1, N6 | Guard-truncated degenerate final messages: deliverable dropped, session false-`completed` (7× `" Register"` class) | M3 honest delivery + `degenerate_response_truncated` status + retry classification | OPEN |
+| N1, N6 | Guard-truncated degenerate final messages: deliverable dropped, session false-`completed` (7× `" Register"` class) | M3 → single M3b slice after recon (`m3-recon-s1`): breakerChunk already delivers partial+marker in-band, so the genuine defect is status classification only. 4 failed dispatch attempts ledgered (2× empty-stream starvation, 1× degenerate false-success `task_mitig-m3a-s3` 0-tool-calls, 1× post-work starvation) — engine restarted 2026-09-14 with user approval | [RESOLVED: this commit] `GUARD_MARKER` sentinel single-sourced; runner degenerate-final guard (retry via empty-stream budget → `degenerate_response_truncated`, partial+marker preserved); substantive truncations stay `completed`. 6/6 canary, full gate exit 0 |
 | F4, F12, F14, #11-rec1/2 | Unbounded bash probe loops on open-ended targets; anti-probe clause not harness-enforced | M4 single-pass directive in dispatch + >4-consecutive-non-mutating-bash advisory warning | OPEN |
 | F3, N8, #11-rec3 | Session over-retention (ctx-400 death: 196,609+49,152 > 245,760) | M5 60-warn/80-recommend/100-backstop + context-budget preflight w/ output clamp | OPEN |
 | F6, N3, N7 | 15-min SSE idle watchdog kills healthy long-thinking streams (3+1 occurrences); EngineCore crash | M6 keep-alive pings during silent streams + depth-scaled empty-stream retries w/ backoff | OPEN |
@@ -39,7 +39,7 @@ Gate: milestone closes only when every row is `[RESOLVED: sha]`, `[DEFERRED: id]
 |---|---|---|---|
 | M1 | wait_endpoint.test.js 62/62; full `npm test` exit 0 | pending MCP-server restart smoke (F9 repro: failed task → curl -fsS exit 0 + isError body) | this commit |
 | M2 | binary_guard.test.js 6/6; search_code_guard 9/9; security 123/123; full `npm test` exit 0 | pending MCP-server restart smoke (read_file on repo PDF → structured rejection) | this commit |
-| M3 | — | — | — |
+| M3 | degenerate_final.test.js 6/6; runner_mapping 16/16; stream_proxy 4/4; full `npm test` exit 0 | pending MCP-server-restart smoke (marker-only dispatch → degenerate_response_truncated, not completed) | this commit |
 | M4 | — | — | — |
 | M5 | — | — | — |
 | M6 | — | — | — |
