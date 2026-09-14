@@ -7,6 +7,7 @@ import {
   TASK_RETENTION_MS,
   DEFAULT_TIMEOUT_MS,
   INACTIVITY_TIMEOUT_MS,
+  ORPHAN_REAP_STALE_MS,
 } from "./config.js";
 import {
   pidAlive,
@@ -319,6 +320,73 @@ export function hasLiveWork() {
   return false;
 }
 
+/**
+ * M9 (P2, N2): mid-session liveness reaper.
+ *
+ * The boot-only orphan sweep (markTaskOrphanedOnDisk, invoked from
+ * readTaskFromDisk) only runs when a task file is READ at process start. A
+ * task whose owner process dies MID-SESSION — e.g. task_anomaly-probe-s1,
+ * frozen at status:"running" with a dead ownerPid and no terminal event — is
+ * never re-read by a boot sweep, so it stays "running" forever and misleads
+ * every later probe (the N2 defect).
+ *
+ * This pass closes that gap. For every NOT-DONE task (in-memory AND on-disk)
+ * whose status is "queued"/"running" and whose heartbeat is STALE
+ * (now - lastHeartbeatAt > ORPHAN_REAP_STALE_MS), it reaps the task ONLY when
+ * the owner pid is dead — reusing the SAME liveness helper (pidAlive) the boot
+ * sweep uses, and writing the SAME terminal marker by CALLING the existing
+ * markTaskOrphanedOnDisk (never duplicating its logic):
+ *   { type:"session_error", reason:"orphaned" } + status/isError terminal +
+ *   finishedAt.
+ *
+ * LIVE-OWNER INVARIANT: a task whose ownerPid is ALIVE is NEVER reaped,
+ * regardless of how stale its heartbeat is. A live owner that is simply slow
+ * (a long deep-thinking turn, a wedged-but-alive worker) is not an orphan;
+ * reaping it would kill a healthy task. The dead-owner check is the gate; the
+ * stale-heartbeat check is only a conservative pre-filter so a live owner with
+ * a fresh heartbeat is never even considered.
+ *
+ * Conservative by design: a task with a FRESH heartbeat (within the stale
+ * window) is left untouched even if its owner pid is dead — the owner may
+ * still be writing its final state, and the next cadence tick re-checks.
+ *
+ * Idempotent: markTaskOrphanedOnDisk no-ops on an already-done task, and the
+ * double-terminal guard in appendOrphanTerminalEvent prevents a second
+ * terminal event, so re-running this pass is safe.
+ *
+ * @returns {number} the count of tasks reaped (marked orphaned) this pass.
+ */
+export function reapOrphans() {
+  const now = Date.now();
+  let reaped = 0;
+
+  // 1. In-memory tasks (this instance's live registry).
+  for (const task of tasks.values()) {
+    if (task.done) continue;
+    if (task.status !== "running" && task.status !== "queued") continue;
+    const lastActive = task.lastHeartbeatAt || task.startedAt || task.createdAt;
+    if (!lastActive || now - lastActive <= ORPHAN_REAP_STALE_MS) continue; // fresh: leave it
+    // LIVE-OWNER INVARIANT: never reap a task whose owner is alive.
+    if (task.ownerPid && pidAlive(task.ownerPid)) continue;
+    markTaskOrphanedOnDisk(task);
+    reaped++;
+  }
+
+  // 2. On-disk tasks (any instance sharing the state dir).
+  for (const diskTask of listTasksFromDisk()) {
+    if (diskTask.done) continue;
+    if (diskTask.status !== "running" && diskTask.status !== "queued") continue;
+    const lastActive = diskTask.lastHeartbeatAt || diskTask.startedAt || diskTask.createdAt;
+    if (!lastActive || now - lastActive <= ORPHAN_REAP_STALE_MS) continue; // fresh: leave it
+    // LIVE-OWNER INVARIANT: never reap a task whose owner is alive.
+    if (diskTask.ownerPid && pidAlive(diskTask.ownerPid)) continue;
+    markTaskOrphanedOnDisk(diskTask);
+    reaped++;
+  }
+
+  return reaped;
+}
+
 export function cleanOldTasks() {
   const now = Date.now();
   for (const [id, task] of tasks.entries()) {
@@ -327,6 +395,11 @@ export function cleanOldTasks() {
     }
   }
   listTasksFromDisk(); // Triggers disk retention cleanup
+  // M9 (P2, N2): piggyback the mid-session liveness reaper on the existing
+  // retention cadence (the same 5-minute setInterval that drives cleanOldTasks
+  // from initStatusServer). This is the file's existing periodic pattern — no
+  // new timer, no new cadence.
+  reapOrphans();
 }
 
 export function notifyWaiters(task) {

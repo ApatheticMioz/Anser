@@ -144,6 +144,22 @@ export const TASK_RETENTION_MS = (() => {
   return Math.max(requested, TASK_RETENTION_FLOOR_MS);
 })();
 
+// M9 (P2, N2): mid-session orphan-reaper heartbeat-staleness window. The
+// boot-only orphan sweep (markTaskOrphanedOnDisk) only runs at process start,
+// so a task whose owner process dies MID-SESSION (e.g. task_anomaly-probe-s1:
+// status:"running", dead ownerPid, no terminal event) stays "running" forever
+// and misleads every later probe. The liveness reaper (reapOrphans) reaps a
+// not-done task only when BOTH its heartbeat is older than this window AND its
+// owner pid is dead. Default 1h (3_600_000ms) is well above any legitimate
+// inter-heartbeat gap (the slot heartbeat is 15s) yet short enough to clear a
+// mid-session death within the retention cadence. Overridable via
+// QWEN_ORPHAN_REAP_STALE_MS for tests / operators.
+export const DEFAULT_ORPHAN_REAP_STALE_MS = 3_600_000; // 1 hour
+export const ORPHAN_REAP_STALE_MS = (() => {
+  const parsed = parseInt(process.env.QWEN_ORPHAN_REAP_STALE_MS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ORPHAN_REAP_STALE_MS;
+})();
+
 // 2026-09-12: default raised 1 -> 2 to match the engine launcher's MAX_SEQS=2
 // (user-authorized; upstream huge-profile validated seat count). Keep 1:1 with
 // scripts/wsl/start_huge.sh. QWEN_MAX_CONCURRENT still overrides.
