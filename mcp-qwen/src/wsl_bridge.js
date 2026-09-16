@@ -79,6 +79,23 @@ export function normalizeWorkspacePath(inputPath) {
 }
 
 /**
+ * Detects whether a path refers to an IDE application binary or installation
+ * directory (e.g. Antigravity IDE, VS Code, Cursor installation folders).
+ *
+ * Guardrail: An autonomous coding agent must never use the IDE's application
+ * directory as its working directory or workspace root.
+ */
+export function isIdeAppDirectory(dirPath) {
+  if (!dirPath || typeof dirPath !== "string") return false;
+  const norm = dirPath.replace(/\\/g, "/").toLowerCase();
+  return (
+    norm.includes("/programs/antigravity ide") ||
+    norm.includes("/antigravity ide/resources/app") ||
+    norm.endsWith("/antigravity ide")
+  );
+}
+
+/**
  * P4i: Canonicalize a path through the OS symlink/junction resolution layer.
  *
  * On Windows, `fs.realpathSync` resolves NTFS junctions (e.g. the

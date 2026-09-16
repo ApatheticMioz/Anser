@@ -174,6 +174,46 @@ async function runTests() {
   }
 
   // ------------------------------------------------------------------
+  // Test 6: qwen_task with 'kill' action — aliases to 'cancel'
+  // ------------------------------------------------------------------
+  console.log("\n[Test 6] qwen_task: 'kill' action aliases to cancel");
+  {
+    const result = await handlers["qwen_task"]({
+      action: "kill",
+      task_id: "task_nonexistent_kill_123",
+    });
+    ok(result.isError === true, "isError is true for nonexistent task kill");
+    ok(
+      /not found/i.test(result.content[0].text),
+      "kill action checks task existence like cancel"
+    );
+    ok(
+      !/\n\s+at\s/.test(result.content[0].text),
+      "no stack trace leaked on kill"
+    );
+  }
+
+  // ------------------------------------------------------------------
+  // Test 7: qwen_coworker rejects IDE application directory as workspace
+  // ------------------------------------------------------------------
+  console.log("\n[Test 7] qwen_coworker: rejects IDE application directory as cwd");
+  {
+    const result = await handlers["qwen_coworker"]({
+      prompt: "test",
+      cwd: "C:\\Users\\Apath\\AppData\\Local\\Programs\\Antigravity IDE",
+    });
+    ok(result.isError === true, "isError is true when cwd is IDE application dir");
+    ok(
+      /Refusing to use IDE application directory/i.test(result.content[0].text),
+      "error message explicitly cites IDE application directory refusal"
+    );
+    ok(
+      !/\n\s+at\s/.test(result.content[0].text),
+      "no stack trace leaked on IDE directory refusal"
+    );
+  }
+
+  // ------------------------------------------------------------------
   // Summary
   // ------------------------------------------------------------------
   console.log("\n==========================================");

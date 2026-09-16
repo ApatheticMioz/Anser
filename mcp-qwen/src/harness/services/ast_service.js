@@ -22,9 +22,12 @@ import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { IS_WINDOWS } from "../../config.js";
 import { toWindowsPath, toPosixWslPath, canonicalizePath } from "../../wsl_bridge.js";
 import { DEFAULT_IGNORED_DIRS } from "./sandbox_fs.js";
+
+const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const EXT_TO_LANG = {
   ".js": "js",
@@ -332,26 +335,24 @@ export class AstService {
    * "ast-grep" PATH fallback remain.)
    */
   getBinary() {
-    const winBinDirect = path.join(
-      this.root,
-      "node_modules",
-      "@ast-grep",
-      "cli-win32-x64-msvc",
-      "ast-grep.exe"
-    );
-    const linuxBinDirect = path.join(
-      this.root,
-      "node_modules",
-      "@ast-grep",
-      "cli-linux-x64-gnu",
-      "ast-grep"
-    );
+    const winCandidates = [
+      path.join(PKG_ROOT, "node_modules", "@ast-grep", "cli-win32-x64-msvc", "ast-grep.exe"),
+      path.join(this.root, "node_modules", "@ast-grep", "cli-win32-x64-msvc", "ast-grep.exe"),
+    ];
+    const linuxCandidates = [
+      path.join(PKG_ROOT, "node_modules", "@ast-grep", "cli-linux-x64-gnu", "ast-grep"),
+      path.join(this.root, "node_modules", "@ast-grep", "cli-linux-x64-gnu", "ast-grep"),
+    ];
 
     if (IS_WINDOWS) {
-      if (fs.existsSync(winBinDirect)) return winBinDirect;
+      for (const p of winCandidates) {
+        if (fs.existsSync(p)) return p;
+      }
       return "ast-grep";
     } else {
-      if (fs.existsSync(linuxBinDirect)) return linuxBinDirect;
+      for (const p of linuxCandidates) {
+        if (fs.existsSync(p)) return p;
+      }
       return "ast-grep";
     }
   }

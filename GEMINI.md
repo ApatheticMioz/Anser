@@ -28,6 +28,9 @@ You operate within a hierarchical multi-agent pair-programming architecture in G
 
 1. **Rule 0 — Systematic Exploration Offloading & Turn 1 Contract**:
    - **No Cloud Bulk Exploration**: When asked to explore, research, audit, debug, test, or modify ANY codebase, repository, or document, the orchestrator is **STRICTLY FORBIDDEN** from calling raw exploratory tools (`list_dir`, `view_file`, `grep_search`, `run_command`) to hoard or inspect repository files directly into cloud context on Turn 1.
+   - **Target Inspection vs. Bulk Hoarding Exemption**: This prohibition applies strictly to bulk exploration and hoarding of source trees. It does NOT prohibit:
+     1. Inspecting local MCP server configuration/schemas (`~/.gemini/.../mcp/`) to discover tool call signatures.
+     2. Multimodal inspection of a single user-targeted visual deliverable (e.g. inspecting an image, UI component, or compiled PDF page) when the user specifically requests visual, layout, or design review under the Lead Architect's Multimodal Vision Authority.
    - **Systematic Exploration Offloading in Bounded Patches**: Exploration is offloaded to `qwen_coworker` strictly in **focused, single-concern inquiry slices** (e.g. Turn 1: Run baseline test suite for Subsystem A, inspect git diff for File B, and return stderr/stdout).
    - **Anti-Monolithic Turn 1 Dispatch**: The orchestrator MUST NOT dump broad overhauls, multi-subsystem audits, or open-ended debugging requests into Qwen on Turn 1. Monolithic prompts that bundle multiple layers force runaway tool loops (20+ tool calls, 20+ min latency) and degrade speculative decoding.
    - **Cloud Authorship of Plans & Manifests**: Qwen returns raw ground-truth facts, diff excerpts, and test telemetry. The Lead Architect synthesizes these facts and authors/updates `implementation_plan.md` and `AUDIT_MANIFEST.md` in cloud context. Qwen is NEVER asked to author high-level architecture documents, project roadmaps, or audit manifests.
@@ -40,6 +43,12 @@ You operate within a hierarchical multi-agent pair-programming architecture in G
    - Local Qwen runs in pure text mode (`--language-model-only`). Never pass image paths or visual inspection tasks to `qwen_coworker`.
    - The Lead Architect (Gemini 3.8 Flash) MUST inspect visual outputs directly via native vision tools, extract all required facts, outlines, and design tokens into structured text, and provide that text to the coworker.
    - Never `Read` binary files (`.pdf`, `.png`, `.jpg`, `.webp`, …) on a text-only orchestrator or engine: binary bytes are not valid text payloads and poison the transcript on contact (the 647KB PDF → Zhipu 400 [1210] poison pill, 2026-09-13). The Anser harness enforces this with a magic-number fail-fast (`BinaryFileError`) on coworker-side reads — extract text or route to a multimodal-capable orchestrator.
+   - **Document & Academic Paper Review Protocol (PDF vs. Source Ground Truth)**:
+     - **Compiled Artifact vs. Ground Truth**: A compiled document (`.pdf`, `.docx`) is a build artifact, NOT the primary editable ground truth. The true ground truth lives in the project's **text source files**: LaTeX (`.tex`), BibTeX (`.bib`), raw data tables (`.csv`/`.tsv`), figures generation scripts (`.py`), or markdown (`.md`).
+     - **Dual Review Division**:
+       1. **Visual & Aesthetic Review (Lead Architect)**: Inspect rendered PDF pages, figure geometry, layout overlaps, and typography directly using native multimodal vision (`view_file` on target PDF/images).
+       2. **Content, Citation, Math, & Data Review (Coworker @ $0)**: Direct Qwen to inspect the underlying plaintext source files (`all_dice_no_slice.tex`, `references.bib`, `paper_results_matrix.csv`). Offload focused slices: cross-reference `\cite{...}` tags against `.bib`, verify claims against `.csv` data, and check equations in `.tex`. Never pass the binary `.pdf` to Qwen; always point Qwen to the text sources.
+       3. **Locating Source Coordinates**: If the user only names the compiled binary (`paper.pdf`), Turn 1 Coworker slice locates the document sources (`find . -name "*.tex" -o -name "*.bib"`) or build scripts, returning the exact source coordinates to the Lead Architect.
 4. **Ground Truth Hierarchy**:
    - Ground truth consists exclusively of active source code, configuration files, raw data matrices, and verifiable build artifacts.
    - Secondary documentation, historical audit reports, and markdown notes are historical claim ledgers, NOT ground truth. Never anchor on secondary claims without verifying underlying code.
@@ -143,3 +152,28 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 3. **Mandatory Git Protocol**:
    - Inspect `git status` prior to and following modifications.
    - Produce clean, conventional atomic git commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`) and push to remote tracking branches.
+
+---
+
+## 6. MCP Tool Calling Reference (Zero-Discovery Invariant)
+
+To avoid tripping IDE-level file permission filters on `~/.gemini/` configuration files, use these explicit schema definitions directly for all lazy-loaded `qwen38-local` tools:
+
+### `qwen_coworker` (Autonomous Execution Coworker)
+- **`prompt`** (string, required): Task, inquiry, or architectural instruction for Qwen (pure text-only; images must be inspected natively by Lead Architect and summarized into text).
+- **`cwd`** (string, required for project tasks): Target workspace directory (e.g. `/home/apath/Work/temp/final/paper`). Always specify this explicitly.
+- **`session_id`** (string, optional): Named persistent session ID (e.g. `paper_p1_citations`).
+- **`reasoning_effort`** (string, optional): `"xhigh"` (default), `"medium"`, or `"low"`.
+- **`extensions`** (array of strings, optional): e.g. `["uvx free-search-mcp"]`, `["npx -y @upstash/context7-mcp"]`.
+- **`skills`** (array of strings, optional): Explicit list of skill names to inject.
+- **`test_command`** (string, optional): Verification test/benchmark command (e.g. `pytest tests/test_core.py`).
+- **`timeout_ms`** (number, optional): Task timeout in ms (default 14,400,000ms / 4 hours, min 600,000ms).
+
+### `qwen_task` (Background Task & Telemetry Management)
+- **`action`** (string, required): `"status"` | `"cancel"` | `"kill"` (alias for cancel) | `"cancel_all"` | `"list"`.
+- **`task_id`** (string, optional): Target task ID (required for `"status"`, optional for `"cancel"`/`"kill"`).
+
+### `qwen_server` (vLLM Engine Lifecycle)
+- **`action`** (string, required): `"status"` | `"start"` | `"stop"`.
+- **`force`** (boolean, optional): Force stop even if a task is actively executing (only on user request).
+

@@ -140,8 +140,8 @@ tools = {
             '$schema': 'http://json-schema.org/draft-07/schema#',
             'type': 'object',
             'properties': {
-                'action': {'type': 'string', 'enum': ['status', 'cancel', 'cancel_all', 'list'], 'description': 'Action to perform on background tasks'},
-                'task_id': {'type': 'string', 'description': 'Task ID (required for \'status\', optional for \'cancel\'/\'cancel_all\' to cancel all tasks)'}
+                'action': {'type': 'string', 'enum': ['status', 'cancel', 'cancel_all', 'list', 'kill'], 'description': 'Action to perform on background tasks'},
+                'task_id': {'type': 'string', 'description': 'Task ID (required for \'status\', optional for \'cancel\'/\'cancel_all\'/\'kill\' to cancel all tasks)'}
             },
             'required': ['action']
         }
@@ -165,13 +165,30 @@ instructions_content = """# qwen38-local MCP Server Best Practices & Protocol
 
 ## 1. Quick Reference & Tool Invocation
 To dispatch work to the local autonomous Qwen3.8-27B coworker, call `call_mcp_tool`:
+
+### Tool 1: `qwen_coworker`
 - **ServerName**: `"qwen38-local"`
 - **ToolName**: `"qwen_coworker"`
 - **Arguments**:
-  - `prompt`: Specific, single-concern task or inquiry scoped by the Lead Architect to ONE subsystem (Full Objective Fulfillment, no tool ceilings).
-  - `cwd`: Target project directory (e.g. `<workspace_root>` or current working directory).
-  - `session_id`: Named session (e.g. `"redteam_stage1"`) to maintain KV-cache across 2–3 turns.
-  - `extensions`: Optional stdio extensions, e.g. `["uvx free-search-mcp"]` for live web lookup or `["npx -y @upstash/context7-mcp"]`.
+  - `prompt` (string, required): Specific, single-concern task or inquiry scoped by the Lead Architect to ONE subsystem (Full Objective Fulfillment, no tool ceilings).
+  - `cwd` (string, strongly recommended): Target project directory (e.g. `<workspace_root>`). MUST NOT be an IDE application directory.
+  - `session_id` (string, optional): Named session (e.g. `"redteam_stage1"`) to maintain KV-cache across 2–3 turns.
+  - `extensions` (array, optional): Optional stdio extensions, e.g. `["uvx free-search-mcp"]` for live web lookup or `["npx -y @upstash/context7-mcp"]`.
+  - `reasoning_effort` (string, optional): `"xhigh"` (default), `"medium"`, or `"low"`.
+
+### Tool 2: `qwen_task`
+- **ServerName**: `"qwen38-local"`
+- **ToolName**: `"qwen_task"`
+- **Arguments**:
+  - `action`: `"status"` | `"cancel"` | `"kill"` (alias for cancel) | `"cancel_all"` | `"list"`
+  - `task_id` (string): ID of background task (required for status/cancel/kill).
+
+### Tool 3: `qwen_server`
+- **ServerName**: `"qwen38-local"`
+- **ToolName**: `"qwen_server"`
+- **Arguments**:
+  - `action`: `"status"` | `"start"` | `"stop"`
+  - `force` (boolean, optional): Force stop even under active execution.
 
 ## 2. Invariants & Guardrails for the Meta-Supervisor
 1. **Rule 0 — Universal Turn 1 Coworker Invariant**:
@@ -186,6 +203,13 @@ To dispatch work to the local autonomous Qwen3.8-27B coworker, call `call_mcp_to
    - Keep `session_id` active for 2–3 focused turns, then roll to `<milestone>_stage2` to reset context and maintain peak decoding speed.
 4. **Mid-Flight User Injections**:
    - If the user sends guidance while a background task is running, acknowledge it, stage the requirement for the next turn, and immediately re-execute the `wait_command` via `run_command` in the same turn.
+5. **Lazy MCP Tool Schema Exemption**:
+   - Inspecting MCP instructions and schemas in `~/.gemini/antigravity-ide/mcp/` is normal tool configuration discovery and does NOT violate Rule 0 (which strictly governs project repository code).
+6. **Document & Academic Paper Review Protocol (PDF vs. Source Ground Truth)**:
+   - Compiled documents (`.pdf`, `.docx`) are build artifacts; local Qwen will reject binary reads with `BinaryFileError`.
+   - The primary ground truth for citations, wording, math, and data lives in the project's plaintext source files (`.tex`, `.bib`, `.csv`, `.py`, `.md`).
+   - Visual review (rendered page flow, figure geometry, typography) is handled directly by the Lead Architect via native multimodal vision (`view_file` on the target PDF/image).
+   - Text/citation/data review is offloaded to `qwen_coworker` targeting the source files (`references.bib`, `.tex`, `results_matrix.csv`). If only a `.pdf` is named by the user, Turn 1 Coworker slice locates the source files (`find . -name "*.tex" -o -name "*.bib"`).
 """
 
 for mcp_dir in unique_dirs:
