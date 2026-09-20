@@ -23,6 +23,7 @@ import {
   acquireTaskSlot,
   releaseTaskSlot,
   listTaskSlots,
+  getSlotStatus,
   slotFilePath,
   readLease,
 } from "./src/semaphore.js";
@@ -33,6 +34,8 @@ import {
   isTaskOrphaned,
   markTaskOrphanedOnDisk,
   initStatusServer,
+  setMcpServerFactory,
+  activeSseSessions,
 } from "./src/task_registry.js";
 import { registerTools } from "./src/tools.js";
 import { disposeAllBridges } from "./src/harness/services/mcp_bridge.js";
@@ -52,6 +55,13 @@ function setupProcessLifecycleHandlers() {
       // P8: reap any live MCP extension bridge children (native engine)
       // so none survive process shutdown.
       disposeAllBridges();
+      for (const session of activeSseSessions.values()) {
+        try {
+          session.transport.close();
+          session.server.close();
+        } catch {}
+      }
+      activeSseSessions.clear();
       for (const [id, task] of tasks.entries()) {
         if (!task.done) {
           task.done = true;
@@ -105,17 +115,22 @@ function setupProcessLifecycleHandlers() {
   });
 }
 
-async function main() {
-  setupProcessLifecycleHandlers();
-  initStatusServer();
-
+export function createMcpServer() {
   const server = new McpServer({
     name: pkgName ?? "qwen38-local",
     version: pkgVersion,
   });
-
   registerTools(server);
+  return server;
+}
 
+setMcpServerFactory(createMcpServer);
+
+async function main() {
+  setupProcessLifecycleHandlers();
+  initStatusServer();
+
+  const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
@@ -124,6 +139,7 @@ export {
   acquireTaskSlot,
   releaseTaskSlot,
   listTaskSlots,
+  getSlotStatus,
   TASK_DIR,
   isTaskOrphaned,
   markTaskOrphanedOnDisk,

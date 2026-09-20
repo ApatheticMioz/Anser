@@ -20,6 +20,7 @@ import {
   killSessionProcessTreeSync,
 } from "./wsl_bridge.js";
 import { EventLoggerService } from "./harness/services/event_logger.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 
 try {
   fs.mkdirSync(TASK_DIR, { recursive: true });
@@ -529,14 +530,96 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
 
 export let statusServerOwned = false;
 
-export const statusHttpServer = http.createServer((req, res) => {
+let mcpServerFactory = null;
+export function setMcpServerFactory(fn) {
+  mcpServerFactory = typeof fn === "function" ? fn : null;
+}
+export function getMcpServerFactory() {
+  return mcpServerFactory;
+}
+export const activeSseSessions = new Map();
+
+export const statusHttpServer = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://localhost:${STATUS_PORT}`);
   const pathname = parsedUrl.pathname;
+
+  // Global CORS headers for cross-boundary / local tooling access
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    return res.end();
+  }
+
+  // GET /sse — MCP Server-Sent Events stream endpoint
+  if (req.method === "GET" && pathname === "/sse") {
+    if (!mcpServerFactory) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "MCP server factory not initialized" }));
+    }
+    try {
+      const transport = new SSEServerTransport("/message", res);
+      const server = mcpServerFactory();
+      const sessionId = transport.sessionId;
+      activeSseSessions.set(sessionId, { transport, server });
+
+      const cleanup = () => {
+        if (activeSseSessions.has(sessionId)) {
+          activeSseSessions.delete(sessionId);
+          try {
+            server.close();
+          } catch {}
+        }
+      };
+
+      transport.onclose = cleanup;
+      res.on("close", cleanup);
+
+      await server.connect(transport);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    }
+    return;
+  }
+
+  // POST /message — MCP client message endpoint for active SSE session
+  if (req.method === "POST" && pathname === "/message") {
+    const sessionId = parsedUrl.searchParams.get("sessionId");
+    if (!sessionId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "Missing sessionId query parameter" }));
+    }
+    const session = activeSseSessions.get(sessionId);
+    if (!session) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: `Session not found: ${sessionId}` }));
+    }
+    try {
+      await session.transport.handlePostMessage(req, res);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    }
+    return;
+  }
 
   // GET /health
   if (req.method === "GET" && pathname === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", service: "mcp-qwen-status", port: STATUS_PORT }));
+    res.end(JSON.stringify({
+      status: "ok",
+      service: "mcp-qwen-status",
+      port: STATUS_PORT,
+      sse: true,
+      active_sse_sessions: activeSseSessions.size,
+    }));
     return;
   }
 
@@ -579,6 +662,12 @@ export const statusHttpServer = http.createServer((req, res) => {
   // GET /task/:id/wait (Universal blocking long-poll across memory + disk)
   const waitMatch = pathname.match(/^\/task\/([^/]+)\/wait$/);
   if (req.method === "GET" && waitMatch) {
+    if (req.socket) {
+      try {
+        req.socket.setKeepAlive(true, 15_000);
+        req.socket.setTimeout(0);
+      } catch {}
+    }
     const taskId = waitMatch[1];
     let task = tasks.get(taskId);
     let diskTask = null;
@@ -1139,6 +1228,11 @@ export function startStatusServerElection({
 }
 
 export function initStatusServer() {
+  // Disable Node.js server request and socket timeouts for long-poll blocking waits
+  statusHttpServer.requestTimeout = 0;
+  statusHttpServer.headersTimeout = 0;
+  statusHttpServer.keepAliveTimeout = 0;
+  statusHttpServer.timeout = 0;
   try {
     statusHttpServer.listen(STATUS_PORT, "127.0.0.1", () => {
       statusServerOwned = true;

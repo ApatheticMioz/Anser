@@ -18,6 +18,7 @@ import {
 import {
   normalizeWorkspacePath,
   canonicalizePath,
+  isIdeAppDirectory,
   killProcessTree,
   killSessionProcessTree,
   toPosixWslPath,
@@ -34,7 +35,7 @@ import {
   readWedgeCounter,
   setHealGatekeeper,
 } from "./server_lifecycle.js";
-import { listTaskSlots, releaseTaskSlot } from "./semaphore.js";
+import { listTaskSlots, releaseTaskSlot, getSlotStatus } from "./semaphore.js";
 import {
   tasks,
   listTasksFromDisk,
@@ -158,9 +159,31 @@ export function registerTools(server) {
       // cwd is persisted to the task entry, hashed into the session id, and
       // passed to the runner - makes the entire pipeline operate on the real
       // path. A requested real-path cwd is unaffected (realpath is a no-op on
-      // a non-junction path), and a genuinely outside cwd is still caught by
-      // the per-service containment checks downstream.
+      if (!cwd && isIdeAppDirectory(process.cwd())) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `qwen_coworker: 'cwd' parameter is required. The MCP server process was started from an IDE application directory (\`${process.cwd()}\`), which cannot be used as a project workspace. Please provide the target repository or directory path in 'cwd'.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const workingDir = canonicalizePath(normalizeWorkspacePath(cwd ?? process.cwd()));
+
+      if (isIdeAppDirectory(workingDir)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `qwen_coworker: Refusing to use IDE application directory (\`${workingDir}\`) as workspace. Please specify a valid project directory in 'cwd'.`,
+            },
+          ],
+          isError: true,
+        };
+      }
       const resolvedSession = resolveSessionId(workingDir, session_id);
 
       const { taskId, taskEntry, executionPromise, totalTimeoutMs } = startAnserTask({
@@ -190,18 +213,58 @@ export function registerTools(server) {
         };
       }
 
-      const curlBin = IS_WINDOWS ? "curl.exe" : "curl";
-      const waitCmd = `${curlBin} -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
+      const waitCmdWin = `curl.exe -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
+      const waitCmdWsl = `curl -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
       const elapsedSec = Math.round(RACE_MS / 1000);
       const sessionEventsWin = path.join(QWEN_STATE_DIR, "sessions", resolvedSession, "events.jsonl");
       const sessionEventsWsl = toPosixWslPath(sessionEventsWin);
       const taskFileWin = path.join(TASK_DIR, `${taskId}.json`);
       const taskFileWsl = toPosixWslPath(taskFileWin);
+
+      const slotStatus = getSlotStatus(process.pid);
+      const taskStatus = taskEntry.status;
+
+      let statusCallout = "";
+      if (taskStatus === "queued") {
+        if (slotStatus.isAlienActive) {
+          const alienPids = [...new Set(slotStatus.alienHolders.map((h) => h.pid))].join(", ");
+          const alienTasks = slotStatus.alienHolders.map((h) => `\`${h.taskId}\``).join(", ");
+          statusCallout = [
+            `> [!IMPORTANT]`,
+            `> **Qwen Engine Status: IN USE BY ANOTHER SESSION (QUEUED)**`,
+            `> Qwen is currently executing tasks for another active session (tenant PID: ${alienPids}; active task: ${alienTasks}).`,
+            `> **DO NOT PANIC, CANCEL, OR RETRY.** The engine enforces single-tenant multi-slot exclusivity (up to 2 concurrent slots for the active session) to protect GPU KV cache and preserve speculative decoding throughput.`,
+            `> Your task \`${taskId}\` is safely queued at $0 cost and will execute automatically the instant the other session yields. Run the wait command below to block until complete.`,
+          ].join("\n");
+        } else if (slotStatus.isSameActive && slotStatus.isFullyOccupied) {
+          const sameTasks = slotStatus.sameHolders.map((h) => `\`${h.taskId}\``).join(", ");
+          statusCallout = [
+            `> [!NOTE]`,
+            `> **Qwen Engine Status: SESSION CAPACITY REACHED (QUEUED)**`,
+            `> Both concurrent execution slots are actively running tasks from this session (${sameTasks}).`,
+            `> Your task \`${taskId}\` is safely queued and will start as soon as an active task finishes. Run the wait command below to block until complete.`,
+          ].join("\n");
+        } else {
+          statusCallout = [
+            `> [!NOTE]`,
+            `> **Qwen Engine Status: QUEUED FOR EXECUTION**`,
+            `> Task \`${taskId}\` is queued and awaiting slot grant. Run the wait command below to block until complete.`,
+          ].join("\n");
+        }
+      } else {
+        statusCallout = [
+          `> [!TIP]`,
+          `> **Qwen Engine Status: ACTIVELY EXECUTING**`,
+          `> Task \`${taskId}\` is actively running on the local Qwen3.8-27B engine with full 245K context.`,
+        ].join("\n");
+      }
+
       const responseText = [
         `### Qwen Task Dispatched (Background Execution)`,
         `- **Task ID**: \`${taskId}\``,
         `- **Session**: \`${resolvedSession}\``,
         `- **Working Directory**: \`${workingDir}\``,
+        `- **Status**: \`${taskStatus}\``,
         `- **Time Elapsed**: ${elapsedSec}s (Task continuing in background with ${Math.round(totalTimeoutMs / 60000)} min budget)`,
         `- **Unified Event Ledger**:`,
         `  - Windows: \`${sessionEventsWin}\``,
@@ -210,12 +273,18 @@ export function registerTools(server) {
         `  - Windows: \`${taskFileWin}\``,
         `  - WSL: \`${taskFileWsl}\``,
         ``,
-        `> [!TIP]`,
-        `> **Zero-Turn Reactive Wait**: Execute the wait command via \`run_command\` (Antigravity) or \`Bash\` (Claude Code). It sleeps at $0 token cost and automatically wakes you on completion.`,
-        `> For extended background tasks, enforce the telemetry-grounded decaying check-in schedule via bounded wait windows (\`--max-time 3000\` -> \`1800\` -> \`900\` -> \`300\`):`,
-        `\`\`\`bash`,
-        `${waitCmd}`,
+        statusCallout,
+        ``,
+        `> **Zero-Turn Reactive Wait Commands (Blocks at $0 until task completes)**:`,
+        `> - **Windows (PowerShell / CMD)**:`,
+        `\`\`\`powershell`,
+        `${waitCmdWin}`,
         `\`\`\``,
+        `> - **WSL / Linux (Bash)**:`,
+        `\`\`\`bash`,
+        `${waitCmdWsl}`,
+        `\`\`\``,
+        `> For extended background tasks, enforce decaying check-ins via bounded wait windows (\`--max-time 3000\` -> \`1800\` -> \`900\` -> \`300\`).`,
         `> **Chain Invariant**: When chaining sequential task waits, always use \`&&\` (stop on error), never \`;\`.`,
         ``,
         `Or inspect status via tool: \`qwen_task(action: "status", task_id: "${taskId}")\`.`,
@@ -246,13 +315,13 @@ export function registerTools(server) {
       description: "Check status, retrieve output, cancel, or list background Qwen coworker tasks.",
       inputSchema: {
         action: z
-          .enum(["status", "cancel", "cancel_all", "list"])
+          .enum(["status", "cancel", "cancel_all", "list", "kill"])
           .describe("Action to perform on background tasks"),
         task_id: z
           .string()
           .optional()
           .describe(
-            "Task ID (required for 'status', optional for 'cancel'/'cancel_all' to cancel all tasks)"
+            "Task ID (required for 'status', optional for 'cancel'/'cancel_all'/'kill' to cancel all tasks)"
           ),
       },
       annotations: {
@@ -261,6 +330,9 @@ export function registerTools(server) {
     },
     async ({ action, task_id }) => {
       try {
+      if (action === "kill") {
+        action = "cancel";
+      }
       if (action === "list") {
         const merged = new Map();
         for (const dt of listTasksFromDisk()) {
@@ -366,16 +438,33 @@ export function registerTools(server) {
             isError: task.isError,
           };
         }
-        const curlBin = IS_WINDOWS ? "curl.exe" : "curl";
-        const hint = `\n\nWait command (blocks at $0 until done):\n\`${curlBin} -fS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait\``;
+        const waitCmdWin = `curl.exe -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait`;
+        const waitCmdWsl = `curl -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait`;
+        const hint = [
+          `\n\nWait Commands (blocks at $0 until task completes):`,
+          `- Windows: \`${waitCmdWin}\``,
+          `- WSL / Bash: \`${waitCmdWsl}\``,
+        ].join("\n");
+
         if (task.status === "queued") {
-          const holders = listTaskSlots().map((l) => l.taskId ?? `pid ${l.pid}`);
-          const heldBy = holders.length ? ` Currently held by: ${holders.join(", ")}.` : "";
+          const slotStatus = getSlotStatus(process.pid);
+          let queueDiagnosis = "";
+          if (slotStatus.isAlienActive) {
+            const alienPids = [...new Set(slotStatus.alienHolders.map((h) => h.pid))].join(", ");
+            const alienTasks = slotStatus.alienHolders.map((h) => `\`${h.taskId}\``).join(", ");
+            queueDiagnosis = ` Qwen is currently executing tasks for another active session (tenant PID: ${alienPids}; active task: ${alienTasks}).\n\n> [!NOTE]\n> **DO NOT PANIC, CANCEL, OR RETRY.** The engine enforces single-tenant multi-slot exclusivity (up to 2 concurrent slots for the active session) to avoid GPU KV cache thrashing. Your task is queued and will execute automatically as soon as the active session yields.`;
+          } else if (slotStatus.isSameActive && slotStatus.isFullyOccupied) {
+            const sameTasks = slotStatus.sameHolders.map((h) => `\`${h.taskId}\``).join(", ");
+            queueDiagnosis = ` Both execution slots are actively running tasks from this session (${sameTasks}). Your task will run as soon as one completes.`;
+          } else {
+            queueDiagnosis = ` Awaiting execution slot grant (MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS} machine-wide).`;
+          }
+
           return {
             content: [
               {
                 type: "text",
-                text: `Task \`${task_id}\` is QUEUED for a global execution slot (${elapsedS}s waiting; MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS} machine-wide).${heldBy}${hint}`,
+                text: `Task \`${task_id}\` is QUEUED (${elapsedS}s waiting).${queueDiagnosis}${hint}`,
               },
             ],
             isError: false,

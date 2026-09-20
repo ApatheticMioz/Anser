@@ -48,58 +48,91 @@ export function leaseReclaimable(lease) {
  * Acquires a global cross-process task slot lease.
  * Resolves with {file, refresh} once a slot is held, or null if the task was
  * cancelled while waiting.
+ *
+ * Single-Tenant Multi-Slot Invariant:
+ * Up to MAX_CONCURRENT_TASKS (default 2) are permitted machine-wide, but ALL
+ * concurrently active slots MUST belong to the SAME tenant (process.pid).
+ * If an alien tenant (lease.pid !== process.pid where lease is live) holds any slot,
+ * this process is blocked and queues at $0 until the alien tenant releases all slots.
  */
 export async function acquireTaskSlot(taskEntry) {
   try {
     fs.mkdirSync(SLOTS_DIR, { recursive: true });
   } catch {}
 
+  let lastHeartbeatUpdate = Date.now();
+
   for (;;) {
     if (taskEntry?.done) return null;
+
+    const now = Date.now();
+    // Keep queued task heartbeat fresh so observers/reaper don't treat it as dead while waiting
+    if (now - lastHeartbeatUpdate > 15_000) {
+      if (taskEntry) {
+        taskEntry.lastHeartbeatAt = now;
+      }
+      lastHeartbeatUpdate = now;
+    }
+
+    // Tenant affinity invariant: check if an alien tenant holds ANY active lease
+    let alienTenantActive = false;
     for (let i = 0; i < MAX_CONCURRENT_TASKS; i++) {
       const file = slotFilePath(i);
-      const claim = {
-        pid: process.pid,
-        taskId: taskEntry?.id ?? null,
-        at: Date.now(),
-        hb: Date.now(),
-      };
-      try {
-        const fd = fs.openSync(file, "wx"); // atomic claim - only one process wins
-        fs.writeSync(fd, JSON.stringify(claim));
-        fs.closeSync(fd);
-        const refresh = setInterval(() => {
-          try {
-            const cur = readLease(file);
-            // If someone stole our lease (>5min stall), stop refreshing; release
-            // will refuse to unlink a lease we no longer own.
-            if (cur && cur.pid !== process.pid) {
-              clearInterval(refresh);
-              return;
-            }
-            const tmp = `${file}.tmp_${Date.now()}_${process.pid}`;
-            fs.writeFileSync(
-              tmp,
-              JSON.stringify({ ...(cur ?? claim), pid: process.pid, hb: Date.now() }),
-              "utf8"
-            );
-            fs.renameSync(tmp, file);
-          } catch {}
-        }, SLOT_HEARTBEAT_MS);
-        refresh.unref();
-        return { file, refresh };
-      } catch (err) {
-        if (err.code !== "EEXIST") continue; // transient fs error: try next slot
-        const lease = readLease(file);
-        if (!leaseReclaimable(lease)) continue;
-        // Reclaim: atomic rename
-        const dead = `${file}.dead_${Date.now()}_${process.pid}`;
-        try {
-          fs.renameSync(file, dead);
-          fs.rmSync(dead, { force: true });
-        } catch {}
+      const lease = readLease(file);
+      if (lease && !leaseReclaimable(lease) && lease.pid !== process.pid) {
+        alienTenantActive = true;
+        break;
       }
     }
+
+    if (!alienTenantActive) {
+      for (let i = 0; i < MAX_CONCURRENT_TASKS; i++) {
+        const file = slotFilePath(i);
+        const claim = {
+          pid: process.pid,
+          taskId: taskEntry?.id ?? null,
+          cwd: taskEntry?.cwd ?? null,
+          at: Date.now(),
+          hb: Date.now(),
+        };
+        try {
+          const fd = fs.openSync(file, "wx"); // atomic claim - only one process wins
+          fs.writeSync(fd, JSON.stringify(claim));
+          fs.closeSync(fd);
+          const refresh = setInterval(() => {
+            try {
+              const cur = readLease(file);
+              // If someone stole our lease (>5min stall), stop refreshing; release
+              // will refuse to unlink a lease we no longer own.
+              if (cur && cur.pid !== process.pid) {
+                clearInterval(refresh);
+                return;
+              }
+              const tmp = `${file}.tmp_${Date.now()}_${process.pid}`;
+              fs.writeFileSync(
+                tmp,
+                JSON.stringify({ ...(cur ?? claim), pid: process.pid, hb: Date.now() }),
+                "utf8"
+              );
+              fs.renameSync(tmp, file);
+            } catch {}
+          }, SLOT_HEARTBEAT_MS);
+          refresh.unref();
+          return { file, refresh };
+        } catch (err) {
+          if (err.code !== "EEXIST") continue; // transient fs error: try next slot
+          const lease = readLease(file);
+          if (!leaseReclaimable(lease)) continue;
+          // Reclaim: atomic rename
+          const dead = `${file}.dead_${Date.now()}_${process.pid}`;
+          try {
+            fs.renameSync(file, dead);
+            fs.rmSync(dead, { force: true });
+          } catch {}
+        }
+      }
+    }
+
     await new Promise((r) => setTimeout(r, SLOT_POLL_MS));
   }
 }
@@ -154,6 +187,38 @@ export function listTaskSlots() {
     if (lease && !leaseReclaimable(lease)) out.push(lease);
   }
   return out;
+}
+
+/**
+ * Returns deterministic slot status distinguishing same-session vs alien-session usage.
+ * Used for anti-panic status telemetry and orchestrator wait advisories.
+ */
+export function getSlotStatus(currentPid = process.pid) {
+  const slots = [];
+  const alienHolders = [];
+  const sameHolders = [];
+  for (let i = 0; i < MAX_CONCURRENT_TASKS; i++) {
+    const file = slotFilePath(i);
+    const lease = readLease(file);
+    if (lease && !leaseReclaimable(lease)) {
+      const entry = { slot: i, ...lease };
+      slots.push(entry);
+      if (lease.pid === currentPid) {
+        sameHolders.push(entry);
+      } else {
+        alienHolders.push(entry);
+      }
+    }
+  }
+  return {
+    slots,
+    totalCapacity: MAX_CONCURRENT_TASKS,
+    alienHolders,
+    sameHolders,
+    isAlienActive: alienHolders.length > 0,
+    isSameActive: sameHolders.length > 0,
+    isFullyOccupied: slots.length >= MAX_CONCURRENT_TASKS,
+  };
 }
 
 /**
