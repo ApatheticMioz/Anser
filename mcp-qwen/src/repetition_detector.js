@@ -50,9 +50,10 @@ const DIVIDER_CHARS = new Set(["-", "=", "*", "#", " ", "\t", "\n", "_"]);
 // outside this set and are still caught by the block detector.
 const PURE_RUN_CHARS = new Set([...CODE_REPEAT_CHARS, ...DIVIDER_CHARS]);
 
-const CODE_LIMIT = 500;
-const DIVIDER_LIMIT = 120;
-const DEFAULT_LIMIT = 35;
+const CODE_LIMIT = 1000;
+const DIVIDER_LIMIT = 250;
+const DEFAULT_LIMIT = 100;
+const PATTERN_REPEAT_COUNT = 40;
 
 export class RepetitionDetector {
   constructor() {
@@ -88,17 +89,16 @@ export class RepetitionDetector {
     }
 
     // 2. Multi-character pattern repetition (e.g. repeating phrases or tokens)
-    this.rolling = (this.rolling + text).slice(-600);
+    this.rolling = (this.rolling + text).slice(-1500);
     const len = this.rolling.length;
-    for (let unitLen = 2; unitLen <= 24; unitLen++) {
-      const neededLen = unitLen * 18;
+    for (let unitLen = 4; unitLen <= 32; unitLen++) {
+      const neededLen = unitLen * PATTERN_REPEAT_COUNT;
       if (len < neededLen) continue;
       const unit = this.rolling.slice(-unitLen);
       // Skip "pure" runs: units made entirely of code-significant or
-      // divider/whitespace characters (e.g. "++", "====", "////"). These are
+      // divider/whitespace characters (e.g. "++", "====", "////", "|---|"). These are
       // governed by the single-character tiered limits above, so the
-      // block-level detector must not also trip on them. Genuine multi-char
-      // phrase loops (letters outside this set) are still caught.
+      // block-level detector must not also trip on them.
       let isPureRun = true;
       for (let k = 0; k < unit.length; k++) {
         if (!PURE_RUN_CHARS.has(unit[k])) {
@@ -108,7 +108,7 @@ export class RepetitionDetector {
       }
       if (isPureRun) continue;
       let isRep = true;
-      for (let r = 1; r < 18; r++) {
+      for (let r = 1; r < PATTERN_REPEAT_COUNT; r++) {
         const seg = this.rolling.slice(len - (r + 1) * unitLen, len - r * unitLen);
         if (seg !== unit) {
           isRep = false;
@@ -116,7 +116,7 @@ export class RepetitionDetector {
         }
       }
       if (isRep) {
-        return { type: "pattern", pattern: unit, count: 18 };
+        return { type: "pattern", pattern: unit, count: PATTERN_REPEAT_COUNT };
       }
     }
 

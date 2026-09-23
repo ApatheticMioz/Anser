@@ -23,43 +23,45 @@ const TEST_PROXY_PORT = 18992;
 // model reports pass through, while true degeneracy still trips.
 // ---------------------------------------------------------------------------
 function testRepetitionTiering() {
-  // 120 consecutive '+' (a code char) must PASS (limit 500).
+  // 120 consecutive '+' (a code char) must PASS (limit 1000).
   let d = new RepetitionDetector();
   assert.strictEqual(
     d.feed("+".repeat(120)),
     null,
-    "120 consecutive '+' must pass (code char, limit 500)"
+    "120 consecutive '+' must pass (code char, limit 1000)"
   );
 
-  // 400 consecutive '+' must still PASS (below the 500 code limit).
+  // 800 consecutive '+' must still PASS (below the 1000 code limit).
   d = new RepetitionDetector();
   assert.strictEqual(
-    d.feed("+".repeat(400)),
+    d.feed("+".repeat(800)),
     null,
-    "400 consecutive '+' must pass (code char, limit 500)"
+    "800 consecutive '+' must pass (code char, limit 1000)"
   );
 
-  // 800 consecutive '+' must TRIP the breaker (exceeds the 500 code limit).
+  // 1200 consecutive '+' must TRIP the breaker (exceeds the 1000 code limit).
   d = new RepetitionDetector();
-  const trip = d.feed("+".repeat(800));
-  assert.ok(trip, "800 consecutive '+' must trip the breaker");
-  assert.strictEqual(trip.type, "character", "800 '+' trips as a character repeat");
-  assert.strictEqual(trip.pattern, "+", "800 '+' pattern is '+'");
+  const trip = d.feed("+".repeat(1200));
+  assert.ok(trip, "1200 consecutive '+' must trip the breaker");
+  assert.strictEqual(trip.type, "character", "1200 '+' trips as a character repeat");
+  assert.strictEqual(trip.pattern, "+", "1200 '+' pattern is '+'");
 
   // Regression guard: a true degeneracy char (a plain letter, NOT in the
-  // code set) still trips at the strict default limit of 35.
+  // code set) still trips at the default limit of 100.
   d = new RepetitionDetector();
-  const letter = d.feed("a".repeat(40));
-  assert.ok(letter, "40 consecutive 'a' must still trip (default limit 35)");
+  assert.strictEqual(d.feed("a".repeat(99)), null, "99 consecutive 'a' must pass (default limit 100)");
+  d = new RepetitionDetector();
+  const letter = d.feed("a".repeat(100));
+  assert.ok(letter, "100 consecutive 'a' must still trip (default limit 100)");
   assert.strictEqual(letter.type, "character");
 
-  // Whitespace/divider (e.g. '-') keeps the 120 limit: 119 passes, 120 trips.
+  // Whitespace/divider (e.g. '-') keeps the 250 limit: 249 passes, 250 trips.
   d = new RepetitionDetector();
-  assert.strictEqual(d.feed("-".repeat(119)), null, "119 '-' must pass (divider limit 120)");
+  assert.strictEqual(d.feed("-".repeat(249)), null, "249 '-' must pass (divider limit 250)");
   d = new RepetitionDetector();
-  assert.ok(d.feed("-".repeat(120)), "120 '-' must trip (divider limit 120)");
+  assert.ok(d.feed("-".repeat(250)), "250 '-' must trip (divider limit 250)");
 
-  console.log("[PASS] Repetition tiering: 120/400 '+' pass, 800 '+' trips, 'a' trips at 35, '-' trips at 120.");
+  console.log("[PASS] Repetition tiering: 120/800 '+' pass, 1200 '+' trips, 'a' trips at 100, '-' trips at 250.");
 }
 
 async function runTests() {

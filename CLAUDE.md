@@ -130,17 +130,15 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 1. **Direct Action on Target Scope**:
    - Mutation turns are for code editing, not open-ended re-auditing. Direct the coworker straight to the target component slice.
    - **No Dependency Spelunking**: Do NOT inspect `node_modules`, `.venv`, `vendor`, or `target` directories unless a concrete compiler/runtime error specifically demands type inspection.
-2. **Telemetry-Grounded Decaying Supervisory Check-Ins**:
+2. **Telemetry-Grounded Supervisory Check-Ins (Claude Code 550s Safety Buffer)**:
    - Active, streaming tasks are protected by an automatic Inactivity Watchdog against true hangs; they are never killed by arbitrary wall-clock timers.
-   - For extended background tasks, the supervisor grants an initial deep-thinking window ($T_0=50\text{m}$), then checks in on a decaying interval cadence ($\Delta t = 30\text{m} \to 15\text{m} \to 5\text{m}$; checkpoints at $50\text{m}$, $80\text{m}$, $95\text{m}$, $100\text{m}$) using bounded wait commands:
+   - **Claude Code 600s Tool Timeout Defense**: Claude Code enforces a strict 600-second (10-minute) tool-call timeout. Running an unbounded or 3,000s curl command causes Claude Code to prematurely abort or background the tool call.
+   - Use a bounded wait command with `--max-time 550` (9m 10s, granting a 50-second safety cushion under Claude Code's 600s tool limit):
      ```bash
-     curl -fsS --max-time <seconds> --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:18021/task/<id>/wait
+     curl -fsS --max-time 550 --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:18021/task/<id>/wait
      ```
-     - Initial wait window: `--max-time 3000` (50m)
-     - Second wait window: `--max-time 1800` (30m $\to$ cumulative 80m)
-     - Third wait window: `--max-time 900` (15m $\to$ cumulative 95m)
-     - Final wait window: `--max-time 300` (5m $\to$ cumulative 100m)
-   - On timeout wakeup (exit code 28), the supervisor samples telemetry via `qwen_task(action: "status")` (`toolCallsCount`, `fileOps`, `lastActivitySecAgo`) to verify forward progress before re-arming the next wait interval.
+   - If the task is still executing after 550s, `curl` exits cleanly with code 28 (timeout).
+   - On timeout wakeup (exit code 28), Claude Code samples telemetry via `qwen_task(action: "status")` (`toolCallsCount`, `fileOps`, `lastActivitySecAgo`) to verify forward progress, and immediately re-arms another `--max-time 550` wait window.
    - **Never cancel healthy work**: A cancel destroys 100% of an in-flight task's accumulated context and tool progress. Cancel only on explicit user instruction, budget exhaustion, or a confirmed wedge (heartbeat stale beyond the inactivity window AND zero tool-call progress).
    - **Telemetry before any kill**: Advancing `toolCallsCount` means healthy regardless of wall-clock age. Silence in the orchestrator transcript is not evidence of death; verify from session events.
 

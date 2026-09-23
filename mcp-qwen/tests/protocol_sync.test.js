@@ -97,13 +97,21 @@ test("protocol_sync: §3.3 Anti-Spoon-Feeding contract is byte-identical", () =>
   assert.equal(geminiSec, claudeSec, "§3.3 must be byte-identical in GEMINI.md and CLAUDE.md");
 });
 
-test("protocol_sync: §4 decaying wait window schedule is identical", () => {
+test("protocol_sync: §4 wait window schedules respect client execution limits", () => {
   const geminiContent = fs.readFileSync(geminiPath, "utf8");
   const claudeContent = fs.readFileSync(claudePath, "utf8");
 
-  const scheduleSnippet = "--max-time 3000` (50m)\n     - Second wait window: `--max-time 1800` (30m";
-  assert.ok(geminiContent.includes(scheduleSnippet), "GEMINI.md must contain decaying wait schedule");
-  assert.ok(claudeContent.includes(scheduleSnippet), "CLAUDE.md must contain decaying wait schedule");
+  // GEMINI.md is for Antigravity IDE (Gemini Flash orchestrator with long-running background tasks)
+  const geminiScheduleSnippet = "--max-time 3000` (50m)\n     - Second wait window: `--max-time 1800` (30m";
+  assert.ok(geminiContent.includes(geminiScheduleSnippet), "GEMINI.md must contain decaying wait schedule");
+
+  // CLAUDE.md is for Claude Code (strict 600s client tool timeout, requiring 550s safety buffer)
+  assert.ok(claudeContent.includes("--max-time 550"), "CLAUDE.md must specify --max-time 550 safety buffer");
+  assert.ok(claudeContent.includes("Claude Code 600s Tool Timeout Defense"), "CLAUDE.md must document tool timeout defense");
+
+  // Both must enforce telemetry verification before re-arming
+  assert.ok(geminiContent.includes('qwen_task(action: "status")'), "GEMINI.md must require status telemetry check");
+  assert.ok(claudeContent.includes('qwen_task(action: "status")'), "CLAUDE.md must require status telemetry check");
 });
 
 test("protocol_sync: Rule 0 systematically forbids raw exploration hoarding on Turn 1", () => {

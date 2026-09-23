@@ -80,32 +80,30 @@ export const FIRST_TOKEN_TIMEOUT_MS = (() => {
 // is overridable via QWEN_STREAM_IDLE_TIMEOUT_MS. This is a DIFFERENT axis
 // from max_tokens (generation-length cap); it only bounds how long the stream
 // may go SILENT before we declare the connection dead.
-export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 900_000; // 15 min
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 1_200_000; // 20 min
 export const STREAM_IDLE_TIMEOUT_MS = (() => {
   const parsed = parseInt(process.env.QWEN_STREAM_IDLE_TIMEOUT_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_TIMEOUT_MS;
 })();
 
-// M6a (P1, F6/N3): depth-aware idle timeout. The SHALLOW tier above (900s) is
+// M6a (P1, F6/N3): depth-aware idle timeout. The SHALLOW tier above (1200s) is
 // correct for normal turns, but a DEEP-context prompt (estimated prompt tokens
-// >= STREAM_IDLE_DEPTH_TOKENS) legitimately spends >15 min in a single healthy
-// thinking turn before any content is emitted — the 900s watchdog was aborting
-// those mid-deliberation (3 observed deaths, all >100k ctx: anomaly-probe-s2
-// 2410s, paper_history, ui_ovh_review_p5; worst healthy turn 978s). When the
-// prompt is deep, the provider arms this longer DEEP window instead so a
-// healthy long-thinking turn is not killed; the SHALLOW tier still bounds
-// normal turns. Both are overridable via env for tests / operators.
-export const DEFAULT_STREAM_IDLE_TIMEOUT_MS_DEEP = 1_800_000; // 30 min
+// >= STREAM_IDLE_DEPTH_TOKENS) legitimately spends >20 min in a single healthy
+// thinking turn before any content is emitted. When the prompt is deep, the
+// provider arms this longer DEEP window (2400s / 40 min) instead so a healthy
+// long-thinking turn is not killed; the SHALLOW tier still bounds normal turns.
+// Both are overridable via env for tests / operators.
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS_DEEP = 2_400_000; // 40 min
 export const STREAM_IDLE_TIMEOUT_MS_DEEP = (() => {
   const parsed = parseInt(process.env.QWEN_STREAM_IDLE_TIMEOUT_DEEP_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_TIMEOUT_MS_DEEP;
 })();
 
 // M6a: prompt-token depth threshold. A turn whose estimated prompt tokens reach
-// this value is treated as "deep" and gets the DEEP idle tier. Default 100k
-// matches the observed death signature (all three aborted deep turns were
-// >100k ctx). Overridable via QWEN_STREAM_IDLE_DEPTH_TOKENS.
-export const DEFAULT_STREAM_IDLE_DEPTH_TOKENS = 100_000;
+// this value is treated as "deep" and gets the DEEP idle tier. Default 35k
+// ensures any multi-turn research or audit session receives the generous 40m window.
+// Overridable via QWEN_STREAM_IDLE_DEPTH_TOKENS.
+export const DEFAULT_STREAM_IDLE_DEPTH_TOKENS = 35_000;
 export const STREAM_IDLE_DEPTH_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_STREAM_IDLE_DEPTH_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_DEPTH_TOKENS;
@@ -387,4 +385,14 @@ export const CONTEXT_WARN_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_CONTEXT_WARN_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_WARN_TOKENS;
 })();
+
+// Context high-watermark threshold (default 180,000 tokens out of 245,760 nominal context ceiling).
+// When promptTokens reaches this watermark, the runner emits a one-shot advisory recommending
+// session rollover on the next turn, preventing unhandled context exhaustion crashes.
+export const DEFAULT_CONTEXT_HIGH_WATERMARK_TOKENS = 180000;
+export const CONTEXT_HIGH_WATERMARK_TOKENS = (() => {
+  const parsed = parseInt(process.env.QWEN_CONTEXT_HIGH_WATERMARK_TOKENS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_HIGH_WATERMARK_TOKENS;
+})();
+
 

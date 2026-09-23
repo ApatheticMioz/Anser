@@ -115,6 +115,7 @@ export class VllmProviderService {
     maxTokens = this.defaultMaxTokens,
     reasoningEffort,
     signal,
+    sessionId,
     onToken,
     onMetrics,
   }) {
@@ -212,6 +213,7 @@ export class VllmProviderService {
         // for the context-headroom clamp) so _consumeStream can fall back to it
         // when the engine does not emit a stream_options usage chunk.
         estimatedPromptTokens,
+        sessionId,
         onToken,
         onMetrics,
         controller: streamController,
@@ -253,6 +255,7 @@ export class VllmProviderService {
     decoder,
     t0,
     estimatedPromptTokens,
+    sessionId,
     onToken,
     onMetrics,
     controller,
@@ -317,8 +320,14 @@ export class VllmProviderService {
           readResult = await reader.read();
         } catch (err) {
           if (idleTimedOut) {
+            const sid = sessionId || "SESSION_ID";
+            const inspectCmd = `node mcp-qwen/src/harness/services/event_logger.js ${sid} 5`;
             throw new Error(
-              `vLLM stream idle timeout (${idleTier} tier, ${idleTimeoutMs}ms): no meaningful SSE frame`
+              `vLLM stream idle timeout (${idleTier} tier, ${idleTimeoutMs}ms): no meaningful SSE tokens emitted within window.\n` +
+              `[Orchestrator Advisory]: There might have been an issue (e.g. extended GPU contention or deliberation).\n` +
+              `You can run:\n` +
+              `  ${inspectCmd}\n` +
+              `to inspect the last few traces, and decide whether to roll into a new session (e.g. '${sid}_stage2'), or use the same session and same effort to finish/continue.`
             );
           }
           throw err;

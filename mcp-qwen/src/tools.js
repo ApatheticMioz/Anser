@@ -47,6 +47,7 @@ import {
   hasLiveWork,
 } from "./task_registry.js";
 import { startAnserTask, resolveSessionId } from "./anser_runner.js";
+import { formatTelemetrySummary } from "./telemetry.js";
 
 export function registerTools(server) {
   // Wire the heal backstop: refuse to stop/reboot the engine while live work
@@ -315,8 +316,8 @@ export function registerTools(server) {
       description: "Check status, retrieve output, cancel, or list background Qwen coworker tasks.",
       inputSchema: {
         action: z
-          .enum(["status", "cancel", "cancel_all", "list", "kill"])
-          .describe("Action to perform on background tasks"),
+          .enum(["status", "cancel", "cancel_all", "list", "kill", "stats"])
+          .describe("Action to perform on background tasks (status, cancel, list, or stats for cumulative token usage/savings)"),
         task_id: z
           .string()
           .optional()
@@ -332,6 +333,17 @@ export function registerTools(server) {
       try {
       if (action === "kill") {
         action = "cancel";
+      }
+      if (action === "stats") {
+        const { summary, stats } = formatTelemetrySummary();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${summary}\n\n${JSON.stringify(stats, null, 2)}`,
+            },
+          ],
+        };
       }
       if (action === "list") {
         const merged = new Map();

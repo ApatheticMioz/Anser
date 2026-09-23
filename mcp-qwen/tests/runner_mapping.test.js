@@ -23,6 +23,7 @@ const FAILURE_STATUSES = [
   "length_limit_reached",
   "degenerate_response_truncated",
   "turn_limit_reached",
+  "context_exhausted",
   "aborted",
 ];
 const FAIL_CLOSED_INPUTS = [undefined, null, "", "COMPLETED", "Completed", "ok", "success"];

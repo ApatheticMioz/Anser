@@ -35,9 +35,11 @@ import {
   SESSION_TURNS_WARN,
   SESSION_TURNS_RECOMMEND,
   CONTEXT_WARN_TOKENS,
+  CONTEXT_HIGH_WATERMARK_TOKENS,
   PROMPT_BUDGET_CHARS,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
+import { recordTurnTelemetry } from "../telemetry.js";
 
 // M4: probe-budget watchdog (issue #11 recs 1+2; F4/F12/F14). On open-ended
 // layout targets the model ran 30+ consecutive inline-python measurement bash
@@ -308,6 +310,7 @@ export class AnserRunner {
     let sessionWarnLatched = false;
     let sessionRecommendLatched = false;
     let contextDepthLatched = false;
+    let contextHighWatermarkLatched = false;
 
     // --- M7 (P2, F1/F2): dispatch prompt-budget telemetry ------------------
     // The audit's failure cluster (27/45 dispatches over budget; monolithic
@@ -384,12 +387,20 @@ export class AnserRunner {
           // QWEN_REASONING_EFFORT env default when it is absent.
           reasoningEffort,
           signal,
+          sessionId,
           onToken: (tok) => {
             if (onToken) onToken(tok);
           },
           onMetrics: (m) => {
             totalCompletionTokens += m.completionTokens;
             if (onMetrics) onMetrics(m);
+            try {
+              recordTurnTelemetry({
+                completionTokens: m.completionTokens || 0,
+                promptTokens: m.promptTokens || 0,
+                effort: reasoningEffort || "medium",
+              });
+            } catch {}
           },
         });
 
@@ -589,6 +600,32 @@ export class AnserRunner {
             promptTokens: turnResult.metrics.promptTokens,
             threshold: CONTEXT_WARN_TOKENS,
             ...(probeStreak > 0 ? { probeStreakActive: true } : {}),
+          });
+        }
+
+        // --- Context High-Watermark Advisory (180,000 tokens) ---------------
+        // When promptTokens reaches the 180k high-watermark (~73% of nominal 245K
+        // context ceiling), emit a one-shot advisory event and inject an in-band
+        // rollover advisory to guide the model to conclude its deliverable rather
+        // than crashing with unhandled ContextExhaustedError / 400 Bad Request.
+        if (
+          !contextHighWatermarkLatched &&
+          typeof turnResult.metrics?.promptTokens === "number" &&
+          turnResult.metrics.promptTokens >= CONTEXT_HIGH_WATERMARK_TOKENS
+        ) {
+          contextHighWatermarkLatched = true;
+          logger.append({
+            type: "context_high_watermark",
+            promptTokens: turnResult.metrics.promptTokens,
+            threshold: CONTEXT_HIGH_WATERMARK_TOKENS,
+          });
+          messages.push({
+            role: "user",
+            content:
+              `[Context High-Watermark Advisory] Prompt context has reached ${turnResult.metrics.promptTokens} tokens ` +
+              `(high-watermark: ${CONTEXT_HIGH_WATERMARK_TOKENS}, max ceiling: 245,760). ` +
+              `Wrap up your deliverable and return your final response now. ` +
+              `Advise the user/orchestrator to roll into a fresh session_id for subsequent dispatches to prevent context exhaustion.`,
           });
         }
 
@@ -819,9 +856,23 @@ export class AnserRunner {
         }
       }
     } catch (err) {
-      status = "failed";
-      finalText = `Anser execution error: ${err.message}`;
-      logger.append({ type: "session_error", error: err.message, stack: err.stack });
+      const isContextExhausted = /maximum context length|context length exceeded|context_exhausted/i.test(err.message || "");
+      if (isContextExhausted) {
+        status = "context_exhausted";
+        finalText =
+          `[Context Exhausted] The session's cumulative context exceeded the model's 245,760 token ceiling.\n` +
+          `Prior session events and tool outputs remain intact in the local event ledger.\n` +
+          `Action: Roll into a fresh session_id (e.g. "${sessionId}_stage2") for subsequent dispatches.`;
+        logger.append({
+          type: "session_error",
+          error: "context_exhausted",
+          detail: err.message,
+        });
+      } else {
+        status = "failed";
+        finalText = `Anser execution error: ${err.message}`;
+        logger.append({ type: "session_error", error: err.message, stack: err.stack });
+      }
     } finally {
       const durationMs = Date.now() - t0;
       logger.append({

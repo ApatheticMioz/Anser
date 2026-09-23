@@ -122,6 +122,23 @@ async function runTests() {
   }
 
   // ------------------------------------------------------------------
+  // Test 3b: qwen_task stats — should return formatted usage stats
+  // ------------------------------------------------------------------
+  console.log("\n[Test 3b] qwen_task: stats (success path)");
+  {
+    const result = await handlers["qwen_task"]({ action: "stats" });
+    ok(result.isError !== true, "isError is not true on success");
+    ok(
+      Array.isArray(result.content) && result.content.length === 1,
+      "content is a single-element array"
+    );
+    ok(
+      result.content[0].text.includes("Lifetime Qwen Usage"),
+      "stats includes Lifetime Qwen Usage summary"
+    );
+  }
+
+  // ------------------------------------------------------------------
   // Test 4: qwen_server status — should not throw even when engine is down
   // ------------------------------------------------------------------
   console.log("\n[Test 4] qwen_server: status (engine may be down)");

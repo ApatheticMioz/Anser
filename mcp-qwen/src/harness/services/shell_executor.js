@@ -200,23 +200,28 @@ export class ShellExecutorService {
         });
       }, timeout);
 
-      const MAX_OUTPUT_BYTES = 4 * 1024 * 1024; // 4MB
+      const MAX_OUTPUT_BYTES = 48 * 1024; // 48KB (~12k tokens, industry standard)
+      const MAX_CAPTURE_BYTES = 256 * 1024; // 256KB buffer ceiling to bound process memory
+
+      function truncateHeadTail(text) {
+        if (!text || Buffer.byteLength(text, "utf8") <= MAX_OUTPUT_BYTES) return text;
+        const half = Math.floor(MAX_OUTPUT_BYTES / 2);
+        const head = text.slice(0, half);
+        const tail = text.slice(-half);
+        const totalKb = (Buffer.byteLength(text, "utf8") / 1024).toFixed(1);
+        const retainedKb = (MAX_OUTPUT_BYTES / 1024).toFixed(1);
+        return `${head}\n\n... [Output truncated: ${retainedKb}KB retained out of ${totalKb}KB. Showing head and tail. Use grep, head, or tail to isolate specific lines] ...\n\n${tail}`;
+      }
 
       child.stdout.on("data", (chunk) => {
-        if (stdout.length < MAX_OUTPUT_BYTES) {
+        if (stdout.length < MAX_CAPTURE_BYTES) {
           stdout += chunk.toString("utf8");
-          if (stdout.length >= MAX_OUTPUT_BYTES) {
-            stdout += "\n...[stdout truncated at 4MB]";
-          }
         }
       });
 
       child.stderr.on("data", (chunk) => {
-        if (stderr.length < MAX_OUTPUT_BYTES) {
+        if (stderr.length < MAX_CAPTURE_BYTES) {
           stderr += chunk.toString("utf8");
-          if (stderr.length >= MAX_OUTPUT_BYTES) {
-            stderr += "\n...[stderr truncated at 4MB]";
-          }
         }
       });
 
@@ -225,8 +230,8 @@ export class ShellExecutorService {
         settled = true;
         clearTimeout(timer);
         resolve({
-          stdout: stdout.trim(),
-          stderr: (stderr + `\n[Spawn error: ${err.message}]`).trim(),
+          stdout: truncateHeadTail(stdout).trim(),
+          stderr: truncateHeadTail(stderr + `\n[Spawn error: ${err.message}]`).trim(),
           exitCode: 1,
           timedOut: false,
           latencyMs: Date.now() - t0,
@@ -239,8 +244,8 @@ export class ShellExecutorService {
         clearTimeout(timer);
         const resolvedExitCode = code !== null ? code : signal ? 137 : 1;
         resolve({
-          stdout: stdout.trim(),
-          stderr: (stderr + (signal ? `\n[Process terminated by signal ${signal}]` : "")).trim(),
+          stdout: truncateHeadTail(stdout).trim(),
+          stderr: truncateHeadTail(stderr + (signal ? `\n[Process terminated by signal ${signal}]` : "")).trim(),
           exitCode: resolvedExitCode,
           timedOut: false,
           latencyMs: Date.now() - t0,

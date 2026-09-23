@@ -58,6 +58,7 @@ import { injectSkills } from "./skills.js";
  *                                   was exhausted. The original partial+marker
  *                                   is preserved in finalText for honesty.
  *   - "turn_limit_reached"        — the maxTurns cap was hit.
+ *   - "context_exhausted"         — prompt context exceeded 245K token ceiling.
  *   - "aborted"                   — the client cancelled the run.
  *   - unknown / null / undefined  — fail closed: treat as an error.
  *

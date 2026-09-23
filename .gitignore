@@ -61,3 +61,5 @@ benchmarks/swe-rebench/__pycache__/
 .benchmark_tmp/
 .canary_tmp/
 mcp-qwen/.canary_tmp/
+
+evals-faq.pdf

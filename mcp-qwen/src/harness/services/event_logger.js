@@ -187,3 +187,65 @@ export function eventLoggerPlugin(ctx, options = {}) {
     logger.saveMetadata({ status: "closed" });
   };
 }
+
+/**
+ * Formats a concise summary of the last N events in a session for operator inspection.
+ * Works natively across Windows and WSL.
+ * @param {string} sessionId
+ * @param {number} [lastN=5]
+ * @returns {string}
+ */
+export function inspectSession(sessionId, lastN = 5) {
+  const logger = new EventLoggerService({ sessionId });
+  const events = logger.readAll();
+  if (events.length === 0) {
+    return `[EventLogger] No events found for session '${sessionId}' in ${logger.logFile}`;
+  }
+  const recent = events.slice(-lastN);
+  const lines = [
+    `=== Session '${sessionId}' (showing last ${recent.length} of ${events.length} events) ===`,
+  ];
+  for (let i = 0; i < recent.length; i++) {
+    const ev = recent[i];
+    const idx = events.length - recent.length + i + 1;
+    let detail = "";
+    if (ev.type === "tool_result") {
+      const resStr =
+        typeof ev.result === "string"
+          ? ev.result
+          : JSON.stringify(ev.result ?? ev.error ?? "");
+      detail = `tool=${ev.toolName || ""} resultChars=${resStr.length} ${
+        ev.error ? `[ERROR: ${ev.error}]` : ""
+      }`;
+    } else if (ev.type === "assistant_message") {
+      const tc =
+        ev.toolCalls?.map((t) => t.name || t.function?.name).join(", ") || "none";
+      const preview = (ev.content || "").slice(0, 80).replace(/\r?\n/g, " ");
+      detail = `toolCalls=[${tc}] contentPreview="${preview}..."`;
+    } else if (ev.type === "user_message") {
+      const preview = (ev.content || "").slice(0, 80).replace(/\r?\n/g, " ");
+      detail = `contentPreview="${preview}..."`;
+    } else if (ev.type === "context_high_watermark" || ev.type === "context_depth_warning") {
+      detail = `promptTokens=${ev.promptTokens} threshold=${ev.threshold}`;
+    } else {
+      detail = JSON.stringify(ev);
+    }
+    lines.push(`  [#${idx}] ${ev.timestamp} type=${ev.type} | ${detail}`);
+  }
+  return lines.join("\n");
+}
+
+if (
+  process.argv[1] &&
+  (process.argv[1].endsWith("event_logger.js") ||
+    process.argv[1].endsWith("event_logger"))
+) {
+  const targetSession = process.argv[2];
+  const count = parseInt(process.argv[3] || "5", 10);
+  if (!targetSession) {
+    console.log("Usage: node event_logger.js <sessionId> [eventCount]");
+    process.exit(1);
+  }
+  console.log(inspectSession(targetSession, count));
+}
+

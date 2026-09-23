@@ -140,7 +140,7 @@ tools = {
             '$schema': 'http://json-schema.org/draft-07/schema#',
             'type': 'object',
             'properties': {
-                'action': {'type': 'string', 'enum': ['status', 'cancel', 'cancel_all', 'list', 'kill'], 'description': 'Action to perform on background tasks'},
+                'action': {'type': 'string', 'enum': ['status', 'cancel', 'cancel_all', 'list', 'kill', 'stats'], 'description': 'Action to perform on background tasks (status, cancel, list, or stats for cumulative token usage/savings)'},
                 'task_id': {'type': 'string', 'description': 'Task ID (required for \'status\', optional for \'cancel\'/\'cancel_all\'/\'kill\' to cancel all tasks)'}
             },
             'required': ['action']
@@ -180,7 +180,7 @@ To dispatch work to the local autonomous Qwen3.8-27B coworker, call `call_mcp_to
 - **ServerName**: `"qwen38-local"`
 - **ToolName**: `"qwen_task"`
 - **Arguments**:
-  - `action`: `"status"` | `"cancel"` | `"kill"` (alias for cancel) | `"cancel_all"` | `"list"`
+  - `action`: `"status"` | `"cancel"` | `"kill"` (alias for cancel) | `"cancel_all"` | `"list"` | `"stats"`
   - `task_id` (string): ID of background task (required for status/cancel/kill).
 
 ### Tool 3: `qwen_server`

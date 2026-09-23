@@ -202,19 +202,21 @@ async function vectorDeepSilent() {
 // ---------------------------------------------------------------------------
 // Vector (3): BOUNDARY at exactly 100k tokens (the DEFAULT depth threshold).
 // With no QWEN_STREAM_IDLE_DEPTH_TOKENS override (default 100_000):
-//   - est == 100_000  -> deep tier  (>= boundary)
-//   - est == 99_999   -> shallow tier
+// Vector (3): BOUNDARY at exactly 35k tokens (the DEFAULT depth threshold).
+// With no QWEN_STREAM_IDLE_DEPTH_TOKENS override (default 35_000):
+//   - est == 35_000   -> deep tier  (>= boundary)
+//   - est == 34_999   -> shallow tier
 // The stream COMPLETES (so no rejection); the tier is read from
 // metrics.streamIdleTier / metrics.streamIdleTimeoutMs.
 // ---------------------------------------------------------------------------
 async function vectorBoundary() {
-  // Deep side: est exactly 100_000.
-  const deepLen = contentLenForEstimate(100000);
+  // Deep side: est exactly 35_000.
+  const deepLen = contentLenForEstimate(35000);
   const deepOut = runProbeChild(
     {
       QWEN_STREAM_IDLE_TIMEOUT_MS: "400",
       QWEN_STREAM_IDLE_TIMEOUT_DEEP_MS: "800",
-      // do NOT override QWEN_STREAM_IDLE_DEPTH_TOKENS -> default 100_000
+      // do NOT override QWEN_STREAM_IDLE_DEPTH_TOKENS -> default 35_000
     },
     COMPLETE_MOCK,
     deepLen
@@ -227,7 +229,7 @@ async function vectorBoundary() {
   assert.strictEqual(
     deepOut.result.streamIdleTier,
     "deep",
-    `3: est==100000 (== threshold) -> deep tier (got: ${deepOut.result.streamIdleTier})`
+    `3: est==35000 (== threshold) -> deep tier (got: ${deepOut.result.streamIdleTier})`
   );
   assert.strictEqual(
     deepOut.result.streamIdleTimeoutMs,
@@ -235,8 +237,8 @@ async function vectorBoundary() {
     `3: deep-boundary armed the deep window (got: ${deepOut.result.streamIdleTimeoutMs})`
   );
 
-  // Shallow side: est 99_999 (one below the threshold).
-  const shallowLen = contentLenForEstimate(99999);
+  // Shallow side: est 34_999 (one below the threshold).
+  const shallowLen = contentLenForEstimate(34999);
   const shallowOut = runProbeChild(
     {
       QWEN_STREAM_IDLE_TIMEOUT_MS: "400",
@@ -253,7 +255,7 @@ async function vectorBoundary() {
   assert.strictEqual(
     shallowOut.result.streamIdleTier,
     "shallow",
-    `3: est==99999 (< threshold) -> shallow tier (got: ${shallowOut.result.streamIdleTier})`
+    `3: est==34999 (< threshold) -> shallow tier (got: ${shallowOut.result.streamIdleTier})`
   );
   assert.strictEqual(
     shallowOut.result.streamIdleTimeoutMs,
@@ -261,13 +263,13 @@ async function vectorBoundary() {
     `3: shallow-boundary armed the shallow window (got: ${shallowOut.result.streamIdleTimeoutMs})`
   );
   console.log(
-    `  [PASS] (3) boundary at exactly 100k tokens (est==100000 -> deep, est==99999 -> shallow)`
+    `  [PASS] (3) boundary at exactly 35k tokens (est==35000 -> deep, est==34999 -> shallow)`
   );
 }
 
 // ---------------------------------------------------------------------------
 // Vector (4): DEFAULTS. With no QWEN_* overrides the config reads
-// shallow=900000, deep=1800000, depth=100000.
+// shallow=1200000, deep=2400000, depth=35000.
 // ---------------------------------------------------------------------------
 async function vectorDefaults() {
   const configUrl = pathToFileURL(path.join(__dirname, CONFIG_REL)).href;
@@ -295,10 +297,10 @@ async function vectorDefaults() {
   }
   const line = res.stdout.trim().split("\n").filter(Boolean).pop();
   const out = JSON.parse(line);
-  assert.strictEqual(out.shallow, 900000, `4: default shallow = 900000 (got: ${out.shallow})`);
-  assert.strictEqual(out.deep, 1800000, `4: default deep = 1800000 (got: ${out.deep})`);
-  assert.strictEqual(out.depth, 100000, `4: default depth threshold = 100000 (got: ${out.depth})`);
-  console.log("  [PASS] (4) defaults: shallow=900000, deep=1800000, depth=100000");
+  assert.strictEqual(out.shallow, 1200000, `4: default shallow = 1200000 (got: ${out.shallow})`);
+  assert.strictEqual(out.deep, 2400000, `4: default deep = 2400000 (got: ${out.deep})`);
+  assert.strictEqual(out.depth, 35000, `4: default depth threshold = 35000 (got: ${out.depth})`);
+  console.log("  [PASS] (4) defaults: shallow=1200000, deep=2400000, depth=35000");
 }
 
 // ---------------------------------------------------------------------------

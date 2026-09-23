@@ -11,25 +11,27 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 describe("Stream Proxy - Signal Preserving & Error Forwarding Suite", () => {
   test("Repetition tiering limits", () => {
     let d = new RepetitionDetector();
-    assert.strictEqual(d.feed("+".repeat(120)), null, "120 '+' must pass (code char limit 500)");
+    assert.strictEqual(d.feed("+".repeat(400)), null, "400 '+' must pass (code char limit 1000)");
 
     d = new RepetitionDetector();
-    assert.strictEqual(d.feed("+".repeat(400)), null, "400 '+' must pass (code char limit 500)");
+    assert.strictEqual(d.feed("+".repeat(800)), null, "800 '+' must pass (code char limit 1000)");
 
     d = new RepetitionDetector();
-    const trip = d.feed("+".repeat(800));
-    assert.ok(trip, "800 '+' must trip the breaker");
+    const trip = d.feed("+".repeat(1200));
+    assert.ok(trip, "1200 '+' must trip the breaker");
     assert.strictEqual(trip.type, "character");
     assert.strictEqual(trip.pattern, "+");
 
     d = new RepetitionDetector();
-    const letter = d.feed("a".repeat(40));
-    assert.ok(letter, "40 consecutive 'a' must trip default limit 35");
+    assert.strictEqual(d.feed("a".repeat(99)), null, "99 consecutive 'a' must pass default limit 100");
+    d = new RepetitionDetector();
+    const letter = d.feed("a".repeat(100));
+    assert.ok(letter, "100 consecutive 'a' must trip default limit 100");
 
     d = new RepetitionDetector();
-    assert.strictEqual(d.feed("-".repeat(119)), null, "119 '-' must pass divider limit 120");
+    assert.strictEqual(d.feed("-".repeat(249)), null, "249 '-' must pass divider limit 250");
     d = new RepetitionDetector();
-    assert.ok(d.feed("-".repeat(120)), "120 '-' must trip divider limit 120");
+    assert.ok(d.feed("-".repeat(250)), "250 '-' must trip divider limit 250");
   });
 
   test("Real stream_proxy forwards upstream HTTP 400 Bad Request transparently", async () => {
