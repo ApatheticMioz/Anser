@@ -18,6 +18,7 @@ import { eventLoggerPlugin } from "./services/event_logger.js";
 import { vllmProviderPlugin } from "./services/provider_vllm.js";
 import { evoPlugin } from "./evo/evo_operator.js";
 import { astPlugin } from "./services/ast_service.js";
+import { webPlugin } from "./services/web_service.js";
 import { McpBridge } from "./services/mcp_bridge.js";
 import { injectSkills, matchSkills } from "../skills.js";
 import { normalizeWorkspacePath, canonicalizePath } from "../wsl_bridge.js";
@@ -92,10 +93,13 @@ Operating Guidelines:
    - 'ast_search' to find code by syntactic pattern with metavariables ($VAR, $$$BODY).
    - Run 'ast-grep' CLI directly via 'bash' for large-scale or multi-file AST surgery.
 4. Use 'bash' to run builds, tests, benchmarks, or git operations safely.
-5. Provide concise, direct technical summaries of your actions and findings.`;
+5. Use web research tools for live documentation, library APIs, and web search:
+   - 'web_search' to search the live web for technical documentation, library APIs, and problem solutions.
+   - 'web_fetch' to fetch web pages or documentation and convert them directly into clean Markdown.
+6. Provide concise, direct technical summaries of your actions and findings.`;
 
 const EVO_SYSTEM_PROMPT_ADDENDUM = `
-6. When optimizing or refactoring, use the Evo tools:
+7. When optimizing or refactoring, use the Evo tools:
    - 'evo_propose_candidate' to snapshot files before modifying.
    - 'evo_evaluate_candidate' to test and compute fitness score (receives compact failure digests on error).
    - 'evo_select_candidate' to accept improvements, or 'evo_revert_candidate' to rollback regressions.`;
@@ -232,6 +236,7 @@ export class AnserRunner {
       ctx.plugin(vllmProviderPlugin);
     }
     ctx.plugin(astPlugin, { root: effectiveCwd });
+    ctx.plugin(webPlugin);
 
     // Conditional Evo mounting: only mount the Evo closed-loop optimization tools
     // when a testCommand / evaluation benchmark or explicit evo flag is active.
