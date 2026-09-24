@@ -37,7 +37,7 @@
 
 ### The Problem: Cloud Token Hoarding
 The dominant architecture in modern AI agent development relies on **cloud token hoarding**:
-1. **Compounding API Costs**: Pointing a frontier cloud model (Claude Sonnet 5, GPT-5) at a large repository repeatedly packs hundreds of thousands of context tokens into the prompt on every turn. A multi-turn refactoring or debugging session burns millions of tokens and easily racks up $50–$150 in API bills in an afternoon.
+1. **Compounding API Costs**: Pointing frontier cloud models (Claude Opus 5.5, GPT-6 Astra, Claude Fable 5.1, Claude Sonnet 5) at large repositories repeatedly packs hundreds of thousands of context tokens into the prompt on every turn. A multi-turn refactoring or debugging session burns millions of tokens and easily racks up $50–$250 in API bills in an afternoon.
 2. **IP Exfiltration & Privacy Leakage**: Proprietary corporate codebases, internal configuration files, and API secrets must travel over public networks into third-party cloud data centers.
 3. **The Supervisor Polling Tax**: When an autonomous agent launches a long-running build or test suite, traditional orchestrators poll in an active LLM loop, squandering reasoning compute just waiting for a subprocess to exit.
 
@@ -79,9 +79,9 @@ Anser inverts this relationship with an asymmetric division of labor:
 ## Benchmark & Economic Grounding
 
 ### The Agentic Sweet Spot: Dense 27B on Consumer Silicon
-In modern agentic coding evaluations (such as the **Artificial Analysis (AA) Coding Index**, **Terminal-Bench**, and **LiveCodeBench**), closed-source frontier models (like Anthropic's **Claude Sonnet 5** and **Claude 3.5 Sonnet**) set the gold standard for high-level ambiguous system design.
+In contemporary agentic coding evaluations (including the **Artificial Analysis (AA) Coding Index**, **Terminal-Bench**, and **LiveCodeBench**), closed-source frontier flagships—led by **Claude Fable 5.1** (AA Index #1), **GPT-6 Astra** (AA Index #2), and **Claude Opus 5.5** (AA Index #3)—define the frontier for high-level ambiguous system architecture, multimodal design, and formal verification. In the cloud workhorse tier, models like **Claude Sonnet 5** and **GLM-5.3** provide high-velocity execution.
 
-However, in continuous agentic pair-programming—where 80%+ of prompt tokens are spent iteratively ingesting repository context, checking compiler logs, running AST searches, and applying patches—routing every turn to paid cloud APIs is economically prohibitive.
+However, in continuous agentic pair-programming—where 80%+ of prompt tokens are spent iteratively ingesting repository context, checking compiler logs, running AST searches, and applying patches—routing every single turn to paid cloud APIs is economically unsustainable.
 
 **Qwen3.8-27B** represents the optimal sweet spot for local execution:
 - **Consumer Hardware Footprint**: A dense 27B parameter architecture that fits completely within a single consumer **24 GB VRAM GPU** (NVIDIA RTX 3090 / 4090) using W4A16 AutoRound quantization.
@@ -90,16 +90,16 @@ However, in continuous agentic pair-programming—where 80%+ of prompt tokens ar
 
 ### Benchmark & Pricing Matrix
 
-| Evaluation Dimension | Qwen3.8-27B (via Anser) | Claude Sonnet 5 (Frontier Standard) | Claude 3.5 Sonnet / GPT-4o (Previous Gen) |
-|---|---|---|---|
-| **Inference Location** | **100% Local (RTX 3090/4090 24GB)** | Managed Cloud API | Managed Cloud API |
-| **Artificial Analysis Profile** | Dense local agentic execution & code editing | Frontier reasoning & coding leader | High-reasoning coding baseline |
-| **API Cost: Prompt Prefill** | **$0.00 / million tokens** | $2.00 / million tokens | $3.00 / million tokens |
-| **API Cost: Completion Output** | **$0.00 / million tokens** | $10.00 / million tokens | $15.00 / million tokens |
-| **Effective Context Ceiling** | **245,760 tokens** (Universal 245K) | 200,000 tokens | 128,000–200,000 tokens |
-| **Tool Execution Model** | In-process microkernel (Node.js heap) | Remote network API / MCP | Remote network API / MCP |
-| **Cost of 453-Session Marathon**<br>*(962.3M prompt + 10.4M completion)* | **$0.00** | **$2,028.25 USD** | **$3,042.39 USD** |
-| **Data Privacy & Exfiltration** | **Zero bytes leave your machine** | Third-party data centers | Third-party data centers |
+| Evaluation Dimension | Qwen3.8-27B (via Anser) | Claude Sonnet 5 | Claude Opus 5.5 | GPT-6 Astra / Claude Fable 5.1 | GLM-5.3 |
+|---|---|---|---|---|---|
+| **Inference Location** | **100% Local (RTX 3090/4090 24GB)** | Managed Cloud API | Managed Cloud API | Managed Cloud API | Managed Cloud API |
+| **AA Coding Profile / Role** | Dense local execution & AST surgery | High-efficiency cloud standard | Deep reasoning & formal verification | Frontier coding leader (AA Index #1/#2) | Cloud value & tool-calling champion |
+| **API Cost: Prompt Prefill** | **$0.00 / million tokens** | $2.00 / million tokens | $4.00 / million tokens | $10.00 / million tokens | $1.40 / million tokens |
+| **API Cost: Completion Output** | **$0.00 / million tokens** | $10.00 / million tokens | $20.00 / million tokens | $50.00 / million tokens | $4.40 / million tokens |
+| **Context Window Ceiling** | **245,760 tokens** (Universal 245K) | 500,000 tokens | 1,000,000 tokens | 1,000,000–1,050,000 tokens | 200,000 tokens |
+| **Tool Execution Model** | In-process microkernel (Node.js heap) | Remote network API / MCP | Remote network API / MCP | Remote network API / MCP | Remote network API / MCP |
+| **Cost of 453-Session Marathon**<br>*(962.3M prompt + 10.4M comp)* | **$0.00** | **$2,028.25 USD** | **$4,056.52 USD** | **$10,141.28 USD** | **$1,392.81 USD** |
+| **Data Privacy & Exfiltration** | **Zero bytes leave your machine** | Third-party data centers | Third-party data centers | Third-party data centers | Third-party data centers |
 
 ---
 
@@ -123,8 +123,11 @@ Anser is battle-tested. The metrics below reflect **exact, ground-truth telemetr
 | **Active Generation Speed** | **44.54 t/s avg** (Peak: **159.10 t/s**) | Instantaneous speculative decoding burst throughput |
 | **Active Prompt Throughput** | **1,376.75 t/s avg** (Peak: **12,044 t/s**) | Fast context digestion via vLLM flash-attention |
 | **Financial Savings vs Claude Sonnet 5** | **$2,028.25 USD** saved | At Sonnet 5 rates ($2.00/M prompt, $10.00/M completion) |
-| **Financial Savings vs Claude 3.5 Sonnet / GPT-4o** | **$3,042.39 USD** saved | At previous-gen commercial rates ($3.00/M prompt, $15.00/M completion) |
+| **Financial Savings vs Claude Opus 5.5** | **$4,056.52 USD** saved | At Opus 5.5 rates ($4.00/M prompt, $20.00/M completion) |
+| **Financial Savings vs GPT-6 Astra / Claude Fable 5.1** | **$10,141.28 USD** saved | At frontier flagship rates ($10.00/M prompt, $50.00/M completion) |
+| **Financial Savings vs GLM-5.3** | **$1,392.81 USD** saved | At cloud value rates ($1.40/M prompt, $4.40/M completion) |
 | **Local Inference Token Cost** | **$0.00** | **A $1,000 GPU paid for itself in less than a month.** |
+
 
 ---
 

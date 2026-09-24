@@ -10,9 +10,18 @@ export const PROMPT_COST_PER_MILLION = 2.0;
 export const COMPLETION_COST_PER_MILLION = 10.0;
 export const BENCHMARK_MODEL = "Claude Sonnet 5";
 
-export function calculateCostSaved(promptTokens, completionTokens) {
-  const promptCost = (promptTokens / 1_000_000) * PROMPT_COST_PER_MILLION;
-  const compCost = (completionTokens / 1_000_000) * COMPLETION_COST_PER_MILLION;
+// Authoritative September 2026 frontier model reference rates
+export const FRONTIER_BENCHMARKS = {
+  "Claude Sonnet 5": { promptPerM: 2.0, compPerM: 10.0, context: "500K" },
+  "Claude Opus 5.5": { promptPerM: 4.0, compPerM: 20.0, context: "1,000K" },
+  "Claude Fable 5.1": { promptPerM: 10.0, compPerM: 50.0, context: "1,000K" },
+  "GPT-6 Astra": { promptPerM: 10.0, compPerM: 50.0, context: "1,050K" },
+  "GLM-5.3": { promptPerM: 1.4, compPerM: 4.4, context: "200K" },
+};
+
+export function calculateCostSaved(promptTokens, completionTokens, promptRate = PROMPT_COST_PER_MILLION, compRate = COMPLETION_COST_PER_MILLION) {
+  const promptCost = (promptTokens / 1_000_000) * promptRate;
+  const compCost = (completionTokens / 1_000_000) * compRate;
   return Number((promptCost + compCost).toFixed(2));
 }
 
@@ -309,6 +318,10 @@ export function formatTelemetrySummary() {
     .map(([tool, count]) => `${tool}: ${count.toLocaleString()}`)
     .join(", ");
 
+  const opusSaved = calculateCostSaved(stats.total_prompt_tokens, stats.total_completion_tokens, 4.0, 20.0);
+  const frontierSaved = calculateCostSaved(stats.total_prompt_tokens, stats.total_completion_tokens, 10.0, 50.0);
+  const glmSaved = calculateCostSaved(stats.total_prompt_tokens, stats.total_completion_tokens, 1.4, 4.4);
+
   const summary = [
     `### 🚀 Lifetime Qwen Usage & Anser Telemetry`,
     `- **Completion Generated**: **${compM}M** tokens (${stats.total_completion_tokens.toLocaleString()} tok)`,
@@ -320,6 +333,9 @@ export function formatTelemetrySummary() {
     `- **Top Tools**: ${topTools}`,
     `- **vLLM Acceleration**: **${stats.vllm_engine_metrics.prefix_cache_hit_rate_pct}%** Prefix Cache hit rate | **${stats.vllm_engine_metrics.spec_mean_acceptance_length}** tok/step DFlash2 mean acceptance | **${stats.vllm_engine_metrics.peak_gpu_kv_cache_pct}%** peak GPU KV cache`,
     `- **Financial Value**: **$${stats.estimated_cost_saved_usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** in API cost saved vs **${stats.benchmark_model || BENCHMARK_MODEL}** ($${PROMPT_COST_PER_MILLION.toFixed(2)}/M prompt, $${COMPLETION_COST_PER_MILLION.toFixed(2)}/M completion) at **$0 local token cost**`,
+    `  - *Vs Claude Opus 5.5 ($4/$20)*: **$${opusSaved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** saved`,
+    `  - *Vs GPT-6 Astra / Claude Fable 5.1 ($10/$50)*: **$${frontierSaved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** saved`,
+    `  - *Vs GLM-5.3 ($1.40/$4.40)*: **$${glmSaved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** saved`,
   ].join("\n");
 
   return {
