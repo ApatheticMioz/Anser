@@ -5,9 +5,10 @@ import { QWEN_STATE_DIR, IS_WINDOWS, ENGINE_LOG_PATH } from "./config.js";
 const TELEMETRY_DIR = path.join(QWEN_STATE_DIR, "telemetry");
 const STATS_FILE = path.join(TELEMETRY_DIR, "stats.json");
 
-// Commercial baseline pricing (Claude 3.5 Sonnet / GPT-4o tier: $3.00/M prompt, $15.00/M completion)
-const PROMPT_COST_PER_MILLION = 3.0;
-const COMPLETION_COST_PER_MILLION = 15.0;
+// Frontier commercial baseline pricing (Claude Sonnet 5 tier: $2.00/M prompt, $10.00/M completion)
+export const PROMPT_COST_PER_MILLION = 2.0;
+export const COMPLETION_COST_PER_MILLION = 10.0;
+export const BENCHMARK_MODEL = "Claude Sonnet 5";
 
 export function calculateCostSaved(promptTokens, completionTokens) {
   const promptCost = (promptTokens / 1_000_000) * PROMPT_COST_PER_MILLION;
@@ -78,7 +79,8 @@ export const DEFAULT_STATS = {
     ast_search: 2,
     apply_patch: 1,
   },
-  estimated_cost_saved_usd: 3042.39,
+  benchmark_model: BENCHMARK_MODEL,
+  estimated_cost_saved_usd: 2028.25,
   first_recorded_session: "2026-09-05T03:58:07.228Z",
   last_recorded_session: "2026-09-24T18:10:46.123Z",
   history_ingested: true,
@@ -317,7 +319,7 @@ export function formatTelemetrySummary() {
     `- **Tool Execution**: **${stats.total_tool_calls.toLocaleString()}** calls with only **${stats.total_tool_errors}** errors (${toolErrorRate}% error rate)`,
     `- **Top Tools**: ${topTools}`,
     `- **vLLM Acceleration**: **${stats.vllm_engine_metrics.prefix_cache_hit_rate_pct}%** Prefix Cache hit rate | **${stats.vllm_engine_metrics.spec_mean_acceptance_length}** tok/step DFlash2 mean acceptance | **${stats.vllm_engine_metrics.peak_gpu_kv_cache_pct}%** peak GPU KV cache`,
-    `- **Financial Value**: **$${stats.estimated_cost_saved_usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** in API cost saved at **$0 local token cost**`,
+    `- **Financial Value**: **$${stats.estimated_cost_saved_usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** in API cost saved vs **${stats.benchmark_model || BENCHMARK_MODEL}** ($${PROMPT_COST_PER_MILLION.toFixed(2)}/M prompt, $${COMPLETION_COST_PER_MILLION.toFixed(2)}/M completion) at **$0 local token cost**`,
   ].join("\n");
 
   return {

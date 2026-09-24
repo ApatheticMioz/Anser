@@ -16,14 +16,14 @@ import {
 } from "../src/telemetry.js";
 
 test("Telemetry: calculateCostSaved pricing arithmetic", () => {
-  // 1,000,000 prompt tokens @ $3.00/M = $3.00
-  // 1,000,000 completion tokens @ $15.00/M = $15.00
+  // Claude Sonnet 5: 1,000,000 prompt tokens @ $2.00/M = $2.00
+  // 1,000,000 completion tokens @ $10.00/M = $10.00
   const cost = calculateCostSaved(1_000_000, 1_000_000);
-  assert.equal(cost, 18.0);
+  assert.equal(cost, 12.0);
 
-  // 10,000,000 prompt tokens + 2,000,000 completion tokens = $30.00 + $30.00 = $60.00
+  // 10,000,000 prompt tokens + 2,000,000 completion tokens = $20.00 + $20.00 = $40.00
   const cost2 = calculateCostSaved(10_000_000, 2_000_000);
-  assert.equal(cost2, 60.0);
+  assert.equal(cost2, 40.0);
 });
 
 test("Telemetry: historical baseline and cumulative retrieval", () => {
@@ -34,8 +34,9 @@ test("Telemetry: historical baseline and cumulative retrieval", () => {
   assert.ok(stats.total_turns >= 10_000, "Total turns reflect lifetime history");
   assert.ok(stats.total_sessions >= 450, "Total sessions reflect lifetime history");
   assert.ok(stats.total_tool_calls >= 13_000, "Total tool calls reflect lifetime history");
-  assert.ok(stats.estimated_cost_saved_usd >= 3_000.0, "Cost savings reflect lifetime calculation");
+  assert.ok(stats.estimated_cost_saved_usd >= 2_000.0, "Cost savings reflect lifetime calculation");
   assert.equal(stats.history_ingested, true);
+  assert.equal(stats.benchmark_model, "Claude Sonnet 5", "Benchmark model is Claude Sonnet 5");
   assert.ok(stats.vllm_engine_metrics.prefix_cache_hit_rate_pct > 0, "Prefix cache metric present");
   assert.ok(stats.vllm_engine_metrics.peak_gpu_kv_cache_pct > 0, "KV cache metric present");
   assert.ok(stats.vllm_engine_metrics.spec_mean_acceptance_length > 0, "Speculative decoding metric present");
@@ -115,6 +116,7 @@ test("Telemetry: formatTelemetrySummary produces structured markdown and stats",
   assert.ok(summary.includes("Prompt Prefill"), "Prompt tokens in summary");
   assert.ok(summary.includes("vLLM Acceleration"), "vLLM acceleration in summary");
   assert.ok(summary.includes("Financial Value"), "Financial value in summary");
+  assert.ok(summary.includes("Claude Sonnet 5"), "Sonnet 5 benchmark model in summary");
   assert.ok(summary.includes("Prefix Cache hit rate"), "Prefix cache in summary");
   assert.ok(stats.total_turns > 0);
   assert.ok(stats.estimated_cost_saved_usd > 0);
