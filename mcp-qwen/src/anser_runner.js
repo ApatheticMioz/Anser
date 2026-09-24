@@ -28,6 +28,7 @@ import {
 import { EvoLineageEngine } from "./evo_engine.js";
 import { AnserRunner } from "./harness/runner.js";
 import { injectSkills } from "./skills.js";
+import { recordTaskResult } from "./telemetry.js";
 
 /**
  * Pure predicate: does a runner status represent a successful task completion?
@@ -226,6 +227,9 @@ export function startAnserTask({
         taskEntry.isError = true;
         taskEntry.status = "failed";
         taskEntry.result = { isError: true, text: `Failed to boot model server: ${err.message}` };
+        try {
+          recordTaskResult({ isSuccess: false, effort: effectiveReasoningEffort });
+        } catch {}
         notifyWaiters(taskEntry);
         return taskEntry.result;
       }
@@ -352,6 +356,12 @@ export function startAnserTask({
           fileOps: taskEntry.fileOps,
           durationMs: runResult.durationMs,
         };
+        try {
+          recordTaskResult({
+            isSuccess,
+            effort: effectiveReasoningEffort,
+          });
+        } catch {}
         saveTaskToDisk(taskEntry);
         notifyWaiters(taskEntry);
         return taskEntry.result;
@@ -366,6 +376,12 @@ export function startAnserTask({
           toolCalls: taskEntry.toolCallsCount,
           fileOps: taskEntry.fileOps,
         };
+        try {
+          recordTaskResult({
+            isSuccess: false,
+            effort: effectiveReasoningEffort,
+          });
+        } catch {}
         saveTaskToDisk(taskEntry);
         notifyWaiters(taskEntry);
         return taskEntry.result;

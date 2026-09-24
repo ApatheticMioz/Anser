@@ -47,7 +47,7 @@ import {
   hasLiveWork,
 } from "./task_registry.js";
 import { startAnserTask, resolveSessionId } from "./anser_runner.js";
-import { formatTelemetrySummary } from "./telemetry.js";
+import { formatTelemetrySummary, recordTaskResult } from "./telemetry.js";
 
 export function registerTools(server) {
   // Wire the heal backstop: refuse to stop/reboot the engine while live work
@@ -524,6 +524,9 @@ export function registerTools(server) {
           memTask.done = true;
           memTask.isError = true;
           memTask.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
+          try {
+            recordTaskResult({ isSuccess: false, isCancelled: true, effort: memTask.reasoningEffort });
+          } catch {}
           saveTaskToDisk(memTask);
           notifyWaiters(memTask);
           return {

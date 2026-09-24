@@ -40,7 +40,7 @@ import {
   PROMPT_BUDGET_CHARS,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
-import { recordTurnTelemetry } from "../telemetry.js";
+import { recordTurnTelemetry, recordToolExecution, sampleLiveVllmMetrics } from "../telemetry.js";
 
 // M4: probe-budget watchdog (issue #11 recs 1+2; F4/F12/F14). On open-ended
 // layout targets the model ran 30+ consecutive inline-python measurement bash
@@ -431,6 +431,9 @@ export class AnserRunner {
               recordTurnTelemetry({
                 completionTokens: m.completionTokens || 0,
                 promptTokens: m.promptTokens || 0,
+                reasoningTokens: m.reasoningTokens || 0,
+                ttftMs: m.ttftMs,
+                tokensPerSec: m.tokensPerSec,
                 effort: reasoningEffort || "medium",
               });
             } catch {}
@@ -832,6 +835,13 @@ export class AnserRunner {
             latencyMs: toolExecution.latencyMs,
           });
 
+          try {
+            recordToolExecution({
+              toolName: tc.function.name,
+              isError: !!toolExecution.isError,
+            });
+          } catch {}
+
           // --- M4: probe-budget watchdog (issue #11 recs 1+2) ---------------
           // Count CONSECUTIVE non-mutating bash calls. A bash/exec_command call
           // increments the streak; a file-mutating tool call (write/edit/patch/
@@ -919,6 +929,10 @@ export class AnserRunner {
         durationMs,
         totalCompletionTokens,
       });
+
+      try {
+        sampleLiveVllmMetrics();
+      } catch {}
 
       // P8: tear down the MCP extension bridge (kill every bridge child via
       // the process-tree helper + unregister the bridged tools) BEFORE the
