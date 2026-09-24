@@ -20,16 +20,15 @@
 
 1. [The Paradigm: Cloud Brain + Local Hands](#the-paradigm-cloud-brain--local-hands)
 2. [Case Study: The 453-Session Marathon ($2,000+ Saved on a Single GPU)](#case-study-the-453-session-marathon)
-3. [The Intelligence Benchmark Reality (SWE-bench Pro vs Saturated Benchmarks)](#the-intelligence-benchmark-reality)
-4. [System Architecture](#system-architecture)
-5. [Core Architectural Innovations](#core-architectural-innovations)
-6. [Quickstart (3 Steps)](#quickstart-3-steps)
-7. [Model Serving, Speculative Decoding & Quantization](#model-serving--speculative-decoding)
-8. [Zero-Trust Sandboxed File Operations](#zero-trust-sandboxed-file-operations)
-9. [Testing & Verification](#testing--verification)
-10. [Repository Structure](#repository-structure)
-11. [Contributing](#contributing)
-12. [License & Commercial Dual-Licensing](#license--commercial-dual-licensing)
+3. [System Architecture](#system-architecture)
+4. [Core Capabilities](#core-capabilities)
+5. [Quickstart (3 Steps)](#quickstart-3-steps)
+6. [Model Serving, Speculative Decoding & Quantization](#model-serving--speculative-decoding)
+7. [Zero-Trust Sandboxed File Operations](#zero-trust-sandboxed-file-operations)
+8. [Testing & Verification](#testing--verification)
+9. [Repository Structure](#repository-structure)
+10. [Contributing](#contributing)
+11. [License & Commercial Dual-Licensing](#license--commercial-dual-licensing)
 
 ---
 
@@ -58,7 +57,7 @@ Anser inverts this relationship with an asymmetric division of labor:
                                   v
 +-------------------------------------------------------------------+
 |                     ANSER MICROKERNEL (:18021)                    |
-|   - 0.01 ms In-Process V8 Dispatch  - 5-Layer Zero-Trust Sandbox  |
+|   - In-Process V8 Tool Runtime      - 5-Layer Zero-Trust Sandbox  |
 |   - Structural AST Surgery (@ast)   - Invisible Syntax Gates      |
 |   - Pre-Wired Web Research (Read)   - Cross-Process O_EXCL Leases |
 +---------------------------------+---------------------------------+
@@ -101,31 +100,6 @@ Anser is battle-tested. The metrics below reflect **exact, ground-truth telemetr
 
 ---
 
-## The Intelligence Benchmark Reality
-
-### Apples-to-Apples: SWE-bench Pro vs Saturated Benchmarks
-Understanding autonomous agent performance requires distinguishing between obsolete, saturated evaluation sets and modern, contamination-resistant engineering benchmarks:
-
-1. **SWE-bench Verified (Deprecated & Saturated)**:
-   - The 2024 human-filtered 500-instance Python-only subset.
-   - Now largely saturated (>85% to 90%+ for major frontier models), with documented training-set contamination and heavy overfitting. Frontier research labs no longer treat it as the primary discriminator for agentic coding.
-2. **SWE-bench Pro (The Modern Standard)**:
-   - Developed by Scale AI with **1,865 complex, polyglot tasks** across 41 public, held-out, and enterprise codebases.
-   - Tasks feature multi-file dependencies, non-trivial build pipelines, and realistic engineering workflows in Python, TypeScript, Go, Rust, and C++.
-   - Top proprietary cloud models on SWE-bench Pro:
-     - **Claude Opus 5 / Fable 5.1**: ~79%–81%
-     - **Claude Sonnet Class**: ~65%–72%
-     - **Qwen3.8-27B (Dense Open-Weights)**: **~61.7%**
-
-### How Anser Closes the Frontier Gap
-How does an open-weight 27B model running on a consumer GPU trade blows with frontier cloud APIs? **The agentic scaffolding is the multiplier:**
-
-- **In-Process Microkernel Latency (0.01 ms)**: While cloud agents make remote API calls or spawn high-overhead subshells for every tool observation, Anser runs tools directly inside the V8 engine process.
-- **Invisible AST & Syntax Gates**: Changes made via `edit_file` are evaluated in-memory against language AST parsers (TypeScript, Python, JSON, LaTeX, BibTeX) before touching disk. Syntax regressions and malformed patches are rejected instantly with line-level diagnostics, preventing corrupted intermediate states.
-- **Single-Pass Mutation Directives**: System prompts strictly forbid open-ended exploratory probe loops, guiding the model to form a concrete hypothesis, execute surgical modifications, and run an objective verification command.
-
----
-
 ## System Architecture
 
 Anser exposes three consolidated, stdio-pure MCP tools to the cloud orchestrator:
@@ -142,23 +116,27 @@ Anser exposes three consolidated, stdio-pure MCP tools to the cloud orchestrator
 
 ---
 
-## Core Architectural Innovations
+## Core Capabilities
 
-### 1. In-Process Web & Research Engine
+### 1. In-Process Runtime & Invisible Syntax Gates
+- **In-Process Microkernel**: Core file tools (`read_file`, `write_file`, `edit_file`) run directly inside the Node.js process without CLI subprocess spawning overhead.
+- **In-Memory Syntax Validation**: Modifications made via `edit_file` are parsed in-memory (TypeScript, Python, JSON, LaTeX, BibTeX) before touching disk. Syntax regressions and malformed patches are rejected immediately with line-level diagnostics, preventing corrupted files and broken states.
+
+### 2. In-Process Web & Research Engine
 Anser embeds native, dependency-free `web_search` and `web_fetch` services:
 - **Mozilla Readability & Turndown**: Automatically strips HTML boilerplate, navigation menus, and banner clutter, converting web pages into token-dense markdown.
 - **Autonomous Documentation Ingestion**: Qwen queries official documentation, verifies API contracts, and inspects library changelogs without third-party CLI dependencies.
 
-### 2. Lean 8-Tool Action Space
+### 3. Lean 8-Tool Action Space
 Cognitive budget is finite. Anser prunes extraneous tool aliases, restricting the coworker's primary action space to 8 canonical, non-overlapping tools:
 - `read_file`, `write_file`, `edit_file`, `apply_patch`, `list_dir`, `search_code`, `ast_search`, `bash`.
 - (Evolutionary optimization tools mount conditionally only when automated verification commands are provided).
 
-### 3. Cross-Platform Unified Telemetry Ledger
+### 4. Cross-Platform Unified Telemetry Ledger
 - Tracked across Windows (`C:\Users\<User>\.qwen\telemetry\stats.json`) and WSL (`~/.qwen/telemetry/stats.json`) via symlink parity.
 - Writes are guarded by atomic rename (`stats.json.tmp.<pid>.<ts>` $\to$ `stats.json`), eliminating multi-instance corruption.
 
-### 4. Zero-Turn Reactive Wait (`/task/<id>/wait`)
+### 5. Zero-Turn Reactive Wait (`/task/<id>/wait`)
 Long-running background tasks yield a durable OS wait command. The orchestrator executes:
 ```bash
 curl.exe -fsS --retry 5 --retry-delay 2 http://127.0.0.1:18021/task/<id>/wait
