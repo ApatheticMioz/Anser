@@ -119,6 +119,18 @@ export class EventLoggerService {
     for (const ev of events) {
       if (ev.type === "user_message") {
         messages.push({ role: "user", content: ev.content });
+      } else if (ev.type === "continuation_injected") {
+        // Faithful reconstruction of continuation directives injected mid-session
+        messages.push({
+          role: "user",
+          content: ev.content || "Your previous output was cut off by the token ceiling. Resume exactly where you stopped. Do not repeat already-emitted content.",
+        });
+      } else if (ev.type === "probe_budget_warning" && (ev.advisory || ev.content)) {
+        // Faithful reconstruction of in-band probe-budget advisories
+        messages.push({
+          role: "user",
+          content: ev.advisory || ev.content,
+        });
       } else if (ev.type === "assistant_message") {
         const msg = { role: "assistant", content: ev.content || "" };
         if (ev.toolCalls && ev.toolCalls.length > 0) {
@@ -130,6 +142,13 @@ export class EventLoggerService {
           role: "tool",
           tool_call_id: ev.toolCallId,
           content: typeof ev.result === "string" ? ev.result : JSON.stringify(ev.result ?? ev.error ?? ""),
+        });
+      } else if (ev.type === "tool_call_dropped") {
+        // Faithful reconstruction of dropped tool-call notices
+        messages.push({
+          role: "tool",
+          tool_call_id: ev.toolCallId,
+          content: ev.notice || `ToolExecutionError: Tool '${ev.name}' (id ${ev.toolCallId}) was dropped: its arguments were truncated mid-stream and could not be parsed as JSON (finish_reason: "length"). Please re-emit this tool call with complete, valid JSON arguments.`,
         });
       }
     }

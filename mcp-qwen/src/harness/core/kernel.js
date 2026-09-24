@@ -96,15 +96,18 @@ export class Context {
 
   /**
    * Lists all available tools formatted for model consumption (OpenAI / MCP schema).
+   * Sorts tools alphabetically by name and canonicalizes parameters (RFC 8785)
+   * to guarantee deterministic token serialization for vLLM RadixAttention KV-cache prefix hits.
    */
   listTools() {
     const toolsMap = this.root ? this.root.tools : this.tools;
-    return Array.from(toolsMap.values()).map((t) => ({
+    const sorted = Array.from(toolsMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+    return sorted.map((t) => ({
       type: "function",
       function: {
         name: t.name,
         description: t.description,
-        parameters: t.parameters,
+        parameters: canonicalizeJson(t.parameters),
       },
     }));
   }
@@ -182,3 +185,25 @@ export class Context {
     this._plugins.clear();
   }
 }
+
+/**
+ * Canonicalizes an object or array by sorting all object keys lexicographically (RFC 8785).
+ * Ensures deterministic byte serialization across JavaScript Map iteration orders and JSON encodings.
+ * @param {any} obj
+ * @returns {any}
+ */
+export function canonicalizeJson(obj) {
+  if (obj === null || typeof obj !== "object") {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(canonicalizeJson);
+  }
+  const sorted = {};
+  const keys = Object.keys(obj).sort();
+  for (const key of keys) {
+    sorted[key] = canonicalizeJson(obj[key]);
+  }
+  return sorted;
+}
+

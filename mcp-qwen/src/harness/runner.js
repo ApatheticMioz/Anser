@@ -249,14 +249,27 @@ export class AnserRunner {
     const logger = ctx.get("logger");
     const llm = ctx.get("llm");
 
+    const priorEvents = logger.readAll();
+    const hasPriorUserMessages = priorEvents.some((e) => e.type === "user_message");
+    const priorSkills = new Set();
+    for (const ev of priorEvents) {
+      if (ev.type === "skills_injected" && Array.isArray(ev.skills)) {
+        for (const s of ev.skills) priorSkills.add(s);
+      }
+    }
+
     // P9: keyword auto-inject matching skills from the packaged skills/
-    // library into the user prompt BEFORE it enters the message list. This is
-    // additive and budget-capped; when nothing matches the prompt is returned
-    // unchanged. Never throws (malformed skills are skipped upstream).
-    const matchedSkillNames = matchSkills({ prompt, cwd: effectiveCwd }).map(
-      (s) => s.name
-    );
-    const effectivePrompt = injectSkills(prompt, effectiveCwd);
+    // library into the user prompt BEFORE it enters the message list.
+    // If skills were already injected in a prior turn of this session, do not
+    // re-inject duplicate skill bodies, preserving KV-cache prefix stability.
+    let effectivePrompt = prompt;
+    let matchedSkillNames = [];
+    if (!hasPriorUserMessages || priorSkills.size === 0) {
+      matchedSkillNames = matchSkills({ prompt, cwd: effectiveCwd }).map(
+        (s) => s.name
+      );
+      effectivePrompt = injectSkills(prompt, effectiveCwd);
+    }
 
     logger.append({
       type: "session_start",
@@ -665,6 +678,7 @@ export class AnserRunner {
               messages.push({ role: "user", content: CONTINUATION_DIRECTIVE });
               logger.append({
                 type: "continuation_injected",
+                content: CONTINUATION_DIRECTIVE,
                 continuationNumber: continuationsInjected,
                 maxContinuations: MAX_CONTINUATION_TURNS,
                 reason: "length",
@@ -739,6 +753,7 @@ export class AnserRunner {
               type: "tool_call_dropped",
               toolCallId: tc.id,
               name: tc.function.name,
+              notice,
               reason: "truncated_arguments",
               finishReason: turnResult.finishReason,
             });
@@ -846,6 +861,7 @@ export class AnserRunner {
           messages.push({ role: "user", content: CONTINUATION_DIRECTIVE });
           logger.append({
             type: "continuation_injected",
+            content: CONTINUATION_DIRECTIVE,
             continuationNumber: continuationsInjected,
             maxContinuations: MAX_CONTINUATION_TURNS,
             reason: "length",
