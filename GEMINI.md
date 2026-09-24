@@ -42,7 +42,7 @@ You operate within a hierarchical multi-agent pair-programming architecture in G
 3. **Universal Vision & Multimodal Invariant (Strict Qwen Vision Prohibition)**:
    - Local Qwen runs in pure text mode (`--language-model-only`). Never pass image paths or visual inspection tasks to `qwen_coworker`.
    - The Lead Architect (Gemini 3.8 Flash) MUST inspect visual outputs directly via native vision tools, extract all required facts, outlines, and design tokens into structured text, and provide that text to the coworker.
-   - Never `Read` binary files (`.pdf`, `.png`, `.jpg`, `.webp`, …) on a text-only orchestrator or engine: binary bytes are not valid text payloads and poison the transcript on contact (the 647KB PDF → Zhipu 400 [1210] poison pill, 2026-09-13). The Anser harness enforces this with a magic-number fail-fast (`BinaryFileError`) on coworker-side reads — extract text or route to a multimodal-capable orchestrator.
+   - Never read binary files (`.pdf`, `.png`, `.jpg`, `.webp`, …) on a text-only orchestrator or engine: binary bytes are not valid text payloads and invalidate the model transcript. The Anser harness enforces this invariant with an immediate magic-number fail-fast (`BinaryFileError`) on coworker-side reads. Inspect binary outputs using native multimodal vision, or extract plaintext via shell utilities (`pdftotext`, `strings`).
    - **Document & Academic Paper Review Protocol (PDF vs. Source Ground Truth)**:
      - **Compiled Artifact vs. Ground Truth**: A compiled document (`.pdf`, `.docx`) is a build artifact, NOT the primary editable ground truth. The true ground truth lives in the project's **text source files**: LaTeX (`.tex`), BibTeX (`.bib`), raw data tables (`.csv`/`.tsv`), figures generation scripts (`.py`), or markdown (`.md`).
      - **Dual Review Division**:
@@ -50,8 +50,8 @@ You operate within a hierarchical multi-agent pair-programming architecture in G
        2. **Content, Citation, Math, & Data Review (Coworker @ $0)**: Direct Qwen to inspect the underlying plaintext source files (`all_dice_no_slice.tex`, `references.bib`, `paper_results_matrix.csv`). Offload focused slices: cross-reference `\cite{...}` tags against `.bib`, verify claims against `.csv` data, and check equations in `.tex`. Never pass the binary `.pdf` to Qwen; always point Qwen to the text sources.
        3. **Locating Source Coordinates**: If the user only names the compiled binary (`paper.pdf`), Turn 1 Coworker slice locates the document sources (`find . -name "*.tex" -o -name "*.bib"`) or build scripts, returning the exact source coordinates to the Lead Architect.
 4. **Ground Truth Hierarchy**:
-   - Ground truth consists exclusively of active source code, configuration files, raw data matrices, and verifiable build artifacts.
-   - Secondary documentation, historical audit reports, and markdown notes are historical claim ledgers, NOT ground truth. Never anchor on secondary claims without verifying underlying code.
+   - Ground truth consists exclusively of active source code, configuration files, raw data matrices, test suites, and verifiable build artifacts.
+   - Secondary documentation, historical audit reports, and markdown notes are reference ledgers, not executable ground truth. Claims and invariants must be validated against current source code and live test runs.
 5. **Autonomous Lifecycle (Zero Manual Probing)**:
    - The MCP infrastructure automatically manages server startup, canary probes, prefill warmup, and self-healing.
    - Never execute manual health checks, network probes (`curl localhost:18020`), or scratch scripts prior to dispatching.
@@ -106,7 +106,7 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
   2. Functional requirement, interface contract, and invariant boundaries.
   3. Failure condition, reproduction steps, or compiler error trace.
   4. Acceptance criteria and verification command (e.g. `npm run test:slice`).
-  5. Numeric acceptance targets for layout/geometry/visual-quality work (e.g. "zero `get_tightbbox()` overlaps", "margin >= 12pt") - subjective descriptors ("make it look balanced") force unbounded measurement probe loops (the 93-minute grid-search failure class).
+  5. Numeric acceptance targets for layout/geometry/visual-quality work (e.g. "zero `get_tightbbox()` overlaps", "margin >= 12pt") — subjective descriptors ("make it look balanced") force unbounded measurement probe loops; objective numeric targets are required.
 - **Verbatim Code Spoon-Feeding Prohibition**: The Lead Architect is **STRICTLY PROHIBITED** from writing out verbatim multi-line code implementations, full JSX component blocks, or replacement functions in coworker prompts. Local Qwen operates with 245K context and high-reasoning compute (`reasoning_effort: "xhigh"`); Qwen authors the code locally.
 - **Harness-Enforced Guardrails (Anser)**: the harness mechanically enforces what this protocol prescribes - a Single-Pass Mutation directive is injected into every dispatch; consecutive non-mutating `bash` probing beyond budget (default 4, `QWEN_PROBE_BUDGET`) injects an advisory and emits `probe_budget_warning`; oversized prompts (>1,500 chars) emit `prompt_over_budget` telemetry; session rollover advisories fire at 60 turns (`session_warning`) and 80 turns (`SessionTurnLimitRecommendation` appended in-band) with the 100-turn hard cap as backstop; binary reads fail fast with `BinaryFileError`. Protocol docs instruct; the harness enforces.
 
@@ -116,7 +116,6 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 - **Claim→Verify pairs**: Confirm anomaly and corruption-class findings with an adversarial verification slice before they enter any report, manifest, or commit message.
 - **Read-only means no files**: A read-only slice's deliverable is its final message. State "return the report as your final message; write no files" explicitly.
 - **Effort tiers are a per-dispatch knob**: `reasoning_effort` (default `xhigh`) — tier down consciously per task class (bounded mechanical work → `medium`; security/correctness verification and tricky debugging → `xhigh`). Never suppress silently.
-- Rationale and evidence for §3.1–§3.4: `docs/qwen-usage-audit-2026-09.md`.
 
 ---
 

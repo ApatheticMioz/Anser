@@ -43,7 +43,7 @@ which one it is before acting.
 
 | Persona | Runtime | Mandate | Hard Limits |
 |---|---|---|---|
-| **Lead Architect** | Cloud (Claude Sonnet / Gemini Flash in Antigravity) | Architecture, task decomposition, plan & manifest authorship, supervisory steering, final synthesis. | **Never** bulk-read source into cloud context; **never** author code; offloads exploration to the Coworker in single-concern slices. |
+| **Lead Architect** | Cloud (Claude Code: GLM 5.3 Plan / GLM 5.3-flash Exec; Antigravity: Gemini 3.8 Flash) | Architecture, task decomposition, plan & manifest authorship, supervisory steering, final synthesis. | **Never** bulk-read source into cloud context; **never** author code; offloads exploration to the Coworker in single-concern slices. |
 | **Autonomous Execution Coworker** | Local Qwen3.8-27B via Anser (`qwen38-local` MCP) | Hands-on execution: explore, AST surgery, edit, test, shell. Returns raw ground-truth facts. | **Pure text only** (`--language-model-only`); **never** vision; **never** authors high-level plans/roadmaps; **never** escapes the sandbox root. |
 | **Autonomous Optimizer (Evo)** | Local, inside the Coworker | Closed-loop mutation: propose -> evaluate -> select/revert against a fitness metric. | **Snapshot before mutating**; **revert on regression**; never edits files outside the candidate's snapshot list. |
 
@@ -116,24 +116,22 @@ python <repo>/mcp-qwen/update_schemas.py
   "fix" it by hand; let `edit_file` auto-normalize.
 
 ### 3.2 Structural AST surgery (preferred over regex)
-Use the AST tools, not string matching, for any syntactic refactor:
+Use structural AST tools, not string matching, for syntactic discovery and refactoring:
 - `ast_search` — find code by pattern with metavariables
   (`function $NAME($$$ARGS) { $$$BODY }`).
-- `ast_replace` — AST-verified node replacement; **syntax-validated before
-  disk commit** (invalid rewrites are auto-rejected, file stays pristine).
-- `ast_replace_batch` — same pattern/rewrite across a directory/glob; each
-  file is syntax-gated and committed independently.
-- For large-scale or multi-file surgery, run the `ast-grep` CLI directly via
-  `bash`.
+- For multi-file or repository-scale AST surgery, run the `ast-grep` CLI directly
+  via `bash`.
+- Code edits made via `edit_file` are automatically validated by in-memory AST
+  and syntax gates before disk commit.
 
 ### 3.3 Edit primitives (complementary, not competing)
 - `edit_file` — exact-substring, uniqueness-guarded, per-region line-ending
-  preservation. Use for small, unambiguous replacements.
+  preservation with transparent in-memory syntax validation (JS/TS, Python,
+  JSON, LaTeX, BibTeX). Use for unambiguous targeted replacements.
 - `apply_patch` — unified-diff, multi-line/structural, 2 MB cap
-  (`PatchTooLargeError`), pre-validates every in-patch path. Use for
-  multi-hunk or structural changes.
-- **Never** introduce a third fuzzy-matcher (Aider-style) — it was
-  deliberately rejected (Issue #8).
+  (`PatchTooLargeError`), pre-validates every in-patch path with git apply
+  `--unidiff-zero`. Use for multi-hunk or structural changes.
+- Fuzzy matching is not supported; modifications use exact substrings or unified diffs.
 
 ### 3.4 Module layout (where new code goes)
 ```
@@ -152,10 +150,10 @@ mcp-qwen/
       runner.js            # agent loop, continuation, empty-stream guard
       core/                # microkernel: kernel.js, events.js
       services/            # sandbox_fs, shell_executor, ast_service,
-                           #   provider_vllm, mcp_bridge, event_logger
+                           #   web_service, provider_vllm, mcp_bridge, event_logger
       evo/                 # evo_operator, lineage_dag, evaluator,
                            #   trace_repair, watchdog
-  tests/                   # 36 suites (see section 5)
+  tests/                   # 37 suites (see section 5)
 ```
 **New tools** are in-process microkernel plugins under `src/harness/services/`
 — never external CLI subprocesses (in-process = sub-millisecond).
@@ -202,7 +200,7 @@ mcp-qwen/
 - **NEVER** weaken, skip, or delete a failing test to "unblock" the build.
   Fix the code, or file the defect — never the canary.
 - **NEVER** commit secrets, credentials, or machine-identity paths
-  (see `SECURITY.md`; the repo was scrubbed of these in `d2ed325`).
+  (see `SECURITY.md`).
 
 ---
 
@@ -225,9 +223,9 @@ TEST_OFFLINE=1 npm run test:all --prefix mcp-qwen
 **Suite truth (verified):**
 | Command | Suites | Notes |
 |---|---|---|
-| `npm run test` | **31** | Fast fail-offline gate. |
-| `npm run test:all` | **36** | Full superset; the CI pass/fail signal. |
-| On-disk `.test.js` | **36** | Union of the two. |
+| `npm run test` | **33** | Fast fail-offline gate (33 offline suites). |
+| `npm run test:all` | **37** | Full superset; the CI pass/fail signal (33 offline + 4 live). |
+| On-disk `.test.js` | **37** | Union of the two. |
 
 **Live suites** (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) need a
 running vLLM on `:18020` + a 24 GB GPU. They **skip honestly** when
@@ -260,8 +258,8 @@ fail-fast). It uses `npm ci` in `mcp-qwen/` and runs the authoritative
 
 ## 6. Security & Reporting
 
-- The sandbox is a **zero-trust, 5-layer** defense-in-depth boundary
-  (see `README.md` section 4 and `docs/audits/PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md`).
+- The sandbox is a **zero-trust, 5-layer** defense-in-depth boundary:
+  PathEscape validation -> Symlink Realpath resolution -> Root-Overwrite Guard -> Dangerous-Shell Filter -> AST/LaTeX Syntax Validation & Evo Rollback.
 - **Never** open a public issue for a security vulnerability. Report
   privately per [`SECURITY.md`](SECURITY.md).
 - The 137-vector containment suite (`tests/security.test.js`: 123 attack
@@ -275,10 +273,6 @@ fail-fast). It uses `npm ci` in `mcp-qwen/` and runs the authoritative
    ground truth.
 2. `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `CONTRIBUTING.md` = operating
    contracts (verify against code before relying on them).
-3. `docs/audits/*`, `README.md` benchmark tables, `NOTES.md` = **historical
-   claim ledgers, NOT ground truth.** Never anchor a decision on a secondary
-   claim without verifying the underlying code.
-
-*Last verified against `main` @ `4e997f5` (CI + security policy + test
-portability). Re-verify counts with `node -e` against `package.json` if the
-gate changes.*
+3. Secondary documentation, historical audit reports, and markdown notes =
+   **reference ledgers, NOT executable ground truth.** Validate all claims
+   against live code and test suites.

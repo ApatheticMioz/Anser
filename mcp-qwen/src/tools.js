@@ -67,13 +67,14 @@ export function registerTools(server) {
         "ORCHESTRATION RULES:\n" +
         "  - Single Logical Concern: Scope each prompt to ONE cohesive subsystem, architectural layer, or target AST slice. Do not bundle disparate subsystems or cross-cutting concerns into a single dispatch.\n" +
         "  - Full Objective Fulfillment: Do not instruct Qwen to limit its tool calls or artificially restrict its execution. Qwen operates autonomously with full tool depth once dispatched with a focused objective.\n" +
-        "  - Session Lifecycle: Use persistent `session_id` across 2-3 focused turns, then roll to a fresh session_id (e.g. '<milestone>_stage2') when context accumulates.\n" +
+        "  - Session Lifecycle: Maintain a persistent `session_id` across a cohesive milestone to maximize KV prefix caching. Roll to a fresh session_id (e.g. '<milestone>_stage2') upon milestone boundaries, session drift, or ~60–80 cumulative turns.\n" +
         "  - Zero-Turn Execution Contract: Tasks completing within ~45s return results synchronously. Long-running tasks yield a `taskId` and a `wait_command`. Execute the `wait_command` immediately in your shell to block at $0 cost and wake on completion. Do not poll manually or execute parallel exploratory tools while waiting.\n" +
         "  - Reasoning Effort: optional `reasoning_effort` param (xhigh | medium | low) tunes per-dispatch thinking depth; omit to use the QWEN_REASONING_EFFORT env default (xhigh).\n\n" +
-        "SUPPORTED EXTENSIONS:\n" +
-        "  - `uvx free-search-mcp` (Web search, documentation lookup, PDF/DOCX ingestion)\n" +
-        "  - `npx -y @upstash/context7-mcp` (Live framework/library documentation)\n" +
-        "  - `gh` CLI / `git` (Authenticated GitHub operations and atomic commits)",
+        "BUILT-IN CAPABILITIES:\n" +
+        "  - Built-in live Web Search & Article Extraction ('web_search', 'web_fetch' with Mozilla Readability & Turndown)\n" +
+        "  - Transparent AST & Syntax Validation on edits ('edit_file' validates JS, TS, Python, JSON, LaTeX, BibTeX)\n" +
+        "  - AST Search ('ast_search') and Git Unified Diffs ('apply_patch' with --unidiff-zero)\n" +
+        "  - Shell Execution ('bash') with process group cleanup and git CLI integration",
       inputSchema: {
         prompt: z
           .string()
