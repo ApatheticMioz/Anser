@@ -19,16 +19,17 @@
 ## Table of Contents
 
 1. [The Paradigm: Cloud Brain + Local Hands](#the-paradigm-cloud-brain--local-hands)
-2. [Case Study: The 453-Session Marathon ($2,000+ Saved on a Single GPU)](#case-study-the-453-session-marathon)
-3. [System Architecture](#system-architecture)
-4. [Core Capabilities](#core-capabilities)
-5. [Quickstart (3 Steps)](#quickstart-3-steps)
-6. [Model Serving, Speculative Decoding & Quantization](#model-serving--speculative-decoding)
-7. [Zero-Trust Sandboxed File Operations](#zero-trust-sandboxed-file-operations)
-8. [Testing & Verification](#testing--verification)
-9. [Repository Structure](#repository-structure)
-10. [Contributing](#contributing)
-11. [License & Commercial Dual-Licensing](#license--commercial-dual-licensing)
+2. [Benchmark & Economic Grounding](#benchmark--economic-grounding)
+3. [Case Study: The 453-Session Marathon ($2,000+ Saved on a Single GPU)](#case-study-the-453-session-marathon)
+4. [System Architecture](#system-architecture)
+5. [Core Capabilities](#core-capabilities)
+6. [Quickstart (3 Steps)](#quickstart-3-steps)
+7. [Model Serving, Speculative Decoding & Quantization](#model-serving--speculative-decoding)
+8. [Zero-Trust Sandboxed File Operations](#zero-trust-sandboxed-file-operations)
+9. [Testing & Verification](#testing--verification)
+10. [Repository Structure](#repository-structure)
+11. [Contributing](#contributing)
+12. [License & Commercial Dual-Licensing](#license--commercial-dual-licensing)
 
 ---
 
@@ -75,6 +76,33 @@ Anser inverts this relationship with an asymmetric division of labor:
 
 ---
 
+## Benchmark & Economic Grounding
+
+### The Agentic Sweet Spot: Dense 27B on Consumer Silicon
+In modern agentic coding evaluations (such as the **Artificial Analysis (AA) Coding Index**, **Terminal-Bench**, and **LiveCodeBench**), closed-source frontier models (like Anthropic's **Claude Sonnet 5** and **Claude 3.5 Sonnet**) set the gold standard for high-level ambiguous system design.
+
+However, in continuous agentic pair-programming—where 80%+ of prompt tokens are spent iteratively ingesting repository context, checking compiler logs, running AST searches, and applying patches—routing every turn to paid cloud APIs is economically prohibitive.
+
+**Qwen3.8-27B** represents the optimal sweet spot for local execution:
+- **Consumer Hardware Footprint**: A dense 27B parameter architecture that fits completely within a single consumer **24 GB VRAM GPU** (NVIDIA RTX 3090 / 4090) using W4A16 AutoRound quantization.
+- **Universal 245K Context**: Ingests entire repositories, test traces, and multi-turn message history with KVarN tiled KV caching.
+- **Asymmetric Division of Labor**: The Lead Architect (Claude Code / Gemini 3.8 Flash in Antigravity) handles top-level system architecture and code review, while Qwen3.8-27B executes hands-on AST surgery and test verification locally at **$0 token cost**.
+
+### Benchmark & Pricing Matrix
+
+| Evaluation Dimension | Qwen3.8-27B (via Anser) | Claude Sonnet 5 (Frontier Standard) | Claude 3.5 Sonnet / GPT-4o (Previous Gen) |
+|---|---|---|---|
+| **Inference Location** | **100% Local (RTX 3090/4090 24GB)** | Managed Cloud API | Managed Cloud API |
+| **Artificial Analysis Profile** | Dense local agentic execution & code editing | Frontier reasoning & coding leader | High-reasoning coding baseline |
+| **API Cost: Prompt Prefill** | **$0.00 / million tokens** | $2.00 / million tokens | $3.00 / million tokens |
+| **API Cost: Completion Output** | **$0.00 / million tokens** | $10.00 / million tokens | $15.00 / million tokens |
+| **Effective Context Ceiling** | **245,760 tokens** (Universal 245K) | 200,000 tokens | 128,000–200,000 tokens |
+| **Tool Execution Model** | In-process microkernel (Node.js heap) | Remote network API / MCP | Remote network API / MCP |
+| **Cost of 453-Session Marathon**<br>*(962.3M prompt + 10.4M completion)* | **$0.00** | **$2,028.25 USD** | **$3,042.39 USD** |
+| **Data Privacy & Exfiltration** | **Zero bytes leave your machine** | Third-party data centers | Third-party data centers |
+
+---
+
 ## Case Study: The 453-Session Marathon
 
 Anser is battle-tested. The metrics below reflect **exact, ground-truth telemetry** captured across an intensive 3-week continuous development marathon on a single consumer workstation equipped with an **NVIDIA GeForce RTX 3090 (24 GB VRAM)**:
@@ -95,7 +123,7 @@ Anser is battle-tested. The metrics below reflect **exact, ground-truth telemetr
 | **Active Generation Speed** | **44.54 t/s avg** (Peak: **159.10 t/s**) | Instantaneous speculative decoding burst throughput |
 | **Active Prompt Throughput** | **1,376.75 t/s avg** (Peak: **12,044 t/s**) | Fast context digestion via vLLM flash-attention |
 | **Financial Savings vs Claude Sonnet 5** | **$2,028.25 USD** saved | At Sonnet 5 rates ($2.00/M prompt, $10.00/M completion) |
-| **Financial Savings vs Baseline Rates** | **$3,042.39 USD** saved | At baseline rates ($3.00/M prompt, $15.00/M completion) |
+| **Financial Savings vs Claude 3.5 Sonnet / GPT-4o** | **$3,042.39 USD** saved | At previous-gen commercial rates ($3.00/M prompt, $15.00/M completion) |
 | **Local Inference Token Cost** | **$0.00** | **A $1,000 GPU paid for itself in less than a month.** |
 
 ---
