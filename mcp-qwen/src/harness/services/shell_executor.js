@@ -276,16 +276,4 @@ export function shellExecutorPlugin(ctx, options = {}) {
     execute: (args) => executor.execute(args),
   });
 
-  ctx.registerTool("exec_command", {
-    description: "Alias for bash tool: run commands safely in workspace",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string", description: "Command line to run" },
-        cwd: { type: "string", description: "Working directory" },
-      },
-      required: ["command"],
-    },
-    execute: (args) => executor.execute(args),
-  });
 }

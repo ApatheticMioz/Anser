@@ -50,6 +50,11 @@ const EXT_TO_LANG = {
   ".html": "html",
   ".css": "css",
   ".json": "json",
+  ".tex": "latex",
+  ".latex": "latex",
+  ".sty": "latex",
+  ".cls": "latex",
+  ".bib": "bibtex",
 };
 
 // Languages the in-process @ast-grep/napi binding can parse.
@@ -1197,6 +1202,10 @@ export class AstService {
         return this._checkGo(filePath, content);
       case "rust":
         return this._checkRust(filePath, content);
+      case "latex":
+        return this._checkLatex(content);
+      case "bibtex":
+        return this._checkBibtex(content);
       default:
         return {
           checked: false,
@@ -1407,6 +1416,327 @@ export class AstService {
       _removeTemp(tmp);
     }
   }
+
+  /**
+   * LaTeX gate: in-process structural validation of LaTeX documents.
+   * Validates:
+   *  - Comment stripping (unescaped % to end-of-line)
+   *  - Verbatim environments (verbatim, lstlisting, minted) and inline \\verb
+   *  - Balanced environment nesting (\\begin{env} ... \\end{env})
+   *  - Balanced grouping delimiters ({ and }) outside comments and verbatim
+   */
+  _checkLatex(content) {
+    const lines = content.split("\n");
+    const envStack = []; // { name, line }
+    let braceDepth = 0;
+    let inVerbatim = null;
+
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      const lineNum = lineIdx + 1;
+      const rawLine = lines[lineIdx];
+
+      // If inside a verbatim block, wait for \\end{inVerbatim}
+      if (inVerbatim) {
+        const endPattern = new RegExp(`\\\\end\\{${inVerbatim}\\}`);
+        const endMatch = rawLine.match(endPattern);
+        if (endMatch) {
+          inVerbatim = null;
+          if (envStack.length > 0 && envStack[envStack.length - 1].name === inVerbatim) {
+            envStack.pop();
+          }
+        } else {
+          continue;
+        }
+      }
+
+      // Strip comments: find first unescaped %
+      let code = "";
+      let inVerbInline = false;
+      let verbDelim = "";
+
+      for (let i = 0; i < rawLine.length; i++) {
+        const ch = rawLine[i];
+
+        // Inline \\verb|...| or \\verb+...etc+
+        if (!inVerbInline && rawLine.slice(i).startsWith("\\verb") && i + 5 < rawLine.length) {
+          const nextCh = rawLine[i + 5];
+          if (nextCh !== "*" && nextCh !== " " && nextCh !== "\t") {
+            inVerbInline = true;
+            verbDelim = nextCh;
+            code += "\\verb" + verbDelim;
+            i += 5;
+            continue;
+          }
+        }
+        if (inVerbInline) {
+          code += ch;
+          if (ch === verbDelim) {
+            inVerbInline = false;
+          }
+          continue;
+        }
+
+        // Unescaped % starts a comment
+        if (ch === "%") {
+          let bsCount = 0;
+          let k = i - 1;
+          while (k >= 0 && rawLine[k] === "\\") {
+            bsCount++;
+            k--;
+          }
+          if (bsCount % 2 === 0) {
+            break; // comment till end of line
+          }
+        }
+        code += ch;
+      }
+
+      // Parse code for \\begin{...}, \\end{...}, and unescaped { / }
+      let i = 0;
+      while (i < code.length) {
+        if (code.slice(i).startsWith("\\begin{")) {
+          const closeIdx = code.indexOf("}", i + 7);
+          if (closeIdx === -1) {
+            return {
+              checked: true,
+              valid: false,
+              language: "latex",
+              error: `Malformed \\begin statement at line ${lineNum}`,
+            };
+          }
+          const envName = code.slice(i + 7, closeIdx).trim();
+          envStack.push({ name: envName, line: lineNum });
+          if (envName === "verbatim" || envName === "lstlisting" || envName === "minted") {
+            inVerbatim = envName;
+            i = closeIdx + 1;
+            break;
+          }
+          i = closeIdx + 1;
+          continue;
+        }
+
+        if (code.slice(i).startsWith("\\end{")) {
+          const closeIdx = code.indexOf("}", i + 5);
+          if (closeIdx === -1) {
+            return {
+              checked: true,
+              valid: false,
+              language: "latex",
+              error: `Malformed \\end statement at line ${lineNum}`,
+            };
+          }
+          const envName = code.slice(i + 5, closeIdx).trim();
+          if (envStack.length === 0) {
+            return {
+              checked: true,
+              valid: false,
+              language: "latex",
+              error: `Unexpected \\end{${envName}} at line ${lineNum} with no open environment`,
+            };
+          }
+          const top = envStack.pop();
+          if (top.name !== envName) {
+            return {
+              checked: true,
+              valid: false,
+              language: "latex",
+              error: `Mismatched LaTeX environment: expected '\\end{${top.name}}' (opened at line ${top.line}), but found '\\end{${envName}}' at line ${lineNum}`,
+            };
+          }
+          i = closeIdx + 1;
+          continue;
+        }
+
+        const ch = code[i];
+        let bsCount = 0;
+        let k = i - 1;
+        while (k >= 0 && code[k] === "\\") {
+          bsCount++;
+          k--;
+        }
+        const isEscaped = bsCount % 2 === 1;
+
+        if (!isEscaped) {
+          if (ch === "{") {
+            braceDepth++;
+          } else if (ch === "}") {
+            braceDepth--;
+            if (braceDepth < 0) {
+              return {
+                checked: true,
+                valid: false,
+                language: "latex",
+                error: `Unexpected closing brace '}' at line ${lineNum}`,
+              };
+            }
+          }
+        }
+        i++;
+      }
+    }
+
+    if (inVerbatim) {
+      return {
+        checked: true,
+        valid: false,
+        language: "latex",
+        error: `Unclosed LaTeX verbatim environment '\\begin{${inVerbatim}}'`,
+      };
+    }
+
+    if (envStack.length > 0) {
+      const unclosed = envStack.pop();
+      return {
+        checked: true,
+        valid: false,
+        language: "latex",
+        error: `Unclosed LaTeX environment '\\begin{${unclosed.name}}' opened at line ${unclosed.line}`,
+      };
+    }
+
+    if (braceDepth > 0) {
+      return {
+        checked: true,
+        valid: false,
+        language: "latex",
+        error: `Unclosed brace '{' (${braceDepth} unclosed)`,
+      };
+    }
+
+    return { checked: true, valid: true, language: "latex" };
+  }
+
+  /**
+   * BibTeX gate: in-process structural validation of BibTeX files.
+   * Validates:
+   *  - BibTeX entry boundary syntax (@type{key, ...} or @type(key, ...))
+   *  - Required citation keys for standard entry types
+   *  - Balanced braces and quote delimiters across each entry
+   */
+  _checkBibtex(content) {
+    let i = 0;
+    const len = content.length;
+    let lineNum = 1;
+
+    while (i < len) {
+      const ch = content[i];
+      if (ch === "\n") {
+        lineNum++;
+        i++;
+        continue;
+      }
+
+      if (ch !== "@") {
+        i++;
+        continue;
+      }
+
+      const entryStartLine = lineNum;
+      i++; // skip '@'
+
+      let type = "";
+      while (i < len && /[a-zA-Z0-9_]/.test(content[i])) {
+        type += content[i];
+        i++;
+      }
+      type = type.toLowerCase();
+      if (!type) {
+        return {
+          checked: true,
+          valid: false,
+          language: "bibtex",
+          error: `Malformed BibTeX entry at line ${entryStartLine}: missing entry type after '@'`,
+        };
+      }
+
+      while (i < len && /\s/.test(content[i])) {
+        if (content[i] === "\n") lineNum++;
+        i++;
+      }
+
+      if (i >= len) {
+        return {
+          checked: true,
+          valid: false,
+          language: "bibtex",
+          error: `Unclosed BibTeX entry '@${type}' at line ${entryStartLine}`,
+        };
+      }
+
+      const opener = content[i];
+      if (opener !== "{" && opener !== "(") {
+        if (type === "comment") {
+          while (i < len && content[i] !== "\n") i++;
+          continue;
+        }
+        return {
+          checked: true,
+          valid: false,
+          language: "bibtex",
+          error: `Malformed BibTeX entry '@${type}' at line ${entryStartLine}: expected '{' or '(' after entry type, found '${opener}'`,
+        };
+      }
+
+      const closer = opener === "{" ? "}" : ")";
+      i++; // skip opener
+
+      const isSpecial = type === "comment" || type === "string" || type === "preamble";
+
+      while (i < len && /\s/.test(content[i])) {
+        if (content[i] === "\n") lineNum++;
+        i++;
+      }
+
+      if (!isSpecial) {
+        let key = "";
+        while (i < len && content[i] !== "," && content[i] !== closer && !/\s/.test(content[i])) {
+          key += content[i];
+          i++;
+        }
+        if (!key || key.includes("=")) {
+          return {
+            checked: true,
+            valid: false,
+            language: "bibtex",
+            error: `Malformed BibTeX entry '@${type}' at line ${entryStartLine}: missing citation key`,
+          };
+        }
+      }
+
+      let depth = 1;
+      let inQuote = false;
+
+      while (i < len && depth > 0) {
+        const c = content[i];
+        if (c === "\n") {
+          lineNum++;
+        } else if (c === "\\" && i + 1 < len) {
+          i += 2;
+          continue;
+        } else if (c === '"' && depth === 1) {
+          inQuote = !inQuote;
+        } else if (!inQuote) {
+          if (c === opener) {
+            depth++;
+          } else if (c === closer) {
+            depth--;
+          }
+        }
+        i++;
+      }
+
+      if (depth > 0) {
+        return {
+          checked: true,
+          valid: false,
+          language: "bibtex",
+          error: `Unclosed BibTeX entry '@${type}' (opened at line ${entryStartLine})`,
+        };
+      }
+    }
+
+    return { checked: true, valid: true, language: "bibtex" };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1481,79 +1811,5 @@ export function astPlugin(ctx, options = {}) {
       required: ["path", "pattern"],
     },
     execute: async (args) => ast.search(args),
-  });
-
-  ctx.registerTool("ast_replace", {
-    description:
-      "Performs AST-verified syntactic code replacement with mandatory syntax validation before commit. " +
-      "Rewrites matching code patterns while preserving formatting and comments. " +
-      "If the rewrite introduces invalid syntax, it is automatically rejected and the file is kept pristine. " +
-      "Pass dry_run=true to preview the rewrite (validates syntax, writes nothing). " +
-      "Example: pattern='function $NAME($ARGS) { $$$BODY }', rewrite='async function $NAME($ARGS) { $$$BODY }'.",
-    parameters: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description: "Path to file to rewrite",
-        },
-        pattern: {
-          type: "string",
-          description: "Target AST code pattern with metavariables",
-        },
-        rewrite: {
-          type: "string",
-          description: "Replacement AST code pattern referencing captured metavariables",
-        },
-        lang: {
-          type: "string",
-          description: "Optional language ('js', 'ts', 'python', 'go', 'rust')",
-        },
-        dry_run: {
-          type: "boolean",
-          description: "When true, compute and syntax-validate the rewrite but write nothing to disk.",
-        },
-      },
-      required: ["path", "pattern", "rewrite"],
-    },
-    execute: async (args) => ast.replace(args),
-  });
-
-  ctx.registerTool("ast_replace_batch", {
-    description:
-      "Applies the SAME AST pattern/rewrite across every matching file in a directory or glob target. " +
-      "Each file is computed in memory, syntax-gated, and committed independently: a file whose rewrite " +
-      "is verified invalid is rolled back to pristine and recorded in failures, while the batch continues. " +
-      "Respects the sandbox ignore-set and per-file size caps. " +
-      "Pass dry_run=true to preview: everything is computed and validated but NOTHING is written. " +
-      "Returns a summary: { dry_run, files_scanned, files_matched, files_changed, files_would_change, " +
-      "replacements, failures: [{file, error}], syntax_unverified: [file, ...] }.",
-    parameters: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description: "Target directory or glob pattern (standard recursive wildcards)",
-        },
-        pattern: {
-          type: "string",
-          description: "Target AST code pattern with metavariables",
-        },
-        rewrite: {
-          type: "string",
-          description: "Replacement AST code pattern referencing captured metavariables",
-        },
-        lang: {
-          type: "string",
-          description: "Optional language (only used for single-file inference; batch infers per-file by extension)",
-        },
-        dry_run: {
-          type: "boolean",
-          description: "When true, compute and validate everything but write nothing to disk.",
-        },
-      },
-      required: ["path", "pattern", "rewrite"],
-    },
-    execute: async (args) => ast.replaceBatch(args),
   });
 }

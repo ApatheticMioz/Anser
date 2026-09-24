@@ -60,6 +60,21 @@ export class PatchTooLargeError extends Error {
 }
 
 /**
+ * Raised when in-memory syntax validation fails before writing an edit to disk.
+ * Preserves disk pristine state (no bytes modified).
+ */
+export class SyntaxValidationError extends Error {
+  constructor(filePath, reason) {
+    super(
+      `SyntaxValidationError: In-memory syntax validation failed for '${filePath}': ${reason}. File was kept pristine (no changes written to disk).`
+    );
+    this.name = "SyntaxValidationError";
+    this.file = filePath;
+    this.reason = reason;
+  }
+}
+
+/**
  * F-5 / §2.8: raised when the `git apply` subprocess is killed by the timeout
  * (or otherwise terminated by a signal) rather than failing on patch content.
  * Node's `execFileSync` reports a timeout as `err.code === "ETIMEDOUT"` and
@@ -299,6 +314,15 @@ export const DEFAULT_IGNORED_DIRS = new Set([
  */
 export const MAX_PATCH_SIZE = 2 * 1024 * 1024; // 2 MB
 
+let _sharedAstService = null;
+async function getSharedAstService() {
+  if (!_sharedAstService) {
+    const { AstService } = await import("./ast_service.js");
+    _sharedAstService = new AstService();
+  }
+  return _sharedAstService;
+}
+
 export class SandboxFsService {
   constructor(options = {}) {
     // P4i: canonicalize the sandbox root through the OS symlink/junction
@@ -315,6 +339,7 @@ export class SandboxFsService {
       typeof options.gitApplyTimeoutMs === "number" && options.gitApplyTimeoutMs > 0
         ? options.gitApplyTimeoutMs
         : 15_000;
+    this._getAst = options.getAst || null;
   }
 
   /**
@@ -573,11 +598,31 @@ export class SandboxFsService {
       ? original.replaceAll(effectiveTarget, effectiveReplacement)
       : original.replace(effectiveTarget, effectiveReplacement);
 
+    // In-memory AST & syntax validation gate before writing to disk
+    let syntaxVerified = false;
+    const ast = this._getAst ? this._getAst() : await getSharedAstService();
+    if (ast && typeof ast.inferLanguageByExtension === "function" && typeof ast.validateSyntax === "function") {
+      const lang = ast.inferLanguageByExtension(resolved);
+      if (lang) {
+        const check = ast.validateSyntax(resolved, updated, lang);
+        if (check.checked) {
+          if (!check.valid) {
+            throw new SyntaxValidationError(
+              resolved,
+              check.error || `Syntax validation check failed for '${lang}'`
+            );
+          }
+          syntaxVerified = true;
+        }
+      }
+    }
+
     fs.writeFileSync(resolved, updated, "utf8");
     return {
       path: resolved,
       occurrences_replaced: replace_all ? occurrences : 1,
       success: true,
+      syntax_verified: syntaxVerified,
     };
   }
 
@@ -972,7 +1017,10 @@ export class SandboxFsService {
  * Anser Plugin to mount SandboxFsService and its tools into Context.
  */
 export function sandboxFsPlugin(ctx, options = {}) {
-  const fsService = new SandboxFsService(options);
+  const fsService = new SandboxFsService({
+    ...options,
+    getAst: () => ctx.get("ast"),
+  });
   ctx.provide("fs", fsService);
 
   ctx.registerTool("read_file", {
@@ -1005,8 +1053,9 @@ export function sandboxFsPlugin(ctx, options = {}) {
 
   ctx.registerTool("edit_file", {
     description:
-      "Perform exact text search-and-replace in a file. " +
-      "target_content must occur exactly once unless replace_all is true; ambiguous edits are refused.",
+      "Perform exact text search-and-replace in a file with transparent in-memory syntax validation. " +
+      "target_content must occur exactly once unless replace_all is true; ambiguous edits are refused. " +
+      "If the edit introduces syntax errors (JS, TS, Python, JSON, LaTeX, BibTeX), it is automatically rejected before disk write.",
     parameters: {
       type: "object",
       properties: {

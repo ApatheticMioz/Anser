@@ -63,7 +63,7 @@ const MUTATING_TOOLS = new Set([
   "evo_select_candidate",
   "evo_revert_candidate",
 ]);
-const BASH_TOOLS = new Set(["bash", "exec_command"]);
+const BASH_TOOLS = new Set(["bash"]);
 
 // M6b: exponential backoff between empty-stream retries. Before each retry the
 // runner sleeps base * 2^(retryNumber-1) ms, capped at capMs. With the defaults
@@ -86,18 +86,19 @@ Operating Guidelines:
 2. Use sandboxed filesystem tools:
    - 'read_file' to inspect file slices with line numbers.
    - 'apply_patch' to apply standard unified diffs atomically using git apply (--unidiff-zero).
-   - 'edit_file' for exact search-and-replace (auto-normalizes line endings, preserves file style).
+   - 'edit_file' for exact search-and-replace (auto-normalizes line endings, preserves file style, transparently validated by AST/LaTeX/syntax gates).
    - 'write_file', 'list_dir', and 'search_code' (fast git grep indexing).
-3. Use structural AST tools for code discovery and refactoring:
-   - 'ast_search' to find code by syntactic pattern with metavariables.
-   - 'ast_replace' to perform AST-verified node replacement with compile-check safety.
+3. Use structural AST tools for code discovery:
+   - 'ast_search' to find code by syntactic pattern with metavariables ($VAR, $$$BODY).
    - Run 'ast-grep' CLI directly via 'bash' for large-scale or multi-file AST surgery.
 4. Use 'bash' to run builds, tests, benchmarks, or git operations safely.
-5. When optimizing or refactoring, use the Evo tools:
+5. Provide concise, direct technical summaries of your actions and findings.`;
+
+const EVO_SYSTEM_PROMPT_ADDENDUM = `
+6. When optimizing or refactoring, use the Evo tools:
    - 'evo_propose_candidate' to snapshot files before modifying.
    - 'evo_evaluate_candidate' to test and compute fitness score (receives compact failure digests on error).
-   - 'evo_select_candidate' to accept improvements, or 'evo_revert_candidate' to rollback regressions.
-6. Provide concise, direct technical summaries of your actions and findings.`;
+   - 'evo_select_candidate' to accept improvements, or 'evo_revert_candidate' to rollback regressions.`;
 
 /**
  * User-role directive injected when the model's output is cut off by the
@@ -126,7 +127,7 @@ export const PROBE_BUDGET_ADVISORY =
   "[Probe-Budget Advisory] You have run several consecutive shell (bash) calls " +
   "without making a file change. Mutation dispatches are SINGLE-PASS: state a " +
   "hypothesis, make the edit directly with a native file tool (write_file / " +
-  "edit_file / apply_patch / ast_replace), then run the stated verification " +
+  "edit_file / apply_patch), then run the stated verification " +
   "command ONCE. Do not run iterative probe or measurement scripts to " +
   "discover the answer — that wastes the session. If you are stuck, state the " +
   "hypothesis you are testing and make the edit now.";
@@ -203,6 +204,8 @@ export class AnserRunner {
     onToolCall,
     extensions,
     targetInWsl = false,
+    testCommand,
+    enableEvo = false,
   }) {
     const t0 = Date.now();
     // P4i: canonicalize the per-run cwd through the OS symlink/junction layer
@@ -228,8 +231,15 @@ export class AnserRunner {
     } else {
       ctx.plugin(vllmProviderPlugin);
     }
-    ctx.plugin(evoPlugin, { workspaceRoot: effectiveCwd });
     ctx.plugin(astPlugin, { root: effectiveCwd });
+
+    // Conditional Evo mounting: only mount the Evo closed-loop optimization tools
+    // when a testCommand / evaluation benchmark or explicit evo flag is active.
+    // In standard exploration/editing turns, the toolset remains lean at exactly 8 tools.
+    const isEvoActive = Boolean(testCommand || enableEvo);
+    if (isEvoActive) {
+      ctx.plugin(evoPlugin, { workspaceRoot: effectiveCwd });
+    }
 
     // P8: boot the generic MCP extension bridge BEFORE the runner loop so the
     // remote tools are registered on the Anser Context and visible to the
@@ -287,8 +297,12 @@ export class AnserRunner {
       logger.append({ type: "skills_injected", skills: matchedSkillNames });
     }
 
+    const systemPrompt = isEvoActive
+      ? DEFAULT_SYSTEM_PROMPT + EVO_SYSTEM_PROMPT_ADDENDUM
+      : DEFAULT_SYSTEM_PROMPT;
+
     const messages = [
-      { role: "system", content: DEFAULT_SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       ...logger.getConversationHistory(),
     ];
 
