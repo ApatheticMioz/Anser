@@ -1024,7 +1024,7 @@ export function sandboxFsPlugin(ctx, options = {}) {
   ctx.provide("fs", fsService);
 
   ctx.registerTool("read_file", {
-    description: "Read a slice of a text file with line numbers (safe, bounded)",
+    description: "Read a slice of a text file with line numbers (safe, bounded). Always use this tool instead of shell commands (cat, head, tail, sed) in bash.",
     parameters: {
       type: "object",
       properties: {
@@ -1053,7 +1053,7 @@ export function sandboxFsPlugin(ctx, options = {}) {
 
   ctx.registerTool("edit_file", {
     description:
-      "Perform exact text search-and-replace in a file with transparent in-memory syntax validation. " +
+      "Perform exact text search-and-replace in a file with transparent in-memory syntax validation. Always use this tool instead of sed/awk in bash. " +
       "target_content must occur exactly once unless replace_all is true; ambiguous edits are refused. " +
       "If the edit introduces syntax errors (JS, TS, Python, JSON, LaTeX, BibTeX), it is automatically rejected before disk write.",
     parameters: {
@@ -1083,7 +1083,7 @@ export function sandboxFsPlugin(ctx, options = {}) {
   });
 
   ctx.registerTool("list_dir", {
-    description: "List directory contents while auto-ignoring .venv, node_modules, and .git",
+    description: "List directory contents while auto-ignoring .venv, node_modules, and .git. Always use this tool instead of shell commands (ls, find) in bash.",
     parameters: {
       type: "object",
       properties: {
@@ -1095,7 +1095,7 @@ export function sandboxFsPlugin(ctx, options = {}) {
   });
 
   ctx.registerTool("search_code", {
-    description: "Fast code search across the codebase avoiding ignored directories",
+    description: "Fast code and pattern search across the codebase avoiding ignored directories. Always use this tool instead of shell commands (grep, rg) in bash.",
     parameters: {
       type: "object",
       properties: {

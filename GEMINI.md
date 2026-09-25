@@ -66,8 +66,9 @@ You operate within a hierarchical multi-agent pair-programming architecture in G
    - NEVER silently catch, suppress, or discard errors.
    - NEVER mask upstream HTTP status codes (e.g. 400 Bad Request, 500 Internal Error) or wrap downstream engine errors into synthetic assistant completions.
    - When an upstream service, parser, or subprocess fails, surface the unadulterated error status and stack trace immediately.
-9. **High-Reasoning Compute & Unaltered Deliberation (`reasoning_effort: "xhigh"`)**:
-   - Local Qwen defaults to `reasoning_effort: "xhigh"`, granting the model maximal test-time compute depth.
+9. **High-Reasoning Compute & Unaltered Deliberation (`reasoning_effort`)**:
+   - Local Qwen defaults to balanced deliberation (`reasoning_effort: "medium"`), optimizing execution speed and avoiding reasoning-token bloat during routine tasks, file editing, and test runs.
+   - High-reasoning compute (`reasoning_effort: "xhigh"`) is strictly **explicit-only**: reserve it for deep root-cause debugging, complex architectural proofs, or intricate algorithmic/AST refactors.
    - NEVER inject artificial stop-thinking or landing directives (e.g. "wrap up now", "stop deliberating") into continuation turns. Deliberation must conclude naturally based on internal problem resolution.
    - If token budget is exhausted during reasoning, the runtime fails fast with an explicit `reasoning_budget_exhausted` status rather than synthesizing a truncated completion.
 10. **Multi-Instance Concurrency & Live-Owner Invariant**:
@@ -115,7 +116,7 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 - **Cross-OS State Paths**: State is unified across Windows (`C:\Users\<user>\.qwen\`) and WSL (`/mnt/c/Users/<user>/.qwen\`, symlinked from `~/.qwen`). All tasks execute inside the in-process Anser microkernel.
 - **Claim→Verify pairs**: Confirm anomaly and corruption-class findings with an adversarial verification slice before they enter any report, manifest, or commit message.
 - **Read-only means no files**: A read-only slice's deliverable is its final message. State "return the report as your final message; write no files" explicitly.
-- **Effort tiers are a per-dispatch knob**: `reasoning_effort` (default `xhigh`) — tier down consciously per task class (bounded mechanical work → `medium`; security/correctness verification and tricky debugging → `xhigh`). Never suppress silently.
+- **Effort tiers are a per-dispatch knob**: `reasoning_effort` (default `medium`) — tier up consciously to `xhigh` only when deep deliberation is genuinely required. Never suppress silently.
 
 ---
 
@@ -162,7 +163,7 @@ To avoid tripping IDE-level file permission filters on `~/.gemini/` configuratio
 - **`prompt`** (string, required): Task, inquiry, or architectural instruction for Qwen (pure text-only; images must be inspected natively by Lead Architect and summarized into text).
 - **`cwd`** (string, required for project tasks): Target workspace directory (e.g. `/home/apath/Work/temp/final/paper`). Always specify this explicitly.
 - **`session_id`** (string, optional): Named persistent session ID (e.g. `paper_p1_citations`).
-- **`reasoning_effort`** (string, optional): `"xhigh"` (default), `"medium"`, or `"low"`.
+- **`reasoning_effort`** (string, optional): `"xhigh"`, `"medium"` (default), or `"low"`.
 - **`extensions`** (array of strings, optional): e.g. `["uvx free-search-mcp"]`, `["npx -y @upstash/context7-mcp"]`.
 - **`skills`** (array of strings, optional): Explicit list of skill names to inject.
 - **`test_command`** (string, optional): Verification test/benchmark command (e.g. `pytest tests/test_core.py`).

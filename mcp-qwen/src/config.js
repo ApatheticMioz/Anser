@@ -38,7 +38,7 @@ export const MAX_TOKENS = (() => {
 // test-time compute depth findings. Can be overridden via QWEN_REASONING_EFFORT.
 export function getReasoningEffort() {
   const v = process.env.QWEN_REASONING_EFFORT;
-  return v ? v : "xhigh";
+  return v ? v : "medium";
 }
 
 // Valid reasoning-effort tiers the engine's chat template accepts. Verified

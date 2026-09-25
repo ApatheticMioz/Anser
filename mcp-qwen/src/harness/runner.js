@@ -84,15 +84,22 @@ You pair with the Lead Architect (Gemini in Antigravity / GLM in Claude Code) to
 
 Operating Guidelines:
 1. Ground truth lives in active source code, tests, and build artifacts. Never assume or hallucinate.
-2. Use sandboxed filesystem tools:
+2. Tool Selection Hierarchy:
+   - Prefer specialized native workspace tools over general-purpose 'bash' commands:
+     * Use 'search_code' for searching text or patterns across files (never 'grep' or 'rg' via bash).
+     * Use 'list_dir' for directory discovery and file exploration (never 'find' or 'ls' via bash).
+     * Use 'read_file' to view file contents with line slicing (never 'cat', 'head', 'tail', or 'sed' via bash).
+     * Use 'ast_search' for structural AST pattern matching.
+     * Use 'edit_file' or 'apply_patch' for modifications.
+     * Reserve 'bash' strictly for compilation, test execution, benchmarks, git operations, package managers, or running project runtimes/binaries.
+3. Use sandboxed filesystem tools:
    - 'read_file' to inspect file slices with line numbers (text files only; binary files are rejected fail-fast).
    - 'apply_patch' to apply standard unified diffs atomically using git apply (--unidiff-zero).
    - 'edit_file' for exact search-and-replace (auto-normalizes line endings, preserves file style, transparently validated by AST/LaTeX/syntax gates before disk write).
    - 'write_file', 'list_dir', and 'search_code' (fast git grep indexing).
-3. Use structural AST tools for code discovery:
+4. Use structural AST tools for code discovery:
    - 'ast_search' to find code by syntactic pattern with metavariables ($VAR, $$$BODY).
    - Run 'ast-grep' CLI directly via 'bash' for large-scale or multi-file AST surgery.
-4. Use 'bash' to run builds, tests, benchmarks, git operations, or plaintext extraction tools.
 5. Use web research tools for live documentation, library APIs, and web search:
    - 'web_search' to search the live web for technical documentation, library APIs, and problem solutions.
    - 'web_fetch' to fetch web pages or documentation and convert them directly into clean Markdown.
@@ -121,21 +128,13 @@ export const CONTINUATION_DIRECTIVE =
  * This is ADVISORY ONLY — it is neither an error nor a cancellation. It is
  * pushed as a user-role message into the conversation (the same in-band
  * pattern as CONTINUATION_DIRECTIVE) so the model sees it on the next turn.
- * It reminds the model that mutation dispatches are single-pass: state a
- * hypothesis, make the edit with a native file tool, then run the stated
- * verification command once. Unbounded probing (30+ inline-python measurement
- * calls) wastes the session. The counter re-arms after injection, so a
- * genuinely iterative task (e.g. a benchmark sweep) is only nudged, never
- * blocked.
+ * It reminds the model to use native tools and conclude dispatches efficiently.
  */
 export const PROBE_BUDGET_ADVISORY =
   "[Probe-Budget Advisory] You have run several consecutive shell (bash) calls " +
-  "without making a file change. Mutation dispatches are SINGLE-PASS: state a " +
-  "hypothesis, make the edit directly with a native file tool (write_file / " +
-  "edit_file / apply_patch), then run the stated verification " +
-  "command ONCE. Do not run iterative probe or measurement scripts to " +
-  "discover the answer — that wastes the session. If you are stuck, state the " +
-  "hypothesis you are testing and make the edit now.";
+  "without making progress on your deliverable. Prefer native workspace tools (search_code, read_file, list_dir) over ad-hoc shell inspection. " +
+  "Mutation dispatches are single-pass: state a hypothesis, make the edit directly with a native file tool (write_file / edit_file / apply_patch), " +
+  "then run the stated verification command ONCE. For read-only or exploration tasks, synthesize your findings and emit your final response now.";
 
 /**
  * M5a: advisory injected (ONCE per run) when the session's cumulative turn

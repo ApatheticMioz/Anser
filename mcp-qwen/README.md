@@ -121,7 +121,7 @@ All variables are read at process start (module-level) unless noted.
 | `QWEN_MAX_TOKENS` | `49152` | Per-turn output token budget |
 | `QWEN_MAX_REASONING_TOKENS` | `32768` | Per-turn reasoning (thinking) token ceiling; hit → `finish_reason: "length"` |
 | `QWEN_STREAM_IDLE_TIMEOUT_MS` | `900000` (15 min) | SSE stream idle watchdog (first-byte + inter-chunk) |
-| `QWEN_REASONING_EFFORT` | `xhigh` | Fallback effort when a dispatch sends none; per-dispatch `reasoning_effort` overrides. Engine accepts exactly {xhigh, medium, low} |
+| `QWEN_REASONING_EFFORT` | `medium` | Fallback effort when a dispatch sends none; per-dispatch `reasoning_effort` overrides. Engine accepts exactly {xhigh, medium, low}. `xhigh` is explicit-only. |
 | `QWEN_RACE_MS` | `15000` (15 s) | Client-side race deadline before yielding `taskId` + `wait_command` |
 | `QWEN_MIN_TIMEOUT_MS` | `600000` (10 min) | Floor for task timeout |
 | `QWEN_INACTIVITY_TIMEOUT_MS` | `1800000` (30 min) | Task execution inactivity watchdog |

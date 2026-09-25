@@ -137,7 +137,7 @@ async function vectorA() {
 
 // ---------------------------------------------------------------------------
 // Vector (b): param ABSENT + env unset -> the existing dynamic env default
-// (xhigh) is forwarded. This is the zero-behavior-change guarantee.
+// (medium) is forwarded.
 // ---------------------------------------------------------------------------
 async function vectorB() {
   const prevEnv = process.env.QWEN_REASONING_EFFORT;
@@ -149,14 +149,14 @@ async function vectorB() {
     await svc.streamChat({ messages: [{ role: "user", content: "q" }] });
     assert.strictEqual(
       capture.payload.chat_template_kwargs?.reasoning_effort,
-      "xhigh",
-      "b: param absent + env unset -> xhigh (existing default, unchanged)"
+      "medium",
+      "b: param absent + env unset -> medium (default when unset)"
     );
   } finally {
     if (prevEnv === undefined) delete process.env.QWEN_REASONING_EFFORT;
     else process.env.QWEN_REASONING_EFFORT = prevEnv;
   }
-  console.log("  [PASS] (b) param absent + env unset -> xhigh (unchanged default)");
+  console.log("  [PASS] (b) param absent + env unset -> medium (default when unset)");
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ async function vectorE() {
     await svc.streamChat({ messages: [{ role: "user", content: "q" }] });
     assert.strictEqual(
       capN1.payload.chat_template_kwargs?.reasoning_effort,
-      "xhigh",
+      "medium",
       "e: call N+1 (no param) falls back to env default, NOT call N's param"
     );
 
@@ -360,7 +360,7 @@ async function vectorF() {
     const start2 = logger2.events.find((e) => e.type === "session_start");
     assert.strictEqual(
       start2.reasoningEffort,
-      "xhigh",
+      "medium",
       "f2: session_start event surfaces the effective (env default) effort"
     );
   } finally {

@@ -69,7 +69,7 @@ export function registerTools(server) {
         "  - Full Objective Fulfillment: Do not instruct Qwen to limit its tool calls or artificially restrict its execution. Qwen operates autonomously with full tool depth once dispatched with a focused objective.\n" +
         "  - Session Lifecycle: Maintain a persistent `session_id` across a cohesive milestone to maximize KV prefix caching. Roll to a fresh session_id (e.g. '<milestone>_stage2') upon milestone boundaries, session drift, or ~60–80 cumulative turns.\n" +
         "  - Zero-Turn Execution Contract: Tasks completing within ~45s return results synchronously. Long-running tasks yield a `taskId` and a `wait_command`. Execute the `wait_command` immediately in your shell to block at $0 cost and wake on completion. Do not poll manually or execute parallel exploratory tools while waiting.\n" +
-        "  - Reasoning Effort: optional `reasoning_effort` param (xhigh | medium | low) tunes per-dispatch thinking depth; omit to use the QWEN_REASONING_EFFORT env default (xhigh).\n\n" +
+        "  - Reasoning Effort: optional `reasoning_effort` param (xhigh | medium | low) tunes per-dispatch thinking depth; omit to use the QWEN_REASONING_EFFORT env default (medium).\n\n" +
         "BUILT-IN CAPABILITIES:\n" +
         "  - Built-in live Web Search & Article Extraction ('web_search', 'web_fetch' with Mozilla Readability & Turndown)\n" +
         "  - Transparent AST & Syntax Validation on edits ('edit_file' validates JS, TS, Python, JSON, LaTeX, BibTeX)\n" +
@@ -128,7 +128,7 @@ export function registerTools(server) {
           .enum(REASONING_EFFORT_TIERS)
           .optional()
           .describe(
-            "Per-dispatch reasoning-effort tier forwarded to the engine chat template (xhigh = maximal deliberation, medium = balanced, low = brief). Omit to use the QWEN_REASONING_EFFORT env default (xhigh). Only the engine's supported tiers are accepted; invalid values are rejected."
+            "Per-dispatch reasoning-effort tier forwarded to the engine chat template (xhigh = maximal deliberation, medium = balanced, low = brief). Omit to use the QWEN_REASONING_EFFORT env default (medium). Only the engine's supported tiers are accepted; invalid values are rejected."
           ),
       },
       annotations: {

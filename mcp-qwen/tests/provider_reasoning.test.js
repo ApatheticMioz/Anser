@@ -224,10 +224,10 @@ async function vectorE() {
   );
   assert.strictEqual(
     without.effort,
-    "xhigh",
-    "e: reasoning_effort defaults to xhigh when unset"
+    "medium",
+    "e: reasoning_effort defaults to medium when unset"
   );
-  console.log("  [PASS] (e) reasoning-effort passthrough (default -> xhigh, override -> forwarded)");
+  console.log("  [PASS] (e) reasoning-effort passthrough (default -> medium, override -> forwarded)");
 }
 
 // ---------------------------------------------------------------------------

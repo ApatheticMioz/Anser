@@ -100,6 +100,7 @@ python <repo>/mcp-qwen/update_schemas.py
 | `VLLM_PORT` | `18020` | vLLM OpenAI-compatible API. |
 | `STATUS_PORT` | `18021` | Zero-turn long-poll HTTP wait/status server. |
 | `STREAM_PROXY_PORT` | `18022` | Universal SSE streaming proxy (loopback only). |
+| `QWEN_REASONING_EFFORT` | `medium` | Fallback effort when a dispatch sends none; per-dispatch `reasoning_effort` overrides. Engine accepts {xhigh, medium, low}. `xhigh` is explicit-only. |
 | `TEST_OFFLINE` | *(unset)* | Set to `1` to force live suites to skip (GPU-less runs). |
 
 ---

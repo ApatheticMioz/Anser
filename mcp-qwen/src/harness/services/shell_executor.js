@@ -263,7 +263,7 @@ export function shellExecutorPlugin(ctx, options = {}) {
   ctx.provide("shell", executor);
 
   ctx.registerTool("bash", {
-    description: "Execute a shell command with timeout protection and process group cleanup",
+    description: "Execute a shell command with timeout protection and process group cleanup. Use strictly for builds, test suites, package managers, git commands, and executing project binaries or runtimes. Do not use bash for file reading (use read_file), code search (use search_code), directory listing (use list_dir), or text editing (use edit_file).",
     parameters: {
       type: "object",
       properties: {
