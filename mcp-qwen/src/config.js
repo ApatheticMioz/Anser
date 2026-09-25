@@ -162,12 +162,12 @@ export const ORPHAN_REAP_STALE_MS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ORPHAN_REAP_STALE_MS;
 })();
 
-// 2026-09-12: default raised 1 -> 2 to match the engine launcher's MAX_SEQS=2
-// (user-authorized; upstream huge-profile validated seat count). Keep 1:1 with
+// 2026-09-12: default raised 1 -> 2. 2026-09-25: reverted to 1 (single-user pair programming;
+// eliminates multi-stream prefill queueing and reclaims ~800MB non-KV VRAM headroom). Keep 1:1 with
 // scripts/wsl/start_huge.sh. QWEN_MAX_CONCURRENT still overrides.
 export const MAX_CONCURRENT_TASKS = process.env.QWEN_MAX_CONCURRENT
   ? Math.max(1, parseInt(process.env.QWEN_MAX_CONCURRENT, 10))
-  : 2;
+  : 1;
 
 export const SLOT_HEARTBEAT_MS = 15_000;
 export const SLOT_WEDGED_MS = 300_000;

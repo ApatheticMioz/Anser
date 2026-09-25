@@ -113,7 +113,7 @@ export function leaseReclaimable(lease) {
  * cancelled while waiting.
  *
  * Single-Tenant Multi-Slot Invariant:
- * Up to MAX_CONCURRENT_TASKS (default 2) are permitted machine-wide, but ALL
+ * Up to MAX_CONCURRENT_TASKS (default 1) are permitted machine-wide, but ALL
  * concurrently active slots MUST belong to the SAME tenant (process.pid).
  * If an alien tenant (lease.pid !== process.pid where lease is live) holds any slot,
  * this process is blocked and queues at $0 until the alien tenant releases all slots.

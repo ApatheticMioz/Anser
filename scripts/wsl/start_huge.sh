@@ -23,12 +23,11 @@ export VLLM_DFLASH2_LOOKUP_ADAPTIVE=0  # A/B tested 2026-08-23: pins verify bloc
 # during massive chunked prefills while preserving the full 245,760 context window.
 # (Trajectory: ran MAX_SEQS=8 in the early multi-task era, then deliberately 1
 # for single-user pair programming — the VRAM-headroom + WSL2-deadlock rationale
-# above. 2026-09-12: user-authorized raise to 2. Watch for: the WSL2 PCIe
-# host-backing / dxgkio_escape deadlock signature during massive chunked
-# prefills, and non-KV VRAM headroom loss on the RTX 3090. Revert to 1 if either
-# reappears. Harness side must stay 1:1: MAX_CONCURRENT_TASKS in
-# mcp-qwen/src/config.js.)
-export MAX_SEQS=2
+# above. 2026-09-12: user-authorized raise to 2. 2026-09-25: user-authorized revert
+# to 1 based on empirical proof that multi-stream agent concurrency degrades TTFT by 10x
+# without raising aggregate throughput. Reclaims ~800+ MiB VRAM headroom on RTX 3090.
+# Harness side must stay 1:1: MAX_CONCURRENT_TASKS in mcp-qwen/src/config.js.)
+export MAX_SEQS=1
 # Maximum Intelligence: Pristine W4A16 (unquantized activations). Retains 96.5% GSM8K
 # reasoning with zero perplexity degradation (+4.1% PPL / -1.5% GSM8K avoided).
 # Per-request usage & timing metrics (issue #51): enables usage reporting & prompt-tokens details
