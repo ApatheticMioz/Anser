@@ -174,6 +174,8 @@ mcp-qwen/
 - **ALWAYS** surface the unadulterated error (Rule 8: fail-fast, zero-masking).
 - **ALWAYS** keep `CLAUDE.md` and `GEMINI.md` shared invariants
   byte-identical (locked by `tests/protocol_sync.test.js`).
+- **ALWAYS** use the sanctioned workspace scratchpad (`<workspace>/.scratch/` or repository-local helper scripts) for intermediate data extractions, log slicing, and multi-item audit ledgers rather than attempting to hold large matrices in reasoning context.
+- **ALWAYS** treat the Coworker as an interactive pair-programmer: accept intermediate checkpoint findings and respond to targeted inquiries when high-entropy or ambiguous choices arise.
 
 ### 4.2 ASK FIRST
 - **ASK** before adding a new dependency (especially native/optional ones —
@@ -194,6 +196,7 @@ mcp-qwen/
 - **NEVER** route vision/image tasks to the local Qwen (`--language-model-only`).
 - **NEVER** silently catch, suppress, or mask errors or upstream HTTP status
   codes (Rule 8).
+- **NEVER** impose "write no files" restrictions on multi-step audits or log analyses (forces reasoning context explosion and ceiling deaths). Temporary analysis artifacts must reside in the workspace scratchpad (`.scratch/`).
 - **NEVER** hand-edit line endings or "fix" CRLF by re-typing a file — use
   `edit_file` / `apply_patch`, which normalize deterministically.
 - **NEVER** edit a file that is not in the active Evo candidate's snapshot

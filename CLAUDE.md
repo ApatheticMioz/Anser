@@ -52,7 +52,7 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
      - **Compiled Artifact vs. Ground Truth**: A compiled document (`.pdf`, `.docx`) is a build artifact, NOT the primary editable ground truth. The true ground truth lives in the project's **text source files**: LaTeX (`.tex`), BibTeX (`.bib`), raw data tables (`.csv`/`.tsv`), figures generation scripts (`.py`), or markdown (`.md`).
      - **Dual Review Division**:
        1. **Visual & Aesthetic Review**: Inspect rendered PDF pages, figure geometry, layout overlaps, and typography directly using native multimodal vision.
-       2. **Content, Citation, Math, & Data Review (Coworker @ $0)**: Direct Qwen to inspect the underlying plaintext source files (`all_dice_no_slice.tex`, `references.bib`, `paper_results_matrix.csv`). Offload focused slices: cross-reference `\cite{...}` tags against `.bib`, verify claims against `.csv` data, and check equations in `.tex`. Never pass the binary `.pdf` to Qwen; always point Qwen to the text sources.
+       2. **Content, Citation, Math, & Data Review (Coworker @ $0)**: Direct Qwen to inspect underlying plaintext source files (`.tex`, `.bib`, `.csv`, `.py`). Offload focused slices: cross-reference citation tags against `.bib`, verify claims against data tables, and check equations in `.tex`. Never pass binary files to Qwen; always point Qwen to text sources.
        3. **Locating Source Coordinates**: If the user only names the compiled binary (`paper.pdf`), Turn 1 Coworker slice locates the document sources (`find . -name "*.tex" -o -name "*.bib"`) or build scripts, returning the exact source coordinates to the orchestrator.
 4. **Ground Truth Hierarchy**:
    - Ground truth consists exclusively of active source code, configuration files, raw data matrices, test suites, and verifiable build artifacts.
@@ -114,13 +114,14 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
   4. Acceptance criteria and verification command (e.g. `npm run test:slice`).
   5. Numeric acceptance targets for layout/geometry/visual-quality work (e.g. "zero `get_tightbbox()` overlaps", "margin >= 12pt") — subjective descriptors ("make it look balanced") force unbounded measurement probe loops; objective numeric targets are required.
 - **Verbatim Code Spoon-Feeding Prohibition**: The Lead Architect is **STRICTLY PROHIBITED** from writing out verbatim multi-line code implementations, full JSX component blocks, or replacement functions in coworker prompts. Local Qwen operates with 245K context and high-reasoning compute (`reasoning_effort: "xhigh"`); Qwen authors the code locally.
-- **Harness-Enforced Guardrails (Anser)**: the harness mechanically enforces what this protocol prescribes - a Single-Pass Mutation directive is injected into every dispatch; consecutive non-mutating `bash` probing beyond budget (default 4, `QWEN_PROBE_BUDGET`) injects an advisory and emits `probe_budget_warning`; oversized prompts (>1,500 chars) emit `prompt_over_budget` telemetry; session rollover advisories fire at 60 turns (`session_warning`) and 80 turns (`SessionTurnLimitRecommendation` appended in-band) with the 100-turn hard cap as backstop; binary reads fail fast with `BinaryFileError`. Protocol docs instruct; the harness enforces.
+- **Harness-Enforced Guardrails (Anser)**: the harness mechanically enforces what this protocol prescribes - a Single-Pass Mutation directive is injected into every dispatch; consecutive non-mutating `bash` probing beyond budget (default 4, `QWEN_PROBE_BUDGET`) injects an advisory and emits `probe_budget_warning`; oversized prompts (>1,500 chars) are fail-fast rejected at the MCP gateway (`MonolithicDispatchRejected`) to enforce single-concern scoping without code spoon-feeding; session rollover advisories fire at 60 turns (`session_warning`) and 80 turns (`SessionTurnLimitRecommendation` appended in-band) with the 100-turn hard cap as backstop; binary reads fail fast with `BinaryFileError`. Protocol docs instruct; the harness enforces.
 
 ### 4. Ground-Truth & Verification Discipline
 - **Session events are ground truth; planner transcripts are intent ledgers.** Before diagnosing a "duplicate" or a "stale task", or re-dispatching, verify against `~/.qwen/sessions/<id>/events.jsonl` and `~/.qwen/tasks/*.json`.
 - **Cross-OS State Paths**: State is unified across Windows (`C:\Users\<user>\.qwen\`) and WSL (`/mnt/c/Users/<user>/.qwen\`, symlinked from `~/.qwen`). All tasks execute inside the in-process Anser microkernel.
 - **Claim→Verify pairs**: Confirm anomaly and corruption-class findings with an adversarial verification slice before they enter any report, manifest, or commit message.
-- **Read-only means no files**: A read-only slice's deliverable is its final message. State "return the report as your final message; write no files" explicitly.
+- **Workspace Scratchpads over Mental Hoarding**: Abolish "write no files" restrictions for complex audits or batch verifications. When analyzing logs, tables, or multi-claim datasets, the coworker is explicitly encouraged to write intermediate extraction scripts and dump structured data tables to the sanctioned workspace scratchpad (`<workspace>/.scratch/` or repository-local helper scripts). Never force the model to mentally hoard raw multi-file matrices in deliberation context. The final slice deliverable is synthesized concisely back to the Lead Architect.
+- **Collaborative Inquiries & Two-Way Alignment**: The coworker is an interactive pair-programmer. When encountering ambiguous specs, contradictory data across files, or an excessively broad search space, the coworker halts ungrounded deliberation, returns its intermediate findings, and inquires with the Lead Architect for steering rather than burning reasoning tokens in solitary thought loops.
 - **Effort tiers are a per-dispatch knob**: `reasoning_effort` (default `medium`) — tier up consciously to `xhigh` only when deep deliberation is genuinely required. Never suppress silently.
 
 ---
@@ -160,12 +161,12 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 
 ## 6. MCP Tool Calling Reference (Zero-Discovery Invariant)
 
-To avoid tripping IDE-level file permission filters on `~/.gemini/` configuration files, use these explicit schema definitions directly for all lazy-loaded `qwen38-local` tools:
+Use these explicit schema definitions directly for all lazy-loaded `qwen38-local` tools:
 
 ### `qwen_coworker` (Autonomous Execution Coworker)
 - **`prompt`** (string, required): Task, inquiry, or architectural instruction for Qwen (pure text-only; images must be inspected natively by Lead Architect and summarized into text).
-- **`cwd`** (string, required for project tasks): Target workspace directory (e.g. `/home/apath/Work/temp/final/paper`). Always specify this explicitly.
-- **`session_id`** (string, optional): Named persistent session ID (e.g. `paper_p1_citations`).
+- **`cwd`** (string, required for project tasks): Target workspace directory (e.g. `/path/to/project`). Always specify this explicitly.
+- **`session_id`** (string, optional): Named persistent session ID (e.g. `auth_middleware_v1`).
 - **`reasoning_effort`** (string, optional): `"xhigh"`, `"medium"` (default), or `"low"`.
 - **`extensions`** (array of strings, optional): e.g. `["uvx free-search-mcp"]`, `["npx -y @upstash/context7-mcp"]`.
 - **`skills`** (array of strings, optional): Explicit list of skill names to inject.

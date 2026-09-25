@@ -53,6 +53,7 @@ benchmarks/swe-rebench/__pycache__/
 *~
 
 # Evo candidate lineage & runtime scratch
+.scratch/
 .evo/
 .test_evo_tmp/
 .avo/
