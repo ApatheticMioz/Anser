@@ -26,6 +26,7 @@ const ISOLATED_ENV = {
   // so it does not float with the MAX_CONCURRENT_TASKS default (2 since
   // 2026-09-12, matching the engine's MAX_SEQS=2).
   QWEN_MAX_CONCURRENT: "1",
+  QWEN_RACE_MS: "60000",
 };
 
 async function runTest() {

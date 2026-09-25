@@ -231,6 +231,31 @@ async function runTests() {
   }
 
   // ------------------------------------------------------------------
+  // Test 8: qwen_coworker rejects over-budget prompt (> PROMPT_BUDGET_CHARS)
+  // ------------------------------------------------------------------
+  console.log("\n[Test 8] qwen_coworker: rejects oversized monolithic prompt");
+  {
+    const oversizedPrompt = "A".repeat(1501);
+    const result = await handlers["qwen_coworker"]({
+      prompt: oversizedPrompt,
+      cwd: process.cwd(),
+    });
+    ok(result.isError === true, "isError is true when prompt exceeds budget");
+    ok(
+      /MonolithicDispatchRejected/i.test(result.content[0].text),
+      "error message cites MonolithicDispatchRejected"
+    );
+    ok(
+      /DO NOT spoon-feed/i.test(result.content[0].text),
+      "error message guides against code spoon-feeding"
+    );
+    ok(
+      !/\n\s+at\s/.test(result.content[0].text),
+      "no stack trace leaked on prompt budget rejection"
+    );
+  }
+
+  // ------------------------------------------------------------------
   // Summary
   // ------------------------------------------------------------------
   console.log("\n==========================================");

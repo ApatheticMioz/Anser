@@ -14,6 +14,7 @@ import {
   WEDGE_STATS_SILENCE_S,
   REASONING_EFFORT_TIERS,
   TASK_RETENTION_MS,
+  PROMPT_BUDGET_CHARS,
 } from "./config.js";
 import {
   normalizeWorkspacePath,
@@ -167,6 +168,21 @@ export function registerTools(server) {
             {
               type: "text",
               text: `qwen_coworker: 'cwd' parameter is required. The MCP server process was started from an IDE application directory (\`${process.cwd()}\`), which cannot be used as a project workspace. Please provide the target repository or directory path in 'cwd'.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (typeof prompt === "string" && prompt.length > PROMPT_BUDGET_CHARS) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `MonolithicDispatchRejected: Prompt is ${prompt.length} chars (budget: ${PROMPT_BUDGET_CHARS}). ` +
+                    `You sent an oversized or multi-concern dispatch. ` +
+                    `Scope this turn to ONE cohesive subsystem, architectural layer, or AST coordinate with clear acceptance criteria. ` +
+                    `DO NOT spoon-feed or paste verbatim code implementations—Qwen authors code locally. Focus on the invariant, interface, or target file.`,
             },
           ],
           isError: true,
