@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   TASK_DIR,
   SLOTS_DIR,
@@ -7,20 +8,82 @@ import {
   SLOT_HEARTBEAT_MS,
   SLOT_WEDGED_MS,
   SLOT_POLL_MS,
+  IS_WINDOWS,
 } from "./config.js";
+import { wslDistro } from "./wsl_env.js";
 
 /**
- * Checks whether a given PID is currently alive on the host.
+ * Checks whether a given PID is currently alive on the host or across the WSL/Windows boundary.
+ * @param {number} pid - Target process ID
+ * @param {string} [platform=process.platform] - OS platform ('win32' | 'linux')
  */
-export function pidAlive(pid) {
+export function pidAlive(pid, platform = process.platform) {
   if (!pid) return false;
-  if (pid === process.pid) return true;
+  if (pid === process.pid && platform === process.platform) return true;
+
+  // 1. Same-platform probe
+  if (platform === process.platform) {
+    try {
+      process.kill(pid, 0); // signal 0 = liveness probe, no signal sent
+      return true;
+    } catch (err) {
+      return err.code === "EPERM"; // EPERM = exists, just owned by another user
+    }
+  }
+
+  // 2. Cross-platform probe: Windows host probing a WSL/Linux PID
+  if (IS_WINDOWS && platform === "linux") {
+    try {
+      execFileSync("wsl.exe", ["-d", wslDistro(), "--", "kill", "-0", String(pid)], {
+        timeout: 3000,
+        stdio: "ignore",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // 3. Cross-platform probe: WSL/Linux guest probing a Windows host PID
+  if (!IS_WINDOWS && platform === "win32") {
+    try {
+      execFileSync("powershell.exe", ["-NoProfile", "-Command", `Get-Process -Id ${pid}`], {
+        timeout: 3000,
+        stdio: "ignore",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Fallback if platform is unknown: probe local first
   try {
-    process.kill(pid, 0); // signal 0 = liveness probe, no signal sent
+    process.kill(pid, 0);
     return true;
   } catch (err) {
-    return err.code === "EPERM"; // EPERM = exists, just owned by another user
+    if (err.code === "EPERM") return true;
   }
+
+  if (IS_WINDOWS) {
+    try {
+      execFileSync("wsl.exe", ["-d", wslDistro(), "--", "kill", "-0", String(pid)], {
+        timeout: 3000,
+        stdio: "ignore",
+      });
+      return true;
+    } catch {}
+  } else {
+    try {
+      execFileSync("powershell.exe", ["-NoProfile", "-Command", `Get-Process -Id ${pid}`], {
+        timeout: 3000,
+        stdio: "ignore",
+      });
+      return true;
+    } catch {}
+  }
+
+  return false;
 }
 
 export function slotFilePath(i) {
@@ -38,7 +101,7 @@ export function readLease(file) {
 export function leaseReclaimable(lease) {
   if (!lease) return true; // unreadable = crashed mid-write
   // If the claiming process is dead, reclaim the slot immediately
-  if (!pidAlive(lease.pid)) return true;
+  if (!pidAlive(lease.pid, lease.platform)) return true;
   // LIVE PROCESS INVARIANT: A live process's lease is NEVER reclaimable!
   // Prevents dual-generation collisions on the MAX_SEQS=1 engine during long tasks.
   return false;
@@ -90,6 +153,7 @@ export async function acquireTaskSlot(taskEntry) {
         const file = slotFilePath(i);
         const claim = {
           pid: process.pid,
+          platform: process.platform,
           taskId: taskEntry?.id ?? null,
           cwd: taskEntry?.cwd ?? null,
           at: Date.now(),
@@ -111,7 +175,7 @@ export async function acquireTaskSlot(taskEntry) {
               const tmp = `${file}.tmp_${Date.now()}_${process.pid}`;
               fs.writeFileSync(
                 tmp,
-                JSON.stringify({ ...(cur ?? claim), pid: process.pid, hb: Date.now() }),
+                JSON.stringify({ ...(cur ?? claim), pid: process.pid, platform: process.platform, hb: Date.now() }),
                 "utf8"
               );
               fs.renameSync(tmp, file);

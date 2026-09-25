@@ -43,6 +43,7 @@ export function saveTaskToDisk(task) {
       // telemetry; undefined when the task predates the field.
       reasoningEffort: task.reasoningEffort ?? null,
       ownerPid: task.ownerPid || process.pid,
+      ownerPlatform: task.ownerPlatform || process.platform,
       createdAt: task.createdAt,
       startedAt: task.startedAt,
       finishedAt: task.finishedAt,
@@ -68,11 +69,27 @@ export function saveTaskToDisk(task) {
 
 export function isTaskOrphaned(diskTask) {
   if (!diskTask || diskTask.done) return false;
-  if (diskTask.ownerPid && !pidAlive(diskTask.ownerPid)) return true;
+  const now = Date.now();
   const lastActive = diskTask.lastHeartbeatAt || diskTask.startedAt || diskTask.createdAt;
-  if (lastActive && Date.now() - lastActive > 300_000) {
-    if (!diskTask.ownerPid || !pidAlive(diskTask.ownerPid)) return true;
+
+  // LIVE-OWNER & FRESH-HEARTBEAT INVARIANT:
+  // A task with a fresh heartbeat (within the staleness window) is NEVER an orphan!
+  // Active workers make tool calls and write heartbeats to disk.
+  const staleThreshold = ORPHAN_REAP_STALE_MS ? Math.min(ORPHAN_REAP_STALE_MS, 300_000) : 300_000;
+  if (lastActive && now - lastActive <= staleThreshold) {
+    return false;
   }
+
+  // If the owner process is still alive across platforms, it is not an orphan
+  if (diskTask.ownerPid && pidAlive(diskTask.ownerPid, diskTask.ownerPlatform)) {
+    return false;
+  }
+
+  // Heartbeat is stale beyond threshold AND owner process is not alive
+  if (lastActive && now - lastActive > staleThreshold) {
+    return true;
+  }
+
   return false;
 }
 
@@ -144,11 +161,12 @@ function appendOrphanTerminalEvent(diskTask) {
  */
 function describeOrphanCause(diskTask) {
   const pid = diskTask.ownerPid;
+  const platform = diskTask.ownerPlatform || process.platform;
   if (pid) {
-    if (!pidAlive(pid)) {
-      return `owner pid ${pid} is dead (process exited or was killed)`;
+    if (!pidAlive(pid, platform)) {
+      return `owner pid ${pid} (${platform}) is dead (process exited or was killed)`;
     }
-    return `owner pid ${pid} is alive but heartbeat is stale`;
+    return `owner pid ${pid} (${platform}) is alive but heartbeat is stale`;
   }
   return `no owner pid recorded; heartbeat is stale`;
 }
@@ -314,7 +332,7 @@ export function hasLiveWork() {
   const now = Date.now();
   for (const dt of listTasksFromDisk()) {
     if (dt.done) continue;
-    if (!dt.ownerPid || !pidAlive(dt.ownerPid)) continue;
+    if (!dt.ownerPid || !pidAlive(dt.ownerPid, dt.ownerPlatform)) continue;
     const lastActive = dt.lastHeartbeatAt || dt.startedAt || dt.createdAt;
     if (lastActive && now - lastActive <= INACTIVITY_TIMEOUT_MS) return true;
   }
@@ -368,7 +386,7 @@ export function reapOrphans() {
     const lastActive = task.lastHeartbeatAt || task.startedAt || task.createdAt;
     if (!lastActive || now - lastActive <= ORPHAN_REAP_STALE_MS) continue; // fresh: leave it
     // LIVE-OWNER INVARIANT: never reap a task whose owner is alive.
-    if (task.ownerPid && pidAlive(task.ownerPid)) continue;
+    if (task.ownerPid && pidAlive(task.ownerPid, task.ownerPlatform)) continue;
     markTaskOrphanedOnDisk(task);
     reaped++;
   }
@@ -380,7 +398,7 @@ export function reapOrphans() {
     const lastActive = diskTask.lastHeartbeatAt || diskTask.startedAt || diskTask.createdAt;
     if (!lastActive || now - lastActive <= ORPHAN_REAP_STALE_MS) continue; // fresh: leave it
     // LIVE-OWNER INVARIANT: never reap a task whose owner is alive.
-    if (diskTask.ownerPid && pidAlive(diskTask.ownerPid)) continue;
+    if (diskTask.ownerPid && pidAlive(diskTask.ownerPid, diskTask.ownerPlatform)) continue;
     markTaskOrphanedOnDisk(diskTask);
     reaped++;
   }
