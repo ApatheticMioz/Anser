@@ -447,8 +447,12 @@ export function setStreamProxySpawner(fn) {
  */
 async function realSpawnStreamProxy() {
   if (IS_WINDOWS) {
+    // WSL tears the session down when the `bash -c` leader exits, killing a
+    // freshly-forked bg child before it execs — setsid cannot win that race
+    // (observed 2026-09-27: spawn returned exit 0 in ~70ms while the child
+    // never materialized). Linger 1s, mirroring the engine launcher below.
     await runWslCommand(
-      `setsid node ${streamProxyPath()} < /dev/null > /tmp/stream_proxy.log 2>&1 &`
+      `setsid node ${streamProxyPath()} < /dev/null > /tmp/stream_proxy.log 2>&1 & sleep 1`
     );
   } else {
     const { spawn } = await import("child_process");
