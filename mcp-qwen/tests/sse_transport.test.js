@@ -58,10 +58,12 @@ function check(name, cond, detail = "") {
   }
 }
 
+const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+
 function createTestMcpServer() {
   const server = new McpServer({
     name: "mcp-anser-test",
-    version: "5.2.0",
+    version: pkg.version,
   });
   registerTools(server);
   return server;

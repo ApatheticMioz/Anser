@@ -71,36 +71,47 @@ import { recordTaskResult } from "./telemetry.js";
  * @returns {boolean}
  */
 export function isSuccessStatus(status) {
-  return status === "completed" || status === "completed_ceiling";
+  return (
+    status === "completed" ||
+    status === "completed_ceiling" ||
+    status === "completed_budget_exhausted"
+  );
 }
 
 /**
  * M5b: pure helper that assembles the ORCHESTRATOR-facing result text.
  *
- * The runner's M5a `session_turn_limit_recommended` event lands in the session
- * event log, which the orchestrator rarely reads; the dispatch result text is
- * what it DOES read. When the session's CUMULATIVE turn count (prior
- * assistant_message events + this run's turnsTaken) reaches
- * SESSION_TURNS_RECOMMEND, we append a structured advisory line so the
- * orchestrator can roll to a fresh session_id on the next dispatch.
- *
- * ADVISORY ONLY: this never alters status/isError and never cancels the task —
- * it only augments the returned text. It is a pure function (no I/O, no
- * globals) so it can be unit-tested offline, mirroring the `isSuccessStatus`
- * pattern. A non-numeric / absent sessionTurns (e.g. a runner that predates
- * the M5b field) fails safe: the text is returned unchanged.
+ * Appends structured advisory banners and recommendation markers:
+ *   - Turn budget exhausted (100 turns): warning banner advising critical review
+ *     of partial/synthesized deliverable.
+ *   - Session >= 80 turns: note banner advising context-depth consolidation and
+ *     the machine-readable SessionTurnLimitRecommendation marker.
  *
  * @param {string} finalText The runner's final text (the model's deliverable).
  * @param {number|undefined|null} sessionTurns The session-cumulative turn count.
- * @returns {string} The result text, with the advisory line appended when the
- *   session has reached the recommend threshold.
+ * @param {string|undefined|null} [status] The final runner status.
+ * @returns {string} The augmented result text.
  */
-export function buildResultText(finalText, sessionTurns) {
+export function buildResultText(finalText, sessionTurns, status) {
   let text = finalText;
+  if (status === "completed_budget_exhausted") {
+    text =
+      `${text}\n\n` +
+      `> [!WARNING] **Turn Limit Reached (Budget Exhausted)**\n` +
+      `> The coworker reached the maximum turn budget for this dispatch. All tools were disabled and a mandatory final synthesis was performed.\n` +
+      `> **Advisory:** Take this deliverable with a grain of salt. It represents grounded observations and partial progress gathered up to the turn limit, but may be incomplete or lack final verification. Review findings critically and dispatch a focused follow-up slice if needed.`;
+  }
   if (
     typeof sessionTurns === "number" &&
     sessionTurns >= SESSION_TURNS_RECOMMEND
   ) {
+    if (status !== "completed_budget_exhausted") {
+      text =
+        `${text}\n\n` +
+        `> [!NOTE] **High Turn Count Advisory (Turn ${sessionTurns})**\n` +
+        `> The coworker completed this deliverable in a session that has reached ${sessionTurns} cumulative turns (>= ${SESSION_TURNS_RECOMMEND}).\n` +
+        `> **Advisory:** As context depth grows, early consolidation can occur and speculative decoding degrades. Validate critical findings and roll to a fresh session_id before the next dispatch.`;
+    }
     text =
       `${text}\n` +
       `[SessionTurnLimitRecommendation: session at ${sessionTurns} turns — roll to a fresh session_id before the next dispatch]`;
@@ -252,29 +263,14 @@ export function startAnserTask({
       // nothing matches the prompt is returned unchanged. Never throws.
       const effectivePrompt = injectSkills(prompt, targetCwd, undefined, skills);
 
-      let finalTaskPrompt = `Your working directory is exactly: ${targetCwd}\n\n`;
+      let finalTaskPrompt = `Your working directory is: ${targetCwd}\n\n`;
       if (evoContext) {
         finalTaskPrompt += `=== Evo Lineage Context ===\n${evoContext}\n\n`;
       }
       if (hypothesis) {
         finalTaskPrompt += `=== Current Hypothesis ===\n${hypothesis}\n\n`;
       }
-      finalTaskPrompt += `=== Instruction ===\n${effectivePrompt}\n\n`;
-      finalTaskPrompt += `=== Operational & Tooling Directives ===\n`;
-      finalTaskPrompt += `- Available File Tools: Use \`write\` to create or overwrite files, \`edit\` to perform targeted text search-and-replace, \`tree\` to view directories, and \`shell\` (bash) to inspect files using \`cat\`, \`head\`, \`grep\`, or other POSIX utilities.\n`;
-      finalTaskPrompt += `- Text-Only Engine: You are a pure text model with Universal 245K context. Do NOT call \`read_image\` on binary images (.png, .jpg). Multimodal image inspection is handled exclusively by the Lead Architect.\n`;
-      finalTaskPrompt += `- CRITICAL: Do NOT call \`extensionmanager__read_resource\` or \`read_resource\` to read files. It is strictly an internal MCP resource provider and will fail on filesystem paths.\n`;
-      finalTaskPrompt += `- Direct Execution: Never merely announce in conversational text that you will write or edit files in a future step. You must directly invoke the file modification tools (\`write\` or \`edit\`) in this turn to write the deliverable to disk.\n`;
-      finalTaskPrompt += `- Single-Pass Mutation: When the dispatch asks for a modification, execute it directly in ONE pass with the native file tools (\`write_file\`/\`edit_file\`/\`apply_patch\`) — do NOT run iterative probe or measurement scripts to discover the change. State a hypothesis, make the edit, then run the stated verification command ONCE afterward.\n`;
-      finalTaskPrompt += `- Full Objective Fulfillment: Take as many tool actions and iterations as needed to thoroughly accomplish the task without prematurely truncating your output.\n`;
-      if (IS_WINDOWS && !cwdInWsl) {
-        finalTaskPrompt += `- Windows Line Endings: Workspace files may use CRLF (\\r\\n). If \`edit\` encounters matching issues, inspect exact line endings with \`head\` or write the normalized file.\n`;
-      }
-      if (targetInWsl) {
-        finalTaskPrompt += `- Linux Environment: Executing in Linux/WSL (bash). Use standard Linux commands and POSIX paths. Windows-drive workspaces live under /mnt/<drive>/.\n`;
-      } else {
-        finalTaskPrompt += `- Shell execution: If executing PowerShell commands via shell, use \`powershell -NoProfile -Command "..."\` or native utilities directly.\n`;
-      }
+      finalTaskPrompt += effectivePrompt;
 
       // Primary Engine: Anser (microkernel + sandboxed services) - hard-wired, no engine selection.
       taskEntry.startedAt = Date.now();
@@ -348,7 +344,7 @@ export function startAnserTask({
         // `session_turn_limit_recommended` event from this layer and do NOT
         // invent a new sink — the M5a runner-side event (harness/runner.js)
         // already records it in the session log.
-        const resultText = buildResultText(runResult.finalText, runResult.sessionTurns);
+        const resultText = buildResultText(runResult.finalText, runResult.sessionTurns, runResult.status);
         taskEntry.result = {
           isError: !isSuccess,
           text: resultText,

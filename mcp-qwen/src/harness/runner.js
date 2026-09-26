@@ -80,14 +80,15 @@ function emptyStreamRetryBackoffMs(retryNumber) {
 }
 
 const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the Anser harness.
-You pair with the Lead Architect (Gemini in Antigravity / GLM in Claude Code) to explore, design, edit, test, and optimize software systems.
+You pair with the Lead Architect (Gemini in Antigravity / GLM in Claude Code) as a senior peer engineer to explore, design, edit, test, and optimize software systems.
 
 Operating Guidelines:
 1. Ground truth lives in active source code, tests, and build artifacts. Never assume or hallucinate.
-2. Conversational Pair-Programming & Inquiries:
-   - You are a collaborative pair-programmer, not an isolated batch execution box.
-   - When encountering high entropy (contradictory data between files, an overly broad search space, missing architectural decisions, or competing approaches), DO NOT burn deliberation tokens looping in solitary thought.
-   - Perform initial exploration, state your verified findings concisely, present the concrete trade-off or question to the Lead Architect, and yield your turn. The Lead Architect will steer you on the next turn.
+2. Collaborative Pair-Programming, Inquiries & Constructive Pushback:
+   - You are a collaborative peer engineer, not an unthinking batch executor. Your relationship with the Lead Architect mirrors that of senior engineers pairing together.
+   - If a dispatch contains flawed assumptions, risks breaking repository invariants, violates backwards compatibility, or proposes a suboptimal pattern, DO NOT blindly execute it. Ground your critique in the exact file lines, explain the trade-offs, propose a cleaner approach or concrete alternatives, and invite alignment before mutating.
+   - When encountering high entropy (contradictory data between files, an overly broad search space, missing architectural decisions, or competing trade-offs), DO NOT burn deliberation tokens looping in solitary thought. State your verified findings concisely, present the concrete trade-off or question to the Lead Architect, and yield your turn for steering.
+   - When asked to explore or evaluate an approach, provide grounded technical insights, flag edge cases or race conditions, and recommend the best path forward.
 3. Workspace Scratchpads for Audits & Data Analysis:
    - When performing multi-item audits, log analyses, or batch data extraction, write intermediate helper scripts and dump temporary data tables to the workspace scratchpad (e.g. '<workspace>/.scratch/' or repository-local helper scripts).
    - Writing intermediate files to inspect or extract data is encouraged; never attempt to hold large raw data matrices or logs in mental reasoning context.
@@ -104,13 +105,14 @@ Operating Guidelines:
    - 'apply_patch' to apply standard unified diffs atomically using git apply (--unidiff-zero).
    - 'edit_file' for exact search-and-replace (auto-normalizes line endings, preserves file style, transparently validated by AST/LaTeX/syntax gates before disk write).
    - 'write_file', 'list_dir', and 'search_code' (fast git grep indexing).
+   - Pure Text-Only Engine: You run in text mode with Universal 245K context. Do NOT call image inspection tools on binary images (.png, .jpg). Multimodal inspection is handled exclusively by the Lead Architect.
 6. Use structural AST tools for code discovery:
    - 'ast_search' to find code by syntactic pattern with metavariables ($VAR, $$$BODY).
    - Run 'ast-grep' CLI directly via 'bash' for large-scale or multi-file AST surgery.
 7. Use web research tools for live documentation, library APIs, and web search:
-   - 'web_search' to search the live web for technical documentation, library APIs, and problem solutions.
+   - 'web_search' for multi-provider web search (Brave, Tavily, Context7 framework docs, SearXNG, DuckDuckGo). Use provider: 'context7' for library/framework documentation.
    - 'web_fetch' to fetch web pages or documentation and convert them directly into clean Markdown.
-8. Mutation dispatches are focused: state your hypothesis, make the targeted edit directly with file tools, and run verification once.
+8. Single-Pass Mutation: When requirements and design are agreed upon and a dispatch requests a modification, execute it directly in ONE pass with native file tools ('write_file'/'edit_file'/'apply_patch') — do NOT run iterative measurement or probing scripts to discover the change. State your hypothesis, make the targeted edit directly, and run the verification command once afterward.
 9. Deliverables: Provide concise, direct technical summaries of your actions and findings.`;
 
 const EVO_SYSTEM_PROMPT_ADDENDUM = `
@@ -381,9 +383,27 @@ export class AnserRunner {
           break;
         }
 
-        if (maxTurns && turnsTaken >= maxTurns) {
-          status = "turn_limit_reached";
+        if (maxTurns && turnsTaken >= maxTurns && continuationsInjected === 0) {
+          status = finalText.trim() !== "" ? "completed_budget_exhausted" : "turn_limit_reached";
           break;
+        }
+
+        // Cooperative landing: on the final turn before maxTurns, strip tools and mandate synthesis.
+        // If a length cutoff occurs on the ceiling turn, isCeilingTurn remains active across continuations.
+        const isCeilingTurn = Boolean(
+          (maxTurns && maxTurns > 1 && turnsTaken === maxTurns - 1) ||
+          (maxTurns && turnsTaken >= maxTurns && continuationsInjected > 0)
+        );
+        if (isCeilingTurn && continuationsInjected === 0) {
+          messages.push({
+            role: "user",
+            content: `[MANDATORY SYNTHESIS - TURN CEILING REACHED (${turnsTaken + 1}/${maxTurns})]: You have reached the maximum allowed turns for this dispatch. All tools are now disabled. Synthesize your final deliverable, findings, code changes, and grounded conclusions immediately based on the facts gathered so far.`,
+          });
+          logger.append({
+            type: "turn_ceiling_synthesis",
+            turnsTaken: turnsTaken + 1,
+            maxTurns,
+          });
         }
 
         turnsTaken++;
@@ -416,7 +436,7 @@ export class AnserRunner {
           });
         }
 
-        const tools = ctx.listTools();
+        const tools = isCeilingTurn ? [] : ctx.listTools();
 
         const turnResult = await llm.streamChat({
           messages,
@@ -722,7 +742,9 @@ export class AnserRunner {
             // "completed_ceiling" — a successful run that merely ran out of room,
             // NOT a failure. Only when nothing usable was produced do we fall
             // through to the honest failure statuses.
-            if (finalText.trim() !== "") {
+            if (isCeilingTurn) {
+              status = finalText.trim() !== "" ? "completed_budget_exhausted" : "turn_limit_reached";
+            } else if (finalText.trim() !== "") {
               status = "completed_ceiling";
             } else if (hadReasoning) {
               status = "reasoning_budget_exhausted";
@@ -730,6 +752,10 @@ export class AnserRunner {
             } else {
               status = "length_limit_reached";
             }
+            break;
+          }
+          if (isCeilingTurn) {
+            status = "completed_budget_exhausted";
             break;
           }
           // The model concluded its turn with a clean "stop" (or other non-length

@@ -5,7 +5,7 @@
 [![CI](https://img.shields.io/badge/CI-Passing%20(Ubuntu%20%7C%20Windows)-success?logo=githubactions&logoColor=white)](#testing--verification)
 [![Node](https://img.shields.io/badge/Node-22%20%7C%2024-3C873A?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-[![Test Gate: 37/37](https://img.shields.io/badge/Test%20Gate-37%2F37%20Suites%20Green-success.svg)](#testing--verification)
+[![Test Gate: 58/58](https://img.shields.io/badge/Test%20Gate-58%2F58%20Suites%20Green-success.svg)](#testing--verification)
 [![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#model-serving--speculative-decoding)
 [![Engine](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#model-serving--speculative-decoding)
 [![Security](https://img.shields.io/badge/Security-137%2F137%20Vectors%20Contained-success.svg)](#zero-trust-sandboxed-file-operations)
@@ -153,26 +153,34 @@ Anser exposes three consolidated, stdio-pure MCP tools to the cloud orchestrator
 - **In-Process Microkernel**: Core file tools (`read_file`, `write_file`, `edit_file`) run directly inside the Node.js process without CLI subprocess spawning overhead.
 - **In-Memory Syntax Validation**: Modifications made via `edit_file` are parsed in-memory (TypeScript, Python, JSON, LaTeX, BibTeX) before touching disk. Syntax regressions and malformed patches are rejected immediately with line-level diagnostics, preventing corrupted files and broken states.
 
-### 2. In-Process Web & Research Engine
+### 2. Multi-Provider Web & Framework Documentation Engine
 Anser embeds native, dependency-free `web_search` and `web_fetch` services:
-- **Mozilla Readability & Turndown**: Automatically strips HTML boilerplate, navigation menus, and banner clutter, converting web pages into token-dense markdown.
-- **Autonomous Documentation Ingestion**: Qwen queries official documentation, verifies API contracts, and inspects library changelogs without third-party CLI dependencies.
+- **Intelligent Provider Routing**: Automatically routes queries across **Brave Search**, **Tavily**, **Context7** (targeted framework and library documentation), **SearXNG**, and **DuckDuckGo** with leaky-bucket rate limiting and global config support (`~/.qwen/config.json`).
+- **Mozilla Readability & Turndown**: Automatically strips HTML boilerplate, navigation menus, and banner clutter, converting live web pages and documentation into token-dense markdown.
 
-### 3. Lean 8-Tool Action Space
-Cognitive budget is finite. Anser prunes extraneous tool aliases, restricting the coworker's primary action space to 8 canonical, non-overlapping tools:
-- `read_file`, `write_file`, `edit_file`, `apply_patch`, `list_dir`, `search_code`, `ast_search`, `bash`.
-- (Evolutionary optimization tools mount conditionally only when automated verification commands are provided).
+### 3. Cooperative Landing & Turn Ceiling Preservation
+No more arbitrary process kills:
+- **Zero-Progress-Loss Landing**: When a long-running dispatch reaches its turn budget ceiling (turn 100), tool calling is gracefully disabled and the model is prompted for mandatory deliverable synthesis.
+- **Honest Status Taxonomy**: Completed deliverables are preserved and returned under `completed_budget_exhausted` with a structured `[!WARNING]` caution banner and proactive Turn 80 `[!NOTE]` advisories for context-depth management.
 
-### 4. Cross-Platform Unified Telemetry Ledger
-- Tracked across Windows (`C:\Users\<User>\.qwen\telemetry\stats.json`) and WSL (`~/.qwen/telemetry/stats.json`) via symlink parity.
-- Writes are guarded by atomic rename (`stats.json.tmp.<pid>.<ts>` $\to$ `stats.json`), eliminating multi-instance corruption.
+### 4. Collaborative Socratic Pair-Programming Dynamic
+- **Staff Engineer Peer Dynamic**: Local Qwen is not an unthinking code executor; it pairs with the Lead Architect as a Senior Staff Engineer.
+- **Constructive Pushback**: When dispatches contain flawed assumptions, violate repository invariants, or propose suboptimal patterns, Qwen is explicitly empowered to ground its critique in exact file lines, explain trade-offs, and propose cleaner architectural alternatives before mutating code.
 
-### 5. Zero-Turn Reactive Wait (`/task/<id>/wait`)
+### 5. KV Cache Prefix Stability & Lean Action Space
+- **Automatic Prefix Caching (APC) Affinity**: All operational directives and single-pass mutation rules are anchored in the static system prompt, avoiding dynamic prompt churn and maximizing vLLM prefix cache hit rates (~8,000–9,500 tok/s prefill).
+- **Lean 8-Tool Action Space**: Restricts the coworker's primary action space to 8 canonical, non-overlapping tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `list_dir`, `search_code`, `ast_search`, `bash`), eliminating tool hallucination and cognitive bloat.
+
+### 6. Zero-Turn Reactive Wait (`/task/<id>/wait`)
 Long-running background tasks yield a durable OS wait command. The orchestrator executes:
 ```bash
 curl.exe -fsS --retry 5 --retry-delay 2 http://127.0.0.1:18021/task/<id>/wait
 ```
 The OS process blocks at **$0 token cost** and wakes the orchestrator the moment the coworker finishes.
+
+### 7. Cross-Platform Unified Telemetry Ledger
+- Tracked across Windows (`C:\Users\<User>\.qwen\telemetry\stats.json`) and WSL (`~/.qwen/telemetry/stats.json`) via symlink parity.
+- Writes are guarded by atomic rename (`stats.json.tmp.<pid>.<ts>` $\to$ `stats.json`), eliminating multi-instance corruption.
 
 ---
 
@@ -187,12 +195,12 @@ cd Anser/mcp-qwen
 npm ci
 ```
 
-### 2. Verify the 37-Suite Test Gate
+### 2. Verify the 58-Suite Test Gate
 ```bash
-# Run the fast offline test gate (34 offline suites + protocol sync)
+# Run the fast offline test gate (54 offline suites + protocol sync)
 npm run test
 
-# Run the authoritative test gate (37 suites; GPU live suites skip honestly if offline)
+# Run the authoritative test gate (58 suites; GPU live suites skip honestly if offline)
 npm run test:all
 ```
 
@@ -253,8 +261,8 @@ Verified by a **137-vector security suite** (`tests/security.test.js`: 123 attac
 Every pull request is validated across **Node 22 & 24 on Ubuntu and Windows**:
 
 ```bash
-npm run test --prefix mcp-qwen          # 34 offline suites
-npm run test:all --prefix mcp-qwen      # 37 suites total (full CI gate)
+npm run test --prefix mcp-qwen          # 54 offline suites
+npm run test:all --prefix mcp-qwen      # 58 suites total (full CI gate)
 npm run test:telemetry --prefix mcp-qwen # Telemetry & pricing arithmetic verification
 ```
 
@@ -267,6 +275,7 @@ All files strictly enforce the Universal LF invariant (`* text=auto eol=lf`).
 ```
 Anser/
   README.md                 # Production architecture, case study, and quickstart
+  CHANGELOG.md              # Project release history & generational changelog
   AGENTS.md                 # Machine-readable operating contract (2026 AAIF standard)
   CONTRIBUTING.md           # Contributor workflow and PR guidelines
   SECURITY.md               # Private vulnerability reporting policy
@@ -283,7 +292,7 @@ Anser/
         core/               # Kernel plugin registry & event system
         services/           # Sandboxed FS, AST, Shell, Web research services
         evo/                # Evolutionary optimizer, lineage DAG & rollback
-    tests/                  # 37 automated test suites
+    tests/                  # 58 automated test suites
   benchmarks/               # Historical session telemetry & empirical dumps
 ```
 

@@ -15,7 +15,11 @@
 import assert from "node:assert/strict";
 import { isSuccessStatus } from "../src/anser_runner.js";
 
-const SUCCESS_STATUSES = ["completed", "completed_ceiling"];
+const SUCCESS_STATUSES = [
+  "completed",
+  "completed_ceiling",
+  "completed_budget_exhausted",
+];
 const FAILURE_STATUSES = [
   "failed",
   "engine_empty_response",

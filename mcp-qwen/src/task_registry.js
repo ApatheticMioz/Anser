@@ -1176,7 +1176,7 @@ export function attemptStatusReListen(port = STATUS_PORT) {
         }
       };
       statusHttpServer.once("error", onErr);
-      statusHttpServer.listen(port, "127.0.0.1", () => {
+      statusHttpServer.listen({ port, host: "127.0.0.1", exclusive: true }, () => {
         statusServerOwned = true; // we won the election — we are keeper
         done(true);
       });
@@ -1251,20 +1251,31 @@ export function initStatusServer() {
   statusHttpServer.headersTimeout = 0;
   statusHttpServer.keepAliveTimeout = 0;
   statusHttpServer.timeout = 0;
+  const onBootError = (err) => {
+    if (err && err.code === "EADDRINUSE") {
+      statusServerOwned = false;
+    } else {
+      console.error("[status-server] boot listen error:", err);
+      statusServerOwned = false;
+    }
+    startStatusServerElection();
+  };
+
+  statusHttpServer.once("error", onBootError);
+
   try {
-    statusHttpServer.listen(STATUS_PORT, "127.0.0.1", () => {
+    statusHttpServer.listen({ port: STATUS_PORT, host: "127.0.0.1", exclusive: true }, () => {
+      statusHttpServer.removeListener("error", onBootError);
       statusServerOwned = true;
     });
   } catch (err) {
+    statusHttpServer.removeListener("error", onBootError);
     if (err.code === "EADDRINUSE") {
       statusServerOwned = false;
+    } else {
+      console.error("[status-server] boot listen threw:", err);
+      statusServerOwned = false;
     }
-  }
-  // FX3-B (F1): if the boot listen did NOT win the port (we are a follower),
-  // start the re-election loop so we can take over the status port if the
-  // current keeper later exits. The owner path (statusServerOwned true) is
-  // left exactly as-is — startStatusServerElection returns null for it.
-  if (!statusServerOwned) {
     startStatusServerElection();
   }
   setInterval(cleanOldTasks, 300_000).unref();

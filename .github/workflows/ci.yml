@@ -67,8 +67,10 @@ jobs:
           echo "   platform:  $(node -p 'process.platform')"
           echo "=============================================="
 
-      - name: Run test:all (36-suite authoritative gate)
+      - name: Run test:all (58-suite authoritative gate)
         working-directory: mcp-qwen
+        env:
+          TEST_OFFLINE: "1"
         run: npm run test:all
 
       - name: Summary

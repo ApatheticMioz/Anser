@@ -188,6 +188,94 @@ export const QWEN_STATE_DIR = process.env.QWEN_STATE_DIR || (() => {
 export const TASK_DIR = path.join(QWEN_STATE_DIR, "tasks");
 export const SLOTS_DIR = path.join(TASK_DIR, "slots");
 
+// Global Configuration (~/.qwen/config.json and ~/.qwen/.env)
+export const GLOBAL_CONFIG_FILE = path.join(QWEN_STATE_DIR, "config.json");
+export const GLOBAL_ENV_FILE = path.join(QWEN_STATE_DIR, ".env");
+
+/**
+ * Loads the machine-wide global configuration from ~/.qwen/config.json or ~/.qwen/.env.
+ * Single source of truth across all MCP host sessions (Claude Code, Antigravity, Cursor).
+ *
+ * @returns {{ search: { provider?: string, brave_api_key?: string, tavily_api_key?: string, context7_api_key?: string, searxng_url?: string } }}
+ */
+export function loadGlobalConfig() {
+  const config = { search: {} };
+  try {
+    if (fs.existsSync(GLOBAL_CONFIG_FILE)) {
+      const raw = fs.readFileSync(GLOBAL_CONFIG_FILE, "utf8").replace(/^\uFEFF/, "");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        if (parsed.search && typeof parsed.search === "object") {
+          Object.assign(config.search, parsed.search);
+        }
+      }
+    }
+  } catch {}
+
+  try {
+    if (fs.existsSync(GLOBAL_ENV_FILE)) {
+      const raw = fs.readFileSync(GLOBAL_ENV_FILE, "utf8").replace(/^\uFEFF/, "");
+      const lines = raw.split("\n");
+      for (const line of lines) {
+        const match = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*["']?([^"']+)["']?\s*(#.*)?$/);
+        if (match) {
+          const k = match[1];
+          const v = match[2].trim();
+          if (k === "BRAVE_API_KEY") config.search.brave_api_key = config.search.brave_api_key || v;
+          else if (k === "TAVILY_API_KEY") config.search.tavily_api_key = config.search.tavily_api_key || v;
+          else if (k === "CONTEXT7_API_KEY") config.search.context7_api_key = config.search.context7_api_key || v;
+          else if (k === "SEARXNG_URL") config.search.searxng_url = config.search.searxng_url || v;
+          else if (k === "SEARCH_PROVIDER") config.search.provider = config.search.provider || v;
+        }
+      }
+    }
+  } catch {}
+
+  return config;
+}
+
+/**
+ * Applies global configuration credentials to process.env if not already present.
+ */
+export function applyGlobalConfigToEnv() {
+  const cfg = loadGlobalConfig();
+  if (cfg.search?.brave_api_key && !process.env.BRAVE_API_KEY) {
+    process.env.BRAVE_API_KEY = cfg.search.brave_api_key;
+  }
+  if (cfg.search?.tavily_api_key && !process.env.TAVILY_API_KEY) {
+    process.env.TAVILY_API_KEY = cfg.search.tavily_api_key;
+  }
+  if (cfg.search?.context7_api_key && !process.env.CONTEXT7_API_KEY) {
+    process.env.CONTEXT7_API_KEY = cfg.search.context7_api_key;
+  }
+  if (cfg.search?.searxng_url && !process.env.SEARXNG_URL) {
+    process.env.SEARXNG_URL = cfg.search.searxng_url;
+  }
+  if (cfg.search?.provider && !process.env.SEARCH_PROVIDER) {
+    process.env.SEARCH_PROVIDER = cfg.search.provider;
+  }
+}
+applyGlobalConfigToEnv();
+
+export function getSearchConfig() {
+  const cfg = loadGlobalConfig();
+  return {
+    provider: process.env.SEARCH_PROVIDER || cfg.search?.provider || "auto",
+    brave_api_key: process.env.BRAVE_API_KEY || cfg.search?.brave_api_key || "",
+    tavily_api_key: process.env.TAVILY_API_KEY || cfg.search?.tavily_api_key || "",
+    context7_api_key: process.env.CONTEXT7_API_KEY || cfg.search?.context7_api_key || "",
+    searxng_url: process.env.SEARXNG_URL || cfg.search?.searxng_url || "",
+  };
+}
+
+const _initSearchConfig = getSearchConfig();
+export const SEARCH_PROVIDER = _initSearchConfig.provider;
+export const BRAVE_API_KEY = _initSearchConfig.brave_api_key;
+export const TAVILY_API_KEY = _initSearchConfig.tavily_api_key;
+export const CONTEXT7_API_KEY = _initSearchConfig.context7_api_key;
+export const SEARXNG_URL = _initSearchConfig.searxng_url;
+
+
 // Wedge detection & Auto-Heal (Preserves GPU headroom against core deadlocks)
 export const WEDGE_STATS_SILENCE_S = process.env.QWEN_WEDGE_SILENCE_S
   ? parseInt(process.env.QWEN_WEDGE_SILENCE_S, 10)

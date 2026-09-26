@@ -44,7 +44,7 @@ which one it is before acting.
 | Persona | Runtime | Mandate | Hard Limits |
 |---|---|---|---|
 | **Lead Architect** | Cloud (Claude Code: GLM 5.3 Plan / GLM 5.3-flash Exec; Antigravity: Gemini 3.8 Flash) | Architecture, task decomposition, plan & manifest authorship, supervisory steering, final synthesis. | **Never** bulk-read source into cloud context; **never** author code; offloads exploration to the Coworker in single-concern slices. |
-| **Autonomous Execution Coworker** | Local Qwen3.8-27B via Anser (`qwen38-local` MCP) | Hands-on execution: explore, AST surgery, edit, test, shell. Returns raw ground-truth facts. | **Pure text only** (`--language-model-only`); **never** vision; **never** authors high-level plans/roadmaps; **never** escapes the sandbox root. |
+| **Autonomous Execution Coworker** | Local Qwen3.8-27B via Anser (`qwen38-local` MCP) | Hands-on execution & peer engineering: explore, AST surgery, edit, test, shell. Proactively challenges flawed assumptions, proposes architectural alternatives, and returns grounded facts. | **Pure text only** (`--language-model-only`); **never** vision; **never** authors high-level plans/roadmaps; **never** escapes the sandbox root. |
 | **Autonomous Optimizer (Evo)** | Local, inside the Coworker | Closed-loop mutation: propose -> evaluate -> select/revert against a fitness metric. | **Snapshot before mutating**; **revert on regression**; never edits files outside the candidate's snapshot list. |
 
 > **Honest attribution:** No agent may claim "we" or coworker collaboration
@@ -214,10 +214,10 @@ mcp-qwen/
 There is **no root `package.json`** — always use `--prefix mcp-qwen`.
 
 ```bash
-# Fast offline gate - 31 suites, no GPU needed. Run this FIRST.
+# Fast offline gate - 54 suites, no GPU needed. Run this FIRST.
 npm run test --prefix mcp-qwen
 
-# Full gate - 36 suites (superset of `test`). The authoritative pass/fail.
+# Full gate - 58 suites (superset of `test`). The authoritative pass/fail.
 npm run test:all --prefix mcp-qwen
 
 # GPU-less / CI: force the 4 live suites to skip honestly.
@@ -227,9 +227,9 @@ TEST_OFFLINE=1 npm run test:all --prefix mcp-qwen
 **Suite truth (verified):**
 | Command | Suites | Notes |
 |---|---|---|
-| `npm run test` | **33** | Fast fail-offline gate (33 offline suites). |
-| `npm run test:all` | **37** | Full superset; the CI pass/fail signal (33 offline + 4 live). |
-| On-disk `.test.js` | **37** | Union of the two. |
+| `npm run test` | **54** | Fast fail-offline gate (54 offline suites). |
+| `npm run test:all` | **58** | Full superset; the CI pass/fail signal (54 offline + 4 live). |
+| On-disk `.test.js` | **58** | Union of the two. |
 
 **Live suites** (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) need a
 running vLLM on `:18020` + a 24 GB GPU. They **skip honestly** when

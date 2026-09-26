@@ -109,10 +109,12 @@ tools = {
             '  - Fast tasks (< 45s): Returns full deliverable directly in Turn 1.\n'
             '  - Long tasks (>= 45s): Safely yields `taskId` and a `wait_command` before client deadlines. '
             'Run `wait_command` via native shell to block and wake up automatically with the result at $0 token cost.\n'
-            'Supported Extensions:\n'
-            '  - `uvx free-search-mcp` (Deep Web Search, Live Docs, PDF/DOCX Ingestion)\n'
-            '  - `npx.cmd -y context7@latest` / `npx -y context7@latest` (Version-Accurate Framework & Library Docs)\n'
-            '  - `gh` CLI / `git` (Authenticated GitHub operations and atomic git branch/commit workflows)'
+            'Built-in Capabilities:\n'
+            '  - Native multi-provider web search (`web_search` with Brave, Tavily, Context7 docs, SearXNG, DuckDuckGo) & markdown fetch (`web_fetch`)\n'
+            '  - AST search (`ast_search`), AST/LaTeX syntax-validated edits (`edit_file`), and git patches (`apply_patch`)\n'
+            'Optional Stdio Extensions:\n'
+            '  - `gh` CLI / `git` (Authenticated GitHub operations and atomic git branch/commit workflows)\n'
+            '  - Custom MCP tools via `extensions: ["cmd arg1 arg2"]`'
         ),
         'parameters': {
             '$schema': 'http://json-schema.org/draft-07/schema#',

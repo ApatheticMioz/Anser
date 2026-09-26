@@ -12,6 +12,7 @@ import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
 import { search, SafeSearchType } from "duck-duck-scrape";
+import { getSearchConfig } from "../../config.js";
 
 export const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Anser/2026.1";
@@ -19,6 +20,34 @@ export const DEFAULT_USER_AGENT =
 export const MAX_FETCH_CHARS = 60_000;
 export const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
 export const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
+
+// Leaky-bucket serialization queue for DuckDuckGo unauthenticated requests
+let lastDdgRequestTime = 0;
+const DDG_MIN_INTERVAL_MS = 1500;
+let ddgQueue = Promise.resolve();
+
+async function throttleDdgRequest() {
+  const current = ddgQueue;
+  let resolveNext;
+  ddgQueue = new Promise((resolve) => {
+    resolveNext = resolve;
+  });
+  await current;
+  try {
+    const now = Date.now();
+    const elapsed = now - lastDdgRequestTime;
+    if (elapsed < DDG_MIN_INTERVAL_MS) {
+      await new Promise((r) => setTimeout(r, DDG_MIN_INTERVAL_MS - elapsed));
+    }
+    lastDdgRequestTime = Date.now();
+  } finally {
+    resolveNext();
+  }
+}
+
+function isDocQuery(q) {
+  return /\b(docs?|documentation|api|library|package|sdk|crate|module|import|framework|reference|guide)\b/i.test(q);
+}
 
 export class WebService {
   constructor(options = {}) {
@@ -41,13 +70,119 @@ export class WebService {
   }
 
   /**
-   * Performs web search using DuckDuckGo (zero API keys required).
-   *
-   * @param {object} params
-   * @param {string} params.query Search terms or phrase
-   * @param {number} [params.max_results=10] Max results to return
-   * @param {"strict"|"moderate"|"off"} [params.safe_search="moderate"] SafeSearch level
-   * @returns {Promise<{ query: string, count: number, results: Array<{ title: string, url: string, snippet: string }> }>}
+   * Search via Brave Search API.
+   */
+  async _searchBrave(query, limit, apiKey) {
+    if (!apiKey) throw new Error("MissingBraveApiKey");
+    const u = new URL("https://api.search.brave.com/res/v1/web/search");
+    u.searchParams.set("q", query);
+    u.searchParams.set("count", String(limit));
+    const res = await globalThis.fetch(u.toString(), {
+      headers: {
+        "X-Subscription-Token": apiKey,
+        Accept: "application/json",
+        "User-Agent": this.userAgent,
+      },
+      signal: AbortSignal.timeout(this.searchTimeoutMs),
+    });
+    if (!res.ok) {
+      throw new Error(`BraveSearchError: HTTP ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+    const items = data.web?.results || [];
+    return items.slice(0, limit).map((r) => ({
+      title: r.title || "",
+      url: r.url || "",
+      snippet: r.description || "",
+    }));
+  }
+
+  /**
+   * Search via Tavily Search API.
+   */
+  async _searchTavily(query, limit, apiKey) {
+    if (!apiKey) throw new Error("MissingTavilyApiKey");
+    const res = await globalThis.fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": this.userAgent,
+      },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query,
+        max_results: limit,
+        include_raw_content: false,
+      }),
+      signal: AbortSignal.timeout(this.searchTimeoutMs),
+    });
+    if (!res.ok) {
+      throw new Error(`TavilySearchError: HTTP ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+    const items = data.results || [];
+    return items.slice(0, limit).map((r) => ({
+      title: r.title || "",
+      url: r.url || "",
+      snippet: r.content || "",
+    }));
+  }
+
+  /**
+   * Search via Upstash Context7 API (Library & Framework Documentation).
+   */
+  async _searchContext7(query, limit, apiKey) {
+    if (!apiKey) throw new Error("MissingContext7ApiKey");
+    const u = new URL("https://context7.com/api/v3/search");
+    u.searchParams.set("query", query);
+    u.searchParams.set("type", "json");
+    const res = await globalThis.fetch(u.toString(), {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "User-Agent": this.userAgent,
+      },
+      signal: AbortSignal.timeout(this.searchTimeoutMs),
+    });
+    if (!res.ok) {
+      throw new Error(`Context7SearchError: HTTP ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+    const items = data.results || data.snippets || (Array.isArray(data) ? data : []);
+    return items.slice(0, limit).map((r) => ({
+      title: r.title || r.library || "Context7 Documentation",
+      url: r.url || r.source || "https://context7.com",
+      snippet: r.content || r.snippet || r.text || "",
+    }));
+  }
+
+  /**
+   * Search via SearXNG JSON instance.
+   */
+  async _searchSearxng(query, limit, baseUrl) {
+    if (!baseUrl) throw new Error("MissingSearxngUrl");
+    const u = new URL(baseUrl.replace(/\/+$/, "") + "/search");
+    u.searchParams.set("q", query);
+    u.searchParams.set("format", "json");
+    const res = await globalThis.fetch(u.toString(), {
+      headers: {
+        "User-Agent": this.userAgent,
+      },
+      signal: AbortSignal.timeout(this.searchTimeoutMs),
+    });
+    if (!res.ok) {
+      throw new Error(`SearxngSearchError: HTTP ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+    const items = data.results || [];
+    return items.slice(0, limit).map((r) => ({
+      title: r.title || "",
+      url: r.url || "",
+      snippet: r.content || "",
+    }));
+  }
+
+  /**
+   * Performs web search using DuckDuckGo (HTML endpoint first, then duck-duck-scrape).
    */
   async _searchHtml(query, limit, safeSearch) {
     const res = await globalThis.fetch("https://html.duckduckgo.com/html/", {
@@ -94,66 +229,105 @@ export class WebService {
     return results;
   }
 
+  async _searchDuckDuckGo(query, limit, safe_search) {
+    await throttleDdgRequest();
+
+    try {
+      const htmlResults = await this._searchHtml(query, limit, safe_search);
+      if (htmlResults.length > 0) {
+        return htmlResults;
+      }
+    } catch {
+      /* fall through to duck-duck-scrape */
+    }
+
+    let ddgSafeSearch = SafeSearchType.MODERATE;
+    if (safe_search === "strict") ddgSafeSearch = SafeSearchType.STRICT;
+    else if (safe_search === "off") ddgSafeSearch = SafeSearchType.OFF;
+
+    const res = await search(query, {
+      safeSearch: ddgSafeSearch,
+    });
+
+    if (res.noResults || !Array.isArray(res.results)) {
+      return [];
+    }
+
+    return res.results.slice(0, limit).map((r) => ({
+      title: r.title || "",
+      url: r.url || "",
+      snippet: r.description || r.rawDescription || "",
+    }));
+  }
+
   /**
-   * Performs web search using DuckDuckGo (zero API keys required).
+   * Performs multi-provider web search with automatic failover.
    *
    * @param {object} params
    * @param {string} params.query Search terms or phrase
    * @param {number} [params.max_results=10] Max results to return
    * @param {"strict"|"moderate"|"off"} [params.safe_search="moderate"] SafeSearch level
-   * @returns {Promise<{ query: string, count: number, results: Array<{ title: string, url: string, snippet: string }> }>}
+   * @param {string} [params.provider="auto"] Provider override ('auto', 'brave', 'tavily', 'context7', 'searxng', 'duckduckgo')
+   * @returns {Promise<{ query: string, count: number, provider: string, results: Array<{ title: string, url: string, snippet: string }> }>}
    */
-  async search({ query, max_results = 10, safe_search = "moderate" }) {
+  async search({ query, max_results = 10, safe_search = "moderate", provider }) {
     if (!query || typeof query !== "string" || !query.trim()) {
       throw new Error("InvalidQueryError: Search query must be a non-empty string");
     }
 
     const trimmedQuery = query.trim();
     const limit = Math.min(Math.max(1, max_results), 25);
+    const cfg = getSearchConfig();
+    const chosenProvider = provider || cfg.provider || "auto";
 
-    // Primary: Static HTML endpoint (no anomaly detection / captcha issues)
-    try {
-      const htmlResults = await this._searchHtml(trimmedQuery, limit, safe_search);
-      if (htmlResults.length > 0) {
-        return {
-          query: trimmedQuery,
-          count: htmlResults.length,
-          results: htmlResults,
-        };
+    // Build candidate provider chain
+    const chain = [];
+    if (chosenProvider !== "auto") {
+      chain.push(chosenProvider);
+    } else {
+      // Auto chain: Brave -> Tavily -> Context7 (if documentation query) -> SearXNG -> DuckDuckGo
+      if (cfg.brave_api_key) chain.push("brave");
+      if (cfg.tavily_api_key) chain.push("tavily");
+      if (cfg.context7_api_key && isDocQuery(trimmedQuery)) chain.push("context7");
+      if (cfg.searxng_url) chain.push("searxng");
+      chain.push("duckduckgo");
+    }
+
+    let lastError = null;
+    for (const p of chain) {
+      try {
+        let results = [];
+        if (p === "brave") results = await this._searchBrave(trimmedQuery, limit, cfg.brave_api_key);
+        else if (p === "tavily") results = await this._searchTavily(trimmedQuery, limit, cfg.tavily_api_key);
+        else if (p === "context7") results = await this._searchContext7(trimmedQuery, limit, cfg.context7_api_key);
+        else if (p === "searxng") results = await this._searchSearxng(trimmedQuery, limit, cfg.searxng_url);
+        else if (p === "duckduckgo") results = await this._searchDuckDuckGo(trimmedQuery, limit, safe_search);
+
+        if (results && results.length > 0) {
+          return {
+            query: trimmedQuery,
+            count: results.length,
+            provider: p,
+            results,
+          };
+        }
+      } catch (err) {
+        lastError = err;
+        // On explicit provider request, fail fast
+        if (chosenProvider !== "auto") throw err;
       }
-    } catch {
-      /* fall through to duck-duck-scrape */
     }
 
-    // Secondary: duck-duck-scrape package
-    let ddgSafeSearch = SafeSearchType.MODERATE;
-    if (safe_search === "strict") ddgSafeSearch = SafeSearchType.STRICT;
-    else if (safe_search === "off") ddgSafeSearch = SafeSearchType.OFF;
-
-    const res = await search(trimmedQuery, {
-      safeSearch: ddgSafeSearch,
-    });
-
-    if (res.noResults || !Array.isArray(res.results)) {
-      return {
-        query: trimmedQuery,
-        count: 0,
-        results: [],
-      };
-    }
-
-    const items = res.results.slice(0, limit).map((r) => ({
-      title: r.title || "",
-      url: r.url || "",
-      snippet: r.description || r.rawDescription || "",
-    }));
+    if (lastError && chain.length === 1) throw lastError;
 
     return {
       query: trimmedQuery,
-      count: items.length,
-      results: items,
+      count: 0,
+      provider: chain[chain.length - 1],
+      results: [],
     };
   }
+
 
   /**
    * Fetches a webpage or API endpoint, extracting clean Markdown.
@@ -288,9 +462,10 @@ export function webPlugin(ctx, options = {}) {
 
   ctx.registerTool("web_search", {
     description:
-      "Search the live web using DuckDuckGo (zero API keys required). " +
+      "Search the live web with automatic multi-provider routing (Brave, Tavily, Context7, SearXNG, DuckDuckGo). " +
       "Returns top matching results with titles, URLs, and text snippets. " +
-      "Use this to find current documentation, technical solutions, and library APIs.",
+      "Use this to find current documentation, technical solutions, and library APIs. " +
+      "Set provider to 'context7' to specifically search framework and library documentation.",
     parameters: {
       type: "object",
       properties: {
@@ -308,6 +483,12 @@ export function webPlugin(ctx, options = {}) {
           enum: ["strict", "moderate", "off"],
           description: "SafeSearch filtering level (default 'moderate')",
           default: "moderate",
+        },
+        provider: {
+          type: "string",
+          enum: ["auto", "brave", "tavily", "context7", "searxng", "duckduckgo"],
+          description: "Search provider override (default 'auto'). Use 'context7' for framework and library documentation.",
+          default: "auto",
         },
       },
       required: ["query"],

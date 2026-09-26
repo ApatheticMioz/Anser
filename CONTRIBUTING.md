@@ -42,18 +42,18 @@ The test gate is the single source of truth. Run it **before** opening a PR.
 ```bash
 cd mcp-qwen
 
-# Fast offline gate - 31 suites. Run this FIRST.
+# Fast offline gate - 54 suites. Run this FIRST.
 npm test
 
-# Full gate - 36 suites (superset of `test`). The authoritative pass/fail.
+# Full gate - 58 suites (superset of `test`). The authoritative pass/fail.
 npm run test:all
 
 # GPU-less / CI: force the 4 live suites to skip honestly.
 TEST_OFFLINE=1 npm run test:all
 ```
 
-**Suite truth:** `npm test` = **31** suites; `npm run test:all` = **36**
-suites; 36 `.test.js` files on disk. The 4 *live* suites (`evo`,
+**Suite truth:** `npm test` = **54** offline suites; `npm run test:all` = **58**
+suites; 58 `.test.js` files on disk. The 4 *live* suites (`evo`,
 `mcp_client`, `fifo_queue`, `benchmark`) need a running vLLM on `:18020` + a
 24 GB GPU; they **skip honestly** when `TEST_OFFLINE=1` or the engine is
 offline. A skip is a pass, not a failure.

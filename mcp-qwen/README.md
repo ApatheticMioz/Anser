@@ -10,7 +10,7 @@ Qwen3.8-27B coworker (vLLM + DFlash2 + KVarN, 245K context) to two runtimes:
 - Closed-loop evolutionary optimization (`.evo/lineage.json`)
 - Zero-turn OS-level wait (`curl` long-poll on `:18021` saving ~590M tokens)
 - Engine wedge detection + auto-heal
-- Full 33-suite test gate (`npm run test:all`) validated live with zero skips
+- Full 58-suite test gate (`npm run test:all`) validated live with zero skips
 
 ## Quickstart
 
@@ -455,5 +455,7 @@ Detailed audit of the transcripts reveals **6 critical operational friction mode
 
 ## Version
 
-**5.2.0** (tracked in `package.json` and git tag `v5.2.0` — the only current-version literal; the MCP server serves it from there). 5.1.0 consolidated all 14 engineering passes and complete 26-suite verification; 5.1.1 stabilized multi-instance lifecycle (anchored cancel sweeps, loopback proxy bind, retention invariant); 5.2.0 completes the Anser/Evo brand rename (engine core, evo subsystem, `.evo` data dir) and retires the legacy engine selection.
+**2026.2.0** (tracked in `package.json` and git tag `v2026.2.0` — the only current-version literal; the MCP server serves it from there). 
+- **2026.1.0**: Established the Universal 245K context baseline (vLLM + DFlash2 + KVarN), the 14 engineering passes (P1–P14), 137-vector zero-trust containment, and zero-turn reactive OS wait (`:18021/task/<id>/wait`).
+- **2026.2.0**: Establishes native multi-provider live web & framework documentation research (`web_search` with Brave, Tavily, Context7 docs, SearXNG, DuckDuckGo + `web_fetch`), zero-progress-loss Cooperative Landing at turn ceilings, Automatic Prefix Caching (APC) stability (~8,000–9,500 tok/s), and Socratic collaborative pair-programming where Qwen pairs with the Lead Architect as an autonomous Staff Software Engineer peer. Retires the legacy 5.x versioning sequence.
 
