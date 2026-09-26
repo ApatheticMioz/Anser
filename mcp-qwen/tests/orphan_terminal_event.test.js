@@ -55,7 +55,7 @@ process.env.HOME = TMP_STATE;
 process.env.QWEN_WSL_HOME = TMP_STATE;
 process.env.QWEN_WIN_HOME = TMP_STATE;
 
-const { QWEN_STATE_DIR, TASK_DIR } = await import("../src/config.js");
+const { QWEN_STATE_DIR, TASK_DIR, ORPHAN_REAP_STALE_MS } = await import("../src/config.js");
 const {
   readTaskFromDisk,
   markTaskOrphanedOnDisk,
@@ -100,19 +100,11 @@ setTimeout(() => {
  * the OS reuses the pid before we probe it.
  */
 async function getDeadPid() {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
-      stdio: "ignore",
-    });
-    await new Promise((resolve) => {
-      child.on("exit", resolve);
-      child.on("spawn", () => {});
-    });
-    const pid = child.pid;
-    if (pid && !pidAlive(pid)) return pid;
-    // pid was (impossibly) reused and is alive again; try a fresh child.
+  const candidate = 2_000_000_000;
+  if (!pidAlive(candidate)) return candidate;
+  for (let pid = 2_000_000_001; pid < 2_000_000_050; pid++) {
+    if (!pidAlive(pid)) return pid;
   }
-  // Last resort: a very high pid that is almost certainly not in use.
   return 2_000_000_000;
 }
 
@@ -172,16 +164,17 @@ function countTerminal(sessionId) {
  */
 function makeOrphanTask(id, sessionId, deadPid) {
   const now = Date.now();
+  const staleAt = now - (ORPHAN_REAP_STALE_MS + 60_000);
   return {
     id,
     sessionId,
     cwd: TMP_STATE,
     prompt: "orphan test prompt",
     ownerPid: deadPid,
-    createdAt: now - 600_000,
-    startedAt: now - 600_000,
+    createdAt: staleAt,
+    startedAt: staleAt,
     finishedAt: null,
-    lastHeartbeatAt: now - 600_000, // stale (> 300s)
+    lastHeartbeatAt: staleAt,
     status: "executing",
     done: false,
     isError: false,

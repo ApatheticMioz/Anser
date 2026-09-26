@@ -130,9 +130,6 @@ export function releaseExclusiveLock(lockPath) {
 }
 
 export async function serverInfo() {
-  if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && process.env.NODE_ENV === "test")) {
-    return null;
-  }
   try {
     const key = getApiKeySync();
     // FX2: vLLM does not require auth. When no key file is found,
@@ -163,7 +160,7 @@ export async function currentMode() {
 
 let canaryCache = { at: 0, result: null };
 export async function canaryProbe(force = false) {
-  if ((process.env.TEST_OFFLINE === "1" || !ALLOW_ENGINE_INTERRUPT) && wslRun === runWslCommand) {
+  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
     return { ok: true, skipped: "engine_protected_offline", latency_ms: 0 };
   }
   if (!force && canaryCache.result && Date.now() - canaryCache.at < 60_000) {
@@ -594,7 +591,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
 }
 
 export async function ensureServerRunning() {
-  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1")) {
+  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
     return { switched: false, status: "boot_refused_offline_protected" };
   }
   const current = await currentMode();

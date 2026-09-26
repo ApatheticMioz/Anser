@@ -105,19 +105,11 @@ setTimeout(() => {
  * the OS reuses the pid before we probe it.
  */
 async function getDeadPid() {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
-      stdio: "ignore",
-    });
-    await new Promise((resolve) => {
-      child.on("exit", resolve);
-      child.on("spawn", () => {});
-    });
-    const pid = child.pid;
-    if (pid && !pidAlive(pid)) return pid;
-    // pid was (impossibly) reused and is alive again; try a fresh child.
+  const candidate = 2_000_000_000;
+  if (!pidAlive(candidate)) return candidate;
+  for (let pid = 2_000_000_001; pid < 2_000_000_050; pid++) {
+    if (!pidAlive(pid)) return pid;
   }
-  // Last resort: a very high pid that is almost certainly not in use.
   return 2_000_000_000;
 }
 

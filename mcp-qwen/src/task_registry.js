@@ -297,8 +297,7 @@ export function listTasksFromDisk() {
     // writeFileSync succeeded but whose renameSync never ran (the old catch{}
     // swallowed that failure, so these orphans accumulated forever). The tmp
     // lifetime is sub-second, so the same mtime age gate reaps them.
-    const isTmpOrphan = /^task_.*\.json\.tmp_\d+_\d+$/.test(f);
-    if (!f.startsWith("task_")) continue;
+    const isTmpOrphan = /\.json\.tmp_\d+_\d+$/.test(f);
     if (!f.endsWith(".json") && !isTmpOrphan) continue;
     const filePath = path.join(TASK_DIR, f);
     let stat;
