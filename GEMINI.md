@@ -97,7 +97,7 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
   - **NEVER prompt Qwen to artificially limit its tools or self-manage time.** Do NOT include phrases like "keep tool calls low", "stay under N actions", or "narrow your focus".
   - Once dispatched with a cleanly bounded objective, Qwen operates with **Full Objective Fulfillment**—taking as many tool actions and iterations as needed to thoroughly accomplish the deliverable without premature truncation.
 - **Large File Slicing**: When modifying large files (>300 LOC), direct the coworker to the specific function, component, or AST slice (e.g. `target: worker.ts#routeMessage`) rather than asking it to inspect the whole file.
-- **Prompt Budget**: Keep instructions **≤1,500 characters** with **one deliverable per dispatch**. Point at files and coordinates; never paste content the coworker can read locally.
+- **Prompt Budget & Gateway Enforcement**: Keep instructions **≤1,500 characters** with **one deliverable per dispatch**. Prompts exceeding 1,500 characters fail fast at the MCP gateway (`MonolithicDispatchRejected`). If a rich technical specification for a single slice is genuinely unavoidable, pass `allow_large_prompt: true` (capped at 2,500 characters). Point at files and coordinates; never paste content the coworker can read locally.
 
 ### 2. Session Lifecycle & Speculative Decoding Decay Threshold
 - **Milestone-Based Session Cohesion**: Reuse one `session_id` across a cohesive milestone; the engine's prefix cache makes follow-on turns nearly free, so accumulated session size alone is not a reason to roll.
@@ -173,6 +173,7 @@ To avoid tripping IDE-level file permission filters on `~/.gemini/` configuratio
 - **`skills`** (array of strings, optional): Explicit list of skill names to inject.
 - **`test_command`** (string, optional): Verification test/benchmark command (e.g. `pytest tests/test_core.py`).
 - **`timeout_ms`** (number, optional): Task timeout in ms (default 14,400,000ms / 4 hours, min 600,000ms).
+- **`allow_large_prompt`** (boolean, optional): Explicit override allowing prompts up to 2,500 chars when single-slice decomposition is genuinely impossible (prompts > 1,500 chars fail fast by default).
 
 ### `qwen_task` (Background Task & Telemetry Management)
 - **`action`** (string, required): `"status"` | `"cancel"` | `"kill"` (alias for cancel) | `"cancel_all"` | `"list"` | `"stats"` | `"extend_lease"`.

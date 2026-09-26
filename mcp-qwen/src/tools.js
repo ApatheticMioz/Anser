@@ -135,6 +135,12 @@ export function registerTools(server) {
           .describe(
             "Per-dispatch reasoning-effort tier forwarded to the engine chat template (xhigh = maximal deliberation, medium = balanced, low = brief). Omit to use the QWEN_REASONING_EFFORT env default (medium). Only the engine's supported tiers are accepted; invalid values are rejected."
           ),
+        allow_large_prompt: z
+          .boolean()
+          .optional()
+          .describe(
+            "Explicit override allowing a prompt up to 2,500 chars when a detailed specification for a single slice is genuinely unavoidable. Prompts > 1,500 chars without this flag are rejected fail-fast to prevent monolithic runaway sessions."
+          ),
       },
       annotations: {
         readOnlyHint: true,
@@ -152,6 +158,7 @@ export function registerTools(server) {
       timeout_ms,
       skills,
       reasoning_effort,
+      allow_large_prompt,
     }) => {
       let raceHandle;
       try {
@@ -178,15 +185,22 @@ export function registerTools(server) {
         };
       }
 
-      if (typeof prompt === "string" && prompt.length > PROMPT_BUDGET_CHARS) {
+      const isLargePromptAllowed = Boolean(allow_large_prompt);
+      const effectiveBudget = isLargePromptAllowed ? 2500 : PROMPT_BUDGET_CHARS;
+
+      if (typeof prompt === "string" && prompt.length > effectiveBudget) {
+        const errorDetail = isLargePromptAllowed
+          ? `Prompt is ${prompt.length} chars, exceeding the absolute maximum cap of 2,500 chars even with 'allow_large_prompt: true'. Point to files on disk and AST coordinates instead of inlining large content. DO NOT spoon-feed or paste verbatim code.`
+          : `Prompt is ${prompt.length} chars (budget: ${PROMPT_BUDGET_CHARS}). Your dispatch is oversized. ` +
+            `Per AGENTS.md / CLAUDE.md / GEMINI.md protocol rules (§3.1), you are strictly required to decompose tasks into single-concern slices rather than monolithic multi-milestone dumps. ` +
+            `DO NOT spoon-feed or paste verbatim code implementations—Qwen authors code locally. Point to files and AST coordinates. ` +
+            `(If a detailed specification is genuinely unavoidable for this single slice, pass 'allow_large_prompt: true' up to 2,500 chars).`;
+
         return {
           content: [
             {
               type: "text",
-              text: `MonolithicDispatchRejected: Prompt is ${prompt.length} chars (budget: ${PROMPT_BUDGET_CHARS}). ` +
-                    `You sent an oversized or multi-concern dispatch. ` +
-                    `Scope this turn to ONE cohesive subsystem, architectural layer, or AST coordinate with clear acceptance criteria. ` +
-                    `DO NOT spoon-feed or paste verbatim code implementations—Qwen authors code locally. Focus on the invariant, interface, or target file.`,
+              text: `MonolithicDispatchRejected: ${errorDetail}`,
             },
           ],
           isError: true,

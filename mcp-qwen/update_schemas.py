@@ -131,6 +131,7 @@ tools = {
                 'timeout_ms': {'type': 'integer', 'exclusiveMinimum': 0, 'maximum': 9007199254740991, 'description': 'Task timeout in ms (default 14,400,000ms (4 hours), minimum 600,000ms (10 min) - budgets are floored because a 27B model on consumer silicon routinely needs tens of minutes)'},
                 'skills': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Explicit list of skill names to inject (bypasses keyword auto-matching)'},
                 'reasoning_effort': {'type': 'string', 'enum': ['xhigh', 'medium', 'low'], 'description': "Per-dispatch reasoning-effort tier forwarded to the engine chat template (xhigh = maximal deliberation, medium = balanced, low = brief). Omit to use the QWEN_REASONING_EFFORT env default (medium). Only the engine's supported tiers are accepted; invalid values are rejected."},
+                'allow_large_prompt': {'type': 'boolean', 'description': "Explicit override allowing a prompt up to 2,500 chars when a detailed specification for a single slice is genuinely unavoidable. Prompts > 1,500 chars without this flag are rejected fail-fast to prevent monolithic runaway sessions."},
             },
             'required': ['prompt']
         }

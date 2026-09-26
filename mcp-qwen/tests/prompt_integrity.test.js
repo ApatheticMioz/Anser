@@ -19,6 +19,7 @@ import {
   REASONING_CONTINUATION_DIRECTIVE,
   AnserRunner,
 } from "../src/harness/runner.js";
+import { registerTools } from "../src/tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
@@ -508,4 +509,93 @@ test("prompt_integrity: empirical tool call resets consecutive reasoning continu
   const contEvents = events.filter((e) => e.type === "continuation_injected");
   assert.equal(contEvents.length, 2, "Must have injected 2 continuations across the run");
 });
+
+// ---------------------------------------------------------------------------
+// 6. Gateway Monolithic Dispatch Rejection & allow_large_prompt Override
+// ---------------------------------------------------------------------------
+
+test("prompt_integrity: gateway rejects prompts >1,500 chars fail-fast with MonolithicDispatchRejected", async () => {
+  const registered = {};
+  const mockServer = {
+    registerTool(name, spec, handler) {
+      registered[name] = { spec, handler };
+    },
+  };
+  registerTools(mockServer);
+
+  const coworker = registered["qwen_coworker"];
+  assert.ok(coworker, "qwen_coworker must be registered");
+
+  // Prompt > 1,500 chars without allow_large_prompt
+  const oversizedPrompt = "A".repeat(1600);
+  const res = await coworker.handler({ prompt: oversizedPrompt, cwd: process.cwd() });
+
+  assert.equal(res.isError, true, "Must reject oversized prompt as error");
+  assert.ok(
+    res.content[0].text.includes("MonolithicDispatchRejected"),
+    "Must return MonolithicDispatchRejected error"
+  );
+  assert.ok(
+    res.content[0].text.includes("allow_large_prompt: true"),
+    "Must inform orchestrator about allow_large_prompt escape hatch"
+  );
+});
+
+test("prompt_integrity: gateway allows prompts between 1,500 and 2,500 chars when allow_large_prompt is true", async () => {
+  const registered = {};
+  const mockServer = {
+    registerTool(name, spec, handler) {
+      registered[name] = { spec, handler };
+    },
+  };
+  registerTools(mockServer);
+
+  const coworker = registered["qwen_coworker"];
+
+  // Prompt at 1,800 chars with allow_large_prompt: true
+  // The key assertion is that it is NOT rejected with MonolithicDispatchRejected.
+  const largePrompt = "A".repeat(1800);
+  const res = await coworker.handler({
+    prompt: largePrompt,
+    allow_large_prompt: true,
+    cwd: process.cwd(),
+  });
+
+  const text = res.content?.[0]?.text || "";
+  assert.ok(
+    !text.includes("MonolithicDispatchRejected"),
+    `Must NOT reject with MonolithicDispatchRejected when allow_large_prompt is true (got: ${text})`
+  );
+});
+
+test("prompt_integrity: gateway unconditionally rejects prompts >2,500 chars even with allow_large_prompt: true", async () => {
+  const registered = {};
+  const mockServer = {
+    registerTool(name, spec, handler) {
+      registered[name] = { spec, handler };
+    },
+  };
+  registerTools(mockServer);
+
+  const coworker = registered["qwen_coworker"];
+
+  // Prompt > 2,500 chars with allow_large_prompt: true
+  const giantPrompt = "A".repeat(2600);
+  const res = await coworker.handler({
+    prompt: giantPrompt,
+    allow_large_prompt: true,
+    cwd: process.cwd(),
+  });
+
+  assert.equal(res.isError, true, "Must reject prompt exceeding 2,500 chars");
+  assert.ok(
+    res.content[0].text.includes("MonolithicDispatchRejected"),
+    "Must return MonolithicDispatchRejected error"
+  );
+  assert.ok(
+    res.content[0].text.includes("2,500 chars"),
+    "Must mention absolute 2,500 chars limit"
+  );
+});
+
 
