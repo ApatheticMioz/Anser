@@ -374,6 +374,11 @@ export function matchSkills({ prompt = "", cwd = "", dir, explicitSkills } = {})
  * @returns {string}
  */
 export function injectSkills(prompt, cwd, dir, explicitSkills) {
+  if (typeof prompt !== "string") return prompt;
+  if (prompt.includes("--- Matching skills (auto-injected from skills/) ---")) {
+    return prompt;
+  }
+
   const matches = matchSkills({ prompt, cwd, dir, explicitSkills });
   if (matches.length === 0) return prompt;
 
@@ -382,10 +387,14 @@ export function injectSkills(prompt, cwd, dir, explicitSkills) {
     "",
     "--- Matching skills (auto-injected from skills/) ---",
   ];
+  const seen = new Set();
   for (const s of matches) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
     parts.push(`### ${s.name}`);
     parts.push(s.body);
     parts.push("");
   }
   return `${prompt}\n${parts.join("\n")}`.replace(/\n{3,}/g, "\n\n").trimEnd();
 }
+

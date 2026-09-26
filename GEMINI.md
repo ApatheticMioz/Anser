@@ -88,6 +88,10 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 ### 1. Single Logical Concern per Turn
 - **Cohesive Architectural Scope**: Scope each conversational dispatch to **a single logical subsystem, layer, or component** (e.g. Turn 1: "Data Schema & Storage Layer", Turn 2: "Domain Logic & Actions", Turn 3: "API Endpoints & Controllers", Turn 4: "Test Suite & Verification").
 - **Never Dump Monolithic Mega-Prompts**: Bundling multiple disjoint subsystems across an entire project into a single prompt forces the coworker into excessive sequential tool calls, creating an unobservable black box and degrading speculative decoding performance.
+- **Never Corner the Coworker with Life-or-Death Mandates**:
+  - The Lead Architect MUST NEVER frame dispatches with coercive ultimatums (e.g. *"never lower thresholds / debug until it passes"* or *"must succeed in this turn"*).
+  - When specifying empirical verification gates, always provide collaborative exit criteria: *"Run verification. If it passes, proceed. If it fails, report the empirical metrics and failure coordinates back in plain text for alignment — do NOT loop indefinitely in solitary trial-and-error."*
+  - Reporting verified empirical failures or trade-offs in plain text is successful objective fulfillment, not premature truncation.
 - **Prompt-Level Scoping Only**:
   - The Lead Architect scopes the PROMPT itself so the problem space is small, cohesive, and clearly bounded.
   - **NEVER prompt Qwen to artificially limit its tools or self-manage time.** Do NOT include phrases like "keep tool calls low", "stay under N actions", or "narrow your focus".

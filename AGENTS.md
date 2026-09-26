@@ -221,10 +221,10 @@ mcp-qwen/
 There is **no root `package.json`** — always use `--prefix mcp-qwen`.
 
 ```bash
-# Fast canary gate - 8 critical suites (~4s, offline, zero engine interruption). Run during active development.
+# Fast canary gate - 9 critical suites (~4s, offline, zero engine interruption). Run during active development.
 npm test --prefix mcp-qwen
 
-# Full authoritative gate - 61 suites (single-pass complete verification). Run before PR / milestone commit.
+# Full authoritative gate - 62 suites (single-pass complete verification). Run before PR / milestone commit.
 npm run test:all --prefix mcp-qwen
 
 # GPU-less / CI: live suites skip honestly by default when ALLOW_ENGINE_INTERRUPT is unset or TEST_OFFLINE=1.
@@ -234,9 +234,9 @@ TEST_OFFLINE=1 npm run test:all --prefix mcp-qwen
 **Gate truth (verified):**
 | Command | Suites | Runtime | Purpose |
 |---|---|---|---|
-| `npm test` | **8** | ~4 s | Instant canary gate (security, AST canary, syntax gates, edit_file guard, search_code guard, schema parity, platform, protocol sync). |
-| `npm run test:all` | **61** | ~48 s | Full authoritative offline & integration gate. Single-pass run (authoritative CI signal). |
-| On-disk `.test.js` | **61** | — | Total test suites in repository. |
+| `npm test` | **9** | ~4 s | Instant canary gate (security, AST canary, syntax gates, edit_file guard, search_code guard, schema parity, platform, protocol sync, prompt integrity). |
+| `npm run test:all` | **62** | ~48 s | Full authoritative offline & integration gate. Single-pass run (authoritative CI signal). |
+| On-disk `.test.js` | **62** | — | Total test suites in repository. |
 
 **Zero Engine Interruption Invariant:**
 By default, tests NEVER interrupt, probe, or reboot a running vLLM instance (`ALLOW_ENGINE_INTERRUPT=0`). Live suites (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) **skip honestly** by default so running background Anser workloads on single-sequence hardware are protected. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.

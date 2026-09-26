@@ -30,7 +30,7 @@ import assert from "node:assert";
 process.env.QWEN_MAX_CONTINUATION_TURNS = "3";
 process.env.QWEN_EMPTY_STREAM_RETRIES = "2";
 
-const { AnserRunner, CONTINUATION_DIRECTIVE } =
+const { AnserRunner, CONTINUATION_DIRECTIVE, REASONING_CONTINUATION_DIRECTIVE } =
   await import("../src/harness/runner.js");
 const { MAX_CONTINUATION_TURNS, EMPTY_STREAM_RETRIES } = await import(
   "../src/config.js"
@@ -439,8 +439,8 @@ async function vectorG() {
 
 // ---------------------------------------------------------------------------
 // Vector (h): reasoning-only length cutoff (metrics.hadReasoning=true, zero
-// content) -> the continuation must inject clean CONTINUATION_DIRECTIVE and
-// log directive "resume" with hadReasoning=true.
+// content) -> the continuation must inject clean REASONING_CONTINUATION_DIRECTIVE and
+// log directive "balanced_landing" with hadReasoning=true.
 // ---------------------------------------------------------------------------
 async function vectorH() {
   const llm = makeMockLlm([
@@ -461,8 +461,8 @@ async function vectorH() {
   assert.strictEqual(conts.length, 1, "h: exactly one continuation");
   assert.strictEqual(
     conts[0].directive,
-    "resume",
-    "h: directive must be resume"
+    "balanced_landing",
+    "h: directive must be balanced_landing"
   );
   assert.strictEqual(
     conts[0].hadReasoning,
@@ -472,10 +472,10 @@ async function vectorH() {
   const lastMsg = llm._lastMessages?.[llm._lastMessages.length - 1];
   assert.strictEqual(
     lastMsg?.content,
-    CONTINUATION_DIRECTIVE,
-    "h: injected message is clean CONTINUATION_DIRECTIVE text"
+    REASONING_CONTINUATION_DIRECTIVE,
+    "h: injected message is clean REASONING_CONTINUATION_DIRECTIVE text"
   );
-  console.log("  [PASS] (h) reasoning-length cutoff -> clean continuation injected");
+  console.log("  [PASS] (h) reasoning-length cutoff -> clean balanced_landing continuation injected");
 }
 
 // ---------------------------------------------------------------------------

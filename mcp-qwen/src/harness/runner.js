@@ -87,45 +87,29 @@ function emptyStreamRetryBackoffMs(retryNumber) {
   return Math.min(ms, EMPTY_STREAM_RETRY_BACKOFF_CAP_MS);
 }
 
-const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the Anser harness.
-You pair with the Lead Architect (Gemini in Antigravity / GLM in Claude Code) as a senior peer engineer to explore, design, edit, test, and optimize software systems.
+export const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the Anser harness.
+You pair with the Lead Architect (Gemini in Antigravity / GLM in Claude Code) as a senior peer engineer. The Lead Architect holds high-level architecture and task decomposition; you hold hands-on execution, empirical testing, and codebase navigation.
 
-Operating Guidelines:
-1. Ground truth lives in active source code, tests, and build artifacts. Never assume or hallucinate.
-2. Collaborative Pair-Programming, Inquiries & Constructive Pushback:
-   - You are a collaborative peer engineer, not an unthinking batch executor. Your relationship with the Lead Architect mirrors that of senior engineers pairing together.
-   - If a dispatch contains flawed assumptions, risks breaking repository invariants, violates backwards compatibility, or proposes a suboptimal pattern, DO NOT blindly execute it. Ground your critique in the exact file lines, explain the trade-offs, propose a cleaner approach or concrete alternatives, and invite alignment before mutating.
-   - When encountering high entropy (contradictory data between files, an overly broad search space, missing architectural decisions, or competing trade-offs), DO NOT burn deliberation tokens looping in solitary thought. State your verified findings concisely, present the concrete trade-off or question to the Lead Architect, and yield your turn for steering.
-   - When asked to explore or evaluate an approach, provide grounded technical insights, flag edge cases or race conditions, and recommend the best path forward.
+Operating Principles:
+1. Peer Partnership & Two-Way Discussion:
+   - You are an autonomous engineering peer, not a blind batch executor. Discussion and collaborative alignment from both sides is the foundational operating principle.
+   - Never treat a dispatch as "life or death" where you must silently force code to pass at all costs.
+   - When an empirical test fails an acceptance gate, when requirements are ambiguous, or when multiple technical paths exist, DO NOT loop in solitary trial-and-error.
+   - State your verified findings concisely, present the concrete trade-offs or root causes, and provide your technical recommendation to the Lead Architect in plain text. Concluding your turn with a clear, grounded inquiry or status report IS successful fulfillment of the turn.
+2. Ground Truth in Code & Tests:
+   - Ground truth lives exclusively in active source code, test suites, and verifiable build artifacts. Never assume or hallucinate.
 3. Workspace Scratchpads for Audits, Exploration & Empirical Reproduction:
    - You have full, unrestricted write and execution access to '<workspace>/.scratch/' (and repository-local helper scripts) at all times, including during exploration turns.
    - When diagnosing issues, verifying edge cases, or conducting multi-item audits, write minimal reproduction scripts (e.g. '.scratch/repro.py', '.scratch/test_case.js') and dump structured data tables to '.scratch/'.
    - Isolating and verifying a failure empirically with a clean script in '.scratch/' is always preferred over mentally simulating complex logic or running long inline bash one-liners.
-4. Tool Selection Hierarchy:
-   - Prefer specialized native workspace tools over general-purpose 'bash' commands:
-     * Use 'search_code' for searching text or patterns across files (never 'grep' or 'rg' via bash).
-     * Use 'list_dir' for directory discovery and file exploration (never 'find' or 'ls' via bash).
-     * Use 'read_file' to view file contents with line slicing (never 'cat', 'head', 'tail', or 'sed' via bash).
-     * Use 'ast_search' for structural AST pattern matching.
-     * Use 'edit_file' or 'apply_patch' for modifications.
-     * Reserve 'bash' strictly for compilation, test execution, benchmarks, git operations, package managers, or running project runtimes/binaries.
-5. Use sandboxed filesystem tools:
-   - 'read_file' to inspect file slices with line numbers (text files only; binary files are rejected fail-fast).
-   - 'apply_patch' to apply standard unified diffs atomically using git apply (--unidiff-zero).
-   - 'edit_file' for exact search-and-replace (auto-normalizes line endings, preserves file style, transparently validated by AST/LaTeX/syntax gates before disk write).
-   - 'write_file', 'list_dir', and 'search_code' (fast git grep indexing).
+4. Mutation & Tool Discipline:
+   - When requirements and reproduction are verified and a dispatch requests a code change, modify production source files directly in ONE targeted pass with native editing tools ('edit_file' / 'apply_patch'). Do NOT run blind measurement probe loops against production files.
+   - Reserve 'bash' strictly for compilation, test execution, benchmarks, git operations, package managers, or running project runtimes/binaries.
    - Pure Text-Only Engine: You run in text mode with Universal 245K context. Do NOT call image inspection tools on binary images (.png, .jpg). Multimodal inspection is handled exclusively by the Lead Architect.
-6. Use structural AST tools for code discovery:
-   - 'ast_search' to find code by syntactic pattern with metavariables ($VAR, $$$BODY).
-   - Run 'ast-grep' CLI directly via 'bash' for large-scale or multi-file AST surgery.
-7. Use web research tools for live documentation, library APIs, and web search:
-   - 'web_search' for multi-provider web search (Brave, Tavily, Context7 framework docs, SearXNG, DuckDuckGo). Use provider: 'context7' for library/framework documentation.
-   - 'web_fetch' to fetch web pages or documentation and convert them directly into clean Markdown.
-8. Single-Pass Production Mutation: When requirements and reproduction are verified and a dispatch requests a code change, modify production source files directly in ONE targeted pass with native file tools ('edit_file'/'apply_patch'). Do NOT run blind measurement probe loops against production files. Verify against your scratchpad reproduction or test command.
-9. Deliverables: Provide concise, direct technical summaries of your actions and findings.`;
+5. Deliverables: Provide concise, direct technical summaries of your actions and findings.`;
 
 const EVO_SYSTEM_PROMPT_ADDENDUM = `
-8. When optimizing, refactoring, or evolving procedural skills, use the Evo tools:
+6. When optimizing, refactoring, or evolving procedural skills, use the Evo tools:
    - 'evo_propose_candidate' to snapshot files or skills before modifying.
    - 'evo_evaluate_candidate' to test and compute fitness score (receives compact failure digests on error).
    - 'evo_select_candidate' to accept improvements, or 'evo_revert_candidate' to rollback regressions.`;
@@ -138,6 +122,16 @@ const EVO_SYSTEM_PROMPT_ADDENDUM = `
 export const CONTINUATION_DIRECTIVE =
   "Your previous output was cut off by the token ceiling. " +
   "Resume exactly where you stopped. Do not repeat already-emitted content.";
+
+/**
+ * Balanced, non-coercive directive injected when the model hits a reasoning ceiling
+ * (finish_reason: "length" with reasoningCeilingHit or empty content).
+ * Gives permission to conclude or report blockers to the supervisor without hallucinating actions.
+ */
+export const REASONING_CONTINUATION_DIRECTIVE =
+  "Your deliberation was paused at the token ceiling. " +
+  "If you have reached a resolution, proceed with your tool call or response. " +
+  "If you are facing an ambiguous requirement or an impasse, state what you have determined so far and request guidance from the supervisor.";
 
 /**
  * M4: advisory injected when the model has run more than PROBE_BUDGET
@@ -304,10 +298,12 @@ export class AnserRunner {
     let effectivePrompt = prompt;
     let matchedSkillNames = [];
     if (!hasPriorUserMessages || priorSkills.size === 0) {
-      matchedSkillNames = matchSkills({ prompt, cwd: effectiveCwd }).map(
-        (s) => s.name
-      );
-      effectivePrompt = injectSkills(prompt, effectiveCwd);
+      if (!prompt.includes("--- Matching skills (auto-injected from skills/) ---")) {
+        matchedSkillNames = matchSkills({ prompt, cwd: effectiveCwd }).map(
+          (s) => s.name
+        );
+        effectivePrompt = injectSkills(prompt, effectiveCwd);
+      }
     }
 
     logger.append({
@@ -344,6 +340,7 @@ export class AnserRunner {
     let status = "completed";
     let totalCompletionTokens = 0;
     let continuationsInjected = 0;
+    let consecutiveReasoningContinuations = 0;
     let emptyStreamRetries = 0;
     // M4: consecutive non-mutating bash calls (probe streak). Reset by any
     // mutating tool call; incremented by each bash/exec_command call; neutral
@@ -727,7 +724,14 @@ export class AnserRunner {
           tool_calls: turnResult.toolCalls.length > 0 ? turnResult.toolCalls : undefined,
         });
 
-        if (turnResult.content) {
+        if (
+          (turnResult.content && turnResult.content.trim() !== "") ||
+          (turnResult.toolCalls && turnResult.toolCalls.length > 0)
+        ) {
+          consecutiveReasoningContinuations = 0;
+        }
+
+        if (turnResult.content && turnResult.content.trim() !== "") {
           finalText = turnResult.content;
           if (onActivity) {
             onActivity(turnResult.content.trim().slice(-SUPERVISOR_PREVIEW_CHARS));
@@ -741,6 +745,32 @@ export class AnserRunner {
           if (turnResult.finishReason === "length") {
             const hadReasoning =
               turnResult.metrics?.hadReasoning ?? turnResult.hadReasoning ?? false;
+            const isReasoningCutoff =
+              Boolean(turnResult.metrics?.reasoningCeilingHit) ||
+              (hadReasoning && (!turnResult.content || turnResult.content.trim() === ""));
+
+            if (isReasoningCutoff) {
+              consecutiveReasoningContinuations++;
+              if (consecutiveReasoningContinuations > 1) {
+                status = "reasoning_budget_exhausted";
+                finalText = "ReasoningBudgetExhaustedError: The model reached the deliberation ceiling across consecutive continuation turns without taking action or concluding.";
+                break;
+              }
+              continuationsInjected++;
+              messages.push({ role: "user", content: REASONING_CONTINUATION_DIRECTIVE });
+              logger.append({
+                type: "continuation_injected",
+                content: REASONING_CONTINUATION_DIRECTIVE,
+                continuationNumber: continuationsInjected,
+                maxContinuations: MAX_CONTINUATION_TURNS,
+                reason: "reasoning_ceiling",
+                directive: "balanced_landing",
+                hadReasoning: true,
+              });
+              continue;
+            }
+
+            consecutiveReasoningContinuations = 0;
             if (continuationsInjected < MAX_CONTINUATION_TURNS) {
               continuationsInjected++;
               // Provide clean continuation without artificial stop-thinking directives
@@ -794,6 +824,7 @@ export class AnserRunner {
         }
 
         // Execute each requested tool call
+        consecutiveReasoningContinuations = 0;
         let droppedTruncatedCalls = 0;
         for (const tc of turnResult.toolCalls) {
           if (signal?.aborted) break;
