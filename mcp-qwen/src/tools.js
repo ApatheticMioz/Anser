@@ -15,6 +15,7 @@ import {
   REASONING_EFFORT_TIERS,
   TASK_RETENTION_MS,
   PROMPT_BUDGET_CHARS,
+  ALLOW_ENGINE_INTERRUPT,
 } from "./config.js";
 import {
   normalizeWorkspacePath,
@@ -665,6 +666,31 @@ export function registerTools(server) {
     async ({ action, force }) => {
       try {
       if (action === "status") {
+        if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && process.env.NODE_ENV === "test")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "stopped",
+                    endpoint: BASE_URL,
+                    max_model_len: null,
+                    context_window_nominal: MAX_LEN_HUGE,
+                    stack: "vLLM + DFlash2 + KVarN (Universal 245K)",
+                    engine: null,
+                    status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
+                    status_endpoint_owned_by_this_instance: statusServerOwned,
+                    wedge_counter: readWedgeCounter(),
+                    offline_protected: true,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
         const info = await serverInfo();
         const running = !!info;
         const wedge = running ? await engineWedgeState() : { wedged: false, stats: null };
@@ -727,6 +753,20 @@ export function registerTools(server) {
         };
       }
       if (action === "start") {
+        if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && process.env.NODE_ENV === "test")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  { status: "stopped", switched: false, note: "offline_protected: start refused without ALLOW_ENGINE_INTERRUPT=1" },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
         const res = await ensureServerRunning();
         return {
           content: [
@@ -742,6 +782,20 @@ export function registerTools(server) {
         };
       }
       if (action === "stop") {
+        if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && process.env.NODE_ENV === "test")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  { stopped: false, reason: "stop_refused_offline_protected", note: "offline_protected: stop refused without ALLOW_ENGINE_INTERRUPT=1" },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
         const activeTasks = listTasksFromDisk().filter((t) => !t.done && t.status === "executing");
         if (activeTasks.length > 0 && !force) {
           return {

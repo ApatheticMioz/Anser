@@ -13,6 +13,7 @@
  * engine, no subprocesses.
  */
 
+process.env.TEST_OFFLINE = "1";
 import { registerTools } from "../src/tools.js";
 
 let passed = 0;

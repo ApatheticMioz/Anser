@@ -16,6 +16,7 @@ import {
   ENGINE_BOOT_LOCK_TTL_MS,
   ENGINE_LOG_PATH,
   WEDGE_COUNTER_FILE,
+  ALLOW_ENGINE_INTERRUPT,
 } from "./config.js";
 import { getApiKeySync, runWslCommand } from "./wsl_bridge.js";
 import { streamProxyPath } from "./platform.js";
@@ -128,6 +129,9 @@ export function releaseExclusiveLock(lockPath) {
 }
 
 export async function serverInfo() {
+  if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && process.env.NODE_ENV === "test")) {
+    return null;
+  }
   try {
     const key = getApiKeySync();
     // FX2: vLLM does not require auth. When no key file is found,
@@ -158,6 +162,9 @@ export async function currentMode() {
 
 let canaryCache = { at: 0, result: null };
 export async function canaryProbe(force = false) {
+  if ((process.env.TEST_OFFLINE === "1" || !ALLOW_ENGINE_INTERRUPT) && wslRun === runWslCommand) {
+    return { ok: true, skipped: "engine_protected_offline", latency_ms: 0 };
+  }
   if (!force && canaryCache.result && Date.now() - canaryCache.at < 60_000) {
     return canaryCache.result;
   }
@@ -343,6 +350,9 @@ export async function engineWedgeState() {
 }
 
 export async function healWedgedEngine(statsAgeSec) {
+  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1")) {
+    return { healed: false, note: "heal refused: engine interruption disabled by default (ALLOW_ENGINE_INTERRUPT unset)" };
+  }
   // HEAL BACKSTOP: refuse to stop/reboot the engine while live work is in
   // flight (in-memory running/queued tasks, or a disk task whose owner pid is
   // alive with a recent heartbeat). A reboot here would kill the in-flight
@@ -583,6 +593,9 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
 }
 
 export async function ensureServerRunning() {
+  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1")) {
+    return { switched: false, status: "boot_refused_offline_protected" };
+  }
   const current = await currentMode();
   if (current) {
     const wedge = await engineWedgeState();
@@ -636,6 +649,13 @@ export async function ensureServerRunning() {
 }
 
 export async function stopServer() {
+  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1")) {
+    return {
+      stopped: false,
+      reason: "stop_refused_offline_protected",
+      note: "stopServer refused: engine interruption disabled by default (ALLOW_ENGINE_INTERRUPT unset)",
+    };
+  }
   await wslRun(`cd ~/qwen-serving && bash launchers/stop_server.sh 2>/dev/null || true`);
   let mode = null;
   for (let i = 0; i < 10; i++) {

@@ -566,6 +566,51 @@ async function testWiredIntoCleanOldTasks(deadPid) {
 }
 
 // ---------------------------------------------------------------------------
+// F. On-demand orphan reaping via readTaskFromDisk (closes the mid-session gap without waiting for periodic cadence).
+// ---------------------------------------------------------------------------
+async function testOnDemandReadReaped(deadPid) {
+  console.log("\n[F] on-demand orphan reaping: readTaskFromDisk immediately reaps dead+stale tasks");
+  const { readTaskFromDisk } = await import("../src/task_registry.js");
+  const sessionId = "s_ondemand";
+  writeSessionEvents(sessionId, [
+    { type: "session_start", timestamp: "2026-09-12T15:00:00.000Z" },
+    { type: "assistant_message", content: "in flight when power cut occurred" },
+  ]);
+  const task = makeTask({
+    id: "task_ondemand",
+    sessionId,
+    ownerPid: deadPid,
+    status: "running",
+    heartbeatAgeMs: STALE_AGE_MS,
+  });
+  writeTaskFile(task);
+
+  // Directly call readTaskFromDisk WITHOUT calling reapOrphans or waiting for cleanOldTasks!
+  const reaped = readTaskFromDisk("task_ondemand");
+  check(
+    "F0: readTaskFromDisk reaped the dead+stale task on-demand",
+    reaped && reaped.done === true && reaped.status === "failed",
+    `done=${reaped && reaped.done} status=${reaped && reaped.status}`
+  );
+  const onDisk = readTaskFile("task_ondemand");
+  check(
+    "F1: the task file on disk was updated to terminal failed immediately",
+    onDisk && onDisk.done === true && onDisk.status === "failed",
+    `done=${onDisk && onDisk.done} status=${onDisk && onDisk.status}`
+  );
+  const terminal = readEvents(sessionId).filter(
+    (e) => e.type === "session_end" || e.type === "session_error"
+  );
+  check(
+    "F2: session got orphaned terminal event via on-demand read",
+    terminal.length === 1 &&
+      terminal[0].type === "session_error" &&
+      terminal[0].reason === "orphaned",
+    `terminal=${terminal.length} reason=${terminal[0] && terminal[0].reason}`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
@@ -581,6 +626,7 @@ async function main() {
     await testFreshHeartbeatUntouched(deadPid);
     await testIdempotent(deadPid);
     await testWiredIntoCleanOldTasks(deadPid);
+    await testOnDemandReadReaped(deadPid);
   } finally {
     if (liveChild) {
       try {

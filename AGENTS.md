@@ -102,6 +102,7 @@ python <repo>/mcp-qwen/update_schemas.py
 | `STREAM_PROXY_PORT` | `18022` | Universal SSE streaming proxy (loopback only). |
 | `QWEN_REASONING_EFFORT` | `medium` | Fallback effort when a dispatch sends none; per-dispatch `reasoning_effort` overrides. Engine accepts {xhigh, medium, low}. `xhigh` is explicit-only. |
 | `TEST_OFFLINE` | *(unset)* | Set to `1` to force live suites to skip (GPU-less runs). |
+| `ALLOW_ENGINE_INTERRUPT` | `0` | Dangerous override: by default, test suites NEVER interrupt, probe (:18020), or reboot vLLM. Set to `1` only to explicitly test live GPU inference. |
 
 ---
 
@@ -203,6 +204,7 @@ mcp-qwen/
   list (those changes are not covered by rollback).
 - **NEVER** weaken, skip, or delete a failing test to "unblock" the build.
   Fix the code, or file the defect — never the canary.
+- **NEVER** interrupt the running vLLM engine, fire completion probes into `:18020`, or issue stop/reboot commands during testing unless `ALLOW_ENGINE_INTERRUPT=1` is explicitly set (Rule 0 Zero-Interruption Default).
 - **NEVER** commit secrets, credentials, or machine-identity paths
   (see `SECURITY.md`).
 
@@ -210,30 +212,29 @@ mcp-qwen/
 
 ## 5. Verification Procedures
 
-### 5.1 The test gate (the single source of truth)
+### 5.1 The test gates
 There is **no root `package.json`** — always use `--prefix mcp-qwen`.
 
 ```bash
-# Fast offline gate - 54 suites, no GPU needed. Run this FIRST.
-npm run test --prefix mcp-qwen
+# Fast canary gate - 8 critical suites (~4s, offline, zero engine interruption). Run during active development.
+npm test --prefix mcp-qwen
 
-# Full gate - 59 suites (superset of `test`). The authoritative pass/fail.
+# Full authoritative gate - 59 suites (single-pass complete verification). Run before PR / milestone commit.
 npm run test:all --prefix mcp-qwen
 
-# GPU-less / CI: force the 4 live suites to skip honestly.
+# GPU-less / CI: live suites skip honestly by default when ALLOW_ENGINE_INTERRUPT is unset or TEST_OFFLINE=1.
 TEST_OFFLINE=1 npm run test:all --prefix mcp-qwen
 ```
 
-**Suite truth (verified):**
-| Command | Suites | Notes |
-|---|---|---|
-| `npm run test` | **54** | Fast fail-offline gate (54 suites). |
-| `npm run test:all` | **59** | Full superset; the CI pass/fail signal (55 offline + 4 live). |
-| On-disk `.test.js` | **59** | Union of the two. |
+**Gate truth (verified):**
+| Command | Suites | Runtime | Purpose |
+|---|---|---|---|
+| `npm test` | **8** | ~4 s | Instant canary gate (security, AST canary, syntax gates, edit_file guard, search_code guard, schema parity, platform, protocol sync). |
+| `npm run test:all` | **59** | ~48 s | Full authoritative offline & integration gate. Single-pass run (authoritative CI signal). |
+| On-disk `.test.js` | **59** | — | Total test suites in repository. |
 
-**Live suites** (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) need a
-running vLLM on `:18020` + a 24 GB GPU. They **skip honestly** when
-`TEST_OFFLINE=1` or the engine is offline — a skip is a pass, not a failure.
+**Zero Engine Interruption Invariant:**
+By default, tests NEVER interrupt, probe, or reboot a running vLLM instance (`ALLOW_ENGINE_INTERRUPT=0`). Live suites (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) **skip honestly** by default so running background Anser workloads on single-sequence hardware are protected. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
 
 ### 5.2 Canary-first staging (do not run the full chain first)
 1. Identify or write **one** targeted test that exercises exactly the code you

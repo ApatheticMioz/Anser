@@ -889,127 +889,239 @@ export class SandboxFsService {
    * it explicitly skips `.env` / `.env.*` files to prevent secret ingestion.
    *
    * F-12: `max_results` caps the TOTAL number of matches returned,
-   * consistently across both the git-grep and fallback paths.
+   * consistently across both the git-grep and  /**
+   * Formats and truncates a single grep match line to prevent token explosion from
+   * giant embedded assets, minified bundles, or inline Base64 data (F-14).
+   *
+   * Query-centered windowing: if the match query occurs late in a long line, centers
+   * a preview window around the match so the matched token is not truncated away.
+   *
+   * @param {string} rawLine - e.g. "path/to/file.js:42:code content"
+   * @param {string} query - The query string to anchor the preview window
+   * @param {number} [maxLineChars=300] - Maximum line character cap
+   * @returns {string} Truncated, bounded line preview
    */
-  async searchCode({ query, dirPath = ".", max_results = 50 }) {
-    const resolved = this.resolvePath(dirPath);
+  _formatMatchLine(rawLine, query, maxLineChars = 300) {
+    if (!rawLine || rawLine.length <= maxLineChars) {
+      return rawLine;
+    }
+
+    const matchPrefix = rawLine.match(/^([^:\r\n]+:\d+:)(.*)$/s);
+    if (!matchPrefix) {
+      const qIdx = rawLine.indexOf(query);
+      if (qIdx === -1 || qIdx <= 120) {
+        return `${rawLine.slice(0, maxLineChars).trim()} ... [truncated line: ${rawLine.length} chars]`;
+      }
+      const start = Math.max(0, qIdx - 80);
+      const end = Math.min(rawLine.length, qIdx + query.length + 120);
+      return `... ${rawLine.slice(start, end).trim()} ... [truncated line: ${rawLine.length} chars, match at col ${qIdx + 1}]`;
+    }
+
+    const prefix = matchPrefix[1];
+    const content = matchPrefix[2];
+    if (content.length <= maxLineChars) {
+      return rawLine;
+    }
+
+    const qIdx = content.indexOf(query);
+    if (qIdx === -1 || qIdx <= 120) {
+      const preview = content.slice(0, maxLineChars);
+      return `${prefix} ${preview.trim()} ... [truncated line: ${content.length} chars]`;
+    }
+
+    const start = Math.max(0, qIdx - 80);
+    const end = Math.min(content.length, qIdx + query.length + 120);
+    const preview = content.slice(start, end);
+    return `${prefix} ... ${preview.trim()} ... [truncated line: ${content.length} chars, match at col ${qIdx + 1}]`;
+  }
+
+  /**
+   * Fast indexed search using git grep (respecting .gitignore) or a safe
+   * fallback file search.
+   *
+   * F-1: the query is matched as a LITERAL string (`-F` / `--fixed-strings`),
+   * aligning the implementation with the documented "Literal string to
+   * search for" contract.
+   *
+   * F-2: a FATAL `git grep` error (any non-zero exit code other than 1)
+   * inside a git repository fails fast with a `GitGrepError` instead of
+   * falling through to the manual walk. Exit code 1 ("no matches") is a
+   * valid empty result. In a non-git directory the manual walk is used, but
+   * it explicitly skips `.env` / `.env.*` files to prevent secret ingestion.
+   *
+   * F-12: `max_results` caps the TOTAL number of matches returned,
+   * consistently across both the git-grep and fallback paths.
+   *
+   * F-14: Line length and aggregate payload are strictly bounded:
+   *  - Each match line exceeding 300 chars is query-centered and truncated.
+   *  - Total match payload is capped at 32 KB across all matches.
+   *  - Both `path` and `dirPath` are accepted and passed as git pathspecs.
+   */
+  async searchCode({ query, path: targetPath, dirPath, max_results = 50 }) {
+    const rawTarget = targetPath || dirPath || ".";
+    const resolved = this.resolvePath(rawTarget);
     const cap = Math.max(0, max_results | 0);
+    const MAX_TOTAL_BYTES = 32 * 1024; // 32KB aggregate payload cap
+
+    let isFile = false;
     try {
-      // Use git grep first (inherently avoids .venv and node_modules, includes
-      // untracked files). `-F` makes the query a literal string (F-1). The
-      // per-file `--max-count` is intentionally NOT used: it caps matches per
-      // file, not in total, which made `count` exceed `max_results` (F-12).
-      // The total cap is applied to the combined output below.
-      const { stdout } = await execFileAsync("git", ["grep", "-n", "-I", "-F", "--untracked", "-e", query], {
-        cwd: resolved,
-        timeout: 10_000,
-      });
-      const lines = stdout.trim().split("\n").filter(Boolean);
-      const matches = lines.slice(0, cap);
-      return {
-        query,
-        count: matches.length,
-        matches,
-      };
-    } catch (err) {
-      // git grep exit code 1 means "no matches found", NOT an execution error.
-      if (err && err.code === 1) {
+      isFile = fs.existsSync(resolved) && fs.statSync(resolved).isFile();
+    } catch {}
+
+    const searchDir = isFile ? path.dirname(resolved) : resolved;
+    let inRepo = false;
+    try {
+      inRepo = await this._isInsideGitRepo(searchDir);
+    } catch {
+      inRepo = false;
+    }
+
+    if (inRepo) {
+      try {
+        const gitArgs = ["grep", "-n", "-I", "-F", "--untracked", "-e", query];
+        const relSpec = path.relative(this.root, resolved).replace(/\\/g, "/");
+        if (relSpec && relSpec !== "." && relSpec !== "") {
+          gitArgs.push("--", relSpec);
+        }
+
+        const { stdout } = await execFileAsync("git", gitArgs, {
+          cwd: this.root,
+          timeout: 10_000,
+        });
+        const rawLines = stdout.trim().split("\n").filter(Boolean);
+        const matches = [];
+        let totalBytes = 0;
+        let hitPayloadCap = false;
+
+        for (const rawLine of rawLines) {
+          if (matches.length >= cap) break;
+          const formatted = this._formatMatchLine(rawLine, query, 300);
+          const lineBytes = Buffer.byteLength(formatted, "utf8");
+          if (totalBytes + lineBytes > MAX_TOTAL_BYTES) {
+            matches.push(`... [Remaining matches truncated: reached 32KB result payload limit]`);
+            hitPayloadCap = true;
+            break;
+          }
+          matches.push(formatted);
+          totalBytes += lineBytes;
+        }
+
         return {
           query,
-          count: 0,
-          matches: [],
+          count: matches.length,
+          matches,
+          truncated: hitPayloadCap || rawLines.length > matches.length,
         };
-      }
+      } catch (err) {
+        // git grep exit code 1 means "no matches found", NOT an execution error.
+        if (err && err.code === 1) {
+          return {
+            query,
+            count: 0,
+            matches: [],
+          };
+        }
 
-      // F-2: a FATAL git error (e.g. 128 on a corrupted repository) must fail
-      // fast when we are inside a git repository — do NOT fall through to the
-      // manual walk, which would read gitignored files (e.g. `.env`) and leak
-      // secrets. Only a non-git directory is a legitimate fallback scenario.
-      const inRepo = await this._isInsideGitRepo(resolved);
-      if (inRepo) {
+        // Fatal git error in repo
         const stderr = err && err.stderr ? String(err.stderr).trim() : "";
         throw new GitGrepError(
           `GitGrepError: git grep failed with exit code ${err && err.code} in a git repository: ${stderr || err.message}`,
           { code: err && err.code, stderr }
         );
       }
+    }
 
-      // Legitimate fallback: not a git repository. Search files avoiding
-      // ignored directories AND `.env` / `.env.*` files (F-2 secret-leak
-      // prevention). The total match count is capped at `max_results` (F-12).
-      //
-      // M2 / 2026-09-13 "poison pill" mitigation: binary files are SKIPPED
-      // honestly (reported in `skipped` as "skipped-binary") rather than read
-      // as UTF-8 and ingested as mojibake. Detection uses the extension
-      // denylist fast-path plus a magic-byte check (file-type) on the first
-      // KB of the RAW bytes (reading as a Buffer, not a UTF-8 string, so the
-      // magic bytes are not mangled). This does NOT error the whole search.
-      const matches = [];
-      const skipped = [];
-      const walkSearch = async (cur) => {
-        if (matches.length >= cap) return;
-        let files;
-        try {
+    // Legitimate fallback: not a git repository. Search files avoiding
+    // ignored directories AND `.env` / `.env.*` files (F-2 secret-leak
+    // prevention). The total match count is capped at `max_results` (F-12).
+    //
+    // M2 / 2026-09-13 "poison pill" mitigation: binary files are SKIPPED
+    // honestly (reported in `skipped` as "skipped-binary") rather than read
+    // as UTF-8 and ingested as mojibake.
+    const matches = [];
+    const skipped = [];
+    let totalBytes = 0;
+    let hitPayloadCap = false;
+
+    const walkSearch = async (cur) => {
+      if (matches.length >= cap || hitPayloadCap) return;
+      let files;
+      try {
+        const stat = fs.statSync(cur);
+        if (stat.isFile()) {
+          files = [{ name: path.basename(cur), isDirectory: () => false, isFile: () => true }];
+          cur = path.dirname(cur);
+        } else {
           files = fs.readdirSync(cur, { withFileTypes: true });
-        } catch {
-          return;
         }
-        for (const f of files) {
-          if (matches.length >= cap) break;
-          if (this.ignoredDirs.has(f.name)) continue;
-          if (isEnvFile(f.name)) continue; // F-2: never ingest .env / .env.*
-          const full = path.join(cur, f.name);
-          if (f.isDirectory()) {
-            await walkSearch(full);
-          } else if (f.isFile()) {
-            // P4i: use statSync for the size check, NOT the dirent's f.size.
-            let size = f.size;
-            if (size === undefined) {
-              try {
-                size = fs.statSync(full).size;
-              } catch {
-                continue;
-              }
+      } catch {
+        return;
+      }
+      for (const f of files) {
+        if (matches.length >= cap || hitPayloadCap) break;
+        if (this.ignoredDirs.has(f.name)) continue;
+        if (isEnvFile(f.name)) continue; // F-2: never ingest .env / .env.*
+        const full = path.join(cur, f.name);
+        if (f.isDirectory()) {
+          await walkSearch(full);
+        } else if (f.isFile()) {
+          let size = f.size;
+          if (size === undefined) {
+            try {
+              size = fs.statSync(full).size;
+            } catch {
+              continue;
             }
-            if (size < 500_000) {
-              // M2: extension denylist fast-path (cheap, synchronous).
-              if (isBinaryExtension(f.name)) {
-                skipped.push(`${path.relative(resolved, full)} (skipped-binary: extension '${f.name}')`);
-                continue;
-              }
-              // Read the file ONCE as a raw Buffer so the magic-byte check
-              // sees the true bytes (a UTF-8 string read would mangle binary
-              // magic bytes into U+FFFD and defeat detection).
-              let buf;
-              try {
-                buf = fs.readFileSync(full);
-              } catch {
-                continue;
-              }
-              // M2: magic-byte check on the first KB of the raw bytes
-              // (catches extensionless binaries, e.g. a file starting %PDF).
-              const head = buf.subarray(0, reasonableDetectionSizeInBytes);
-              const detected = await fileTypeFromBuffer(head);
-              if (detected) {
-                skipped.push(`${path.relative(resolved, full)} (skipped-binary: ${detected.mime} .${detected.ext})`);
-                continue;
-              }
-              const text = buf.toString("utf8");
-              if (text.includes(query)) {
-                const lines = text.split("\n");
-                lines.forEach((l, idx) => {
-                  if (l.includes(query) && matches.length < cap) {
-                    matches.push(`${path.relative(resolved, full)}:${idx + 1}: ${l.trim().slice(0, 200)}`);
+          }
+          if (size < 500_000) {
+            if (isBinaryExtension(f.name)) {
+              skipped.push(`${path.relative(this.root, full).replace(/\\/g, "/")} (skipped-binary: extension '${f.name}')`);
+              continue;
+            }
+            let buf;
+            try {
+              buf = fs.readFileSync(full);
+            } catch {
+              continue;
+            }
+            const head = buf.subarray(0, reasonableDetectionSizeInBytes);
+            const detected = await fileTypeFromBuffer(head);
+            if (detected) {
+              skipped.push(`${path.relative(this.root, full).replace(/\\/g, "/")} (skipped-binary: ${detected.mime} .${detected.ext})`);
+              continue;
+            }
+            const text = buf.toString("utf8");
+            if (text.includes(query)) {
+              const lines = text.split("\n");
+              for (let idx = 0; idx < lines.length; idx++) {
+                const l = lines[idx];
+                if (l.includes(query)) {
+                  if (matches.length >= cap) break;
+                  const relPath = path.relative(this.root, full).replace(/\\/g, "/");
+                  const formatted = this._formatMatchLine(`${relPath}:${idx + 1}:${l}`, query, 300);
+                  const lineBytes = Buffer.byteLength(formatted, "utf8");
+                  if (totalBytes + lineBytes > MAX_TOTAL_BYTES) {
+                    matches.push(`... [Remaining matches truncated: reached 32KB result payload limit]`);
+                    hitPayloadCap = true;
+                    break;
                   }
-                });
+                  matches.push(formatted);
+                  totalBytes += lineBytes;
+                }
               }
             }
           }
         }
-      };
-      await walkSearch(resolved);
-      return { query, count: matches.length, matches, skipped };
-    }
+      }
+    };
+    await walkSearch(resolved);
+    return {
+      query,
+      count: matches.length,
+      matches,
+      skipped,
+      truncated: hitPayloadCap,
+    };
   }
 }
 
@@ -1100,7 +1212,8 @@ export function sandboxFsPlugin(ctx, options = {}) {
       type: "object",
       properties: {
         query: { type: "string", description: "Literal string to search for" },
-        path: { type: "string", description: "Root search directory", default: "." },
+        path: { type: "string", description: "Root search directory or target file path", default: "." },
+        dirPath: { type: "string", description: "Alias for path", default: "." },
       },
       required: ["query"],
     },

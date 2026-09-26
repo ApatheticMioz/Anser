@@ -13,7 +13,7 @@
  * is the correct "engine alive" signal: if vLLM is down, the proxy cannot
  * serve either and the provider's fallback also fails.
  */
-import { VLLM_PORT } from "../../src/config.js";
+import { VLLM_PORT, ALLOW_ENGINE_INTERRUPT } from "../../src/config.js";
 
 /**
  * Cheap availability probe. Returns true only when the engine answers
@@ -24,7 +24,7 @@ import { VLLM_PORT } from "../../src/config.js";
  * @returns {Promise<boolean>}
  */
 export async function isEngineAvailable({ port = VLLM_PORT, timeoutMs = 3000 } = {}) {
-  if (process.env.TEST_OFFLINE) {
+  if (process.env.TEST_OFFLINE || !ALLOW_ENGINE_INTERRUPT) {
     return false;
   }
   try {
@@ -74,9 +74,9 @@ export async function isEngineIdle({ port = VLLM_PORT, timeoutMs = 3000 } = {}) 
  * @returns {Promise<boolean>} true when the engine is available and idle.
  */
 export async function requireEngineOrSkip(label = "") {
-  if (process.env.TEST_OFFLINE) {
+  if (process.env.TEST_OFFLINE || !ALLOW_ENGINE_INTERRUPT) {
     console.log(
-      `[SKIP] TEST_OFFLINE set${label ? ` (${label})` : ""} - skipping live-engine test`
+      `[SKIP] Engine interruptions disabled by default (ALLOW_ENGINE_INTERRUPT unset)${label ? ` (${label})` : ""} - skipping live-engine test`
     );
     process.exit(0);
   }

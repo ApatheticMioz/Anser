@@ -147,9 +147,10 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 
 ## 5. Verification & Version Control Protocol
 
-1. **Incremental Milestone Verification**:
-   - Verify changes after each component batch with targeted typechecks or test runs.
-   - Run the full project test suite and build validation before concluding the milestone.
+1. **Incremental Milestone Verification & Test Gates**:
+   - Verify changes after each component batch using the **Fast Canary Gate** (`npm test --prefix mcp-qwen`, ~4s).
+   - **Zero Engine Interruption Invariant**: Testing runs offline by default (`ALLOW_ENGINE_INTERRUPT=0`). Automated test suites and offline checks must NEVER probe port 18020, fire canary completions, or reboot the vLLM server while tasks are in flight. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
+   - Run the full authoritative test suite (`npm run test:all --prefix mcp-qwen`, 59 suites) and build validation before concluding the milestone.
 2. **Mandatory Audit Manifest & Reconciliation Gate Invariant**:
    - The Lead Architect maintains a structured audit manifest (`AUDIT_MANIFEST.md` or JSON) in cloud context, populating persistent tracking IDs (`F-1`, `F-2`, ...) as findings and regressions are uncovered across Qwen's systematic exploration slices.
    - **Zero-Tolerance Closure Gate**: Before declaring milestone completion or executing git commits, the Lead Architect must conduct an explicit reconciliation pass against the manifest. 100% of findings must be verified and cataloged as `[RESOLVED: commit_sha / verified_slice]`, `[DEFERRED: tracked_issue_id]`, or `[WONTFIX: technical_rationale]`. Committing or closing with forgotten or unaddressed findings trips an immediate milestone failure.

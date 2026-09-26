@@ -260,3 +260,101 @@ test("F-12: git path and fallback path return consistent counts for identical co
   );
   assert.equal(gitRes.count, 3, "both paths should be capped at 3");
 });
+
+// ---------------------------------------------------------------------------
+// (e) F-14 - Adversarial: giant lines, query centering, path scoping & payload bounds
+// ---------------------------------------------------------------------------
+
+test("F-14 (adversarial): giant line (>100,000 chars of base64 data) is truncated to <= 350 chars with preview on git path", async () => {
+  const dir = makeTmpDir("giant_git_");
+  // 150KB base64 line matching the exact canvas/font explosion failure mode
+  const base64Junk = "A".repeat(150_000);
+  const fileContent = `line1: normal\nline2: @font-face{src:url(data:font/woff2;base64,${base64Junk}poc${base64Junk})}\nline3: normal\n`;
+  fs.writeFileSync(path.join(dir, "canvas.html"), fileContent, "utf8");
+  gitInit(dir);
+  gitCommitAll(dir);
+
+  const svc = new SandboxFsService({ root: dir });
+  const res = await svc.searchCode({ query: "poc", path: "." });
+
+  assert.equal(res.count, 1, `expected 1 match, got ${res.count}`);
+  const match = res.matches[0];
+  assert.ok(match.length <= 350, `match line must be <= 350 chars, got ${match.length}`);
+  assert.ok(match.includes("... [truncated line:"), "must include truncation marker");
+  assert.ok(match.includes("poc"), "must include the matched query in preview");
+});
+
+test("F-14 (adversarial): query positioned at column 75,000 in a 100,000 char line is centered in preview window, never truncated away", async () => {
+  const dir = makeTmpDir("center_git_");
+  const prefix = "X".repeat(75_000);
+  const suffix = "Y".repeat(25_000);
+  const deepLine = `${prefix}SPECIAL_TOKEN${suffix}\n`;
+  fs.writeFileSync(path.join(dir, "deep.txt"), deepLine, "utf8");
+  gitInit(dir);
+  gitCommitAll(dir);
+
+  const svc = new SandboxFsService({ root: dir });
+  const res = await svc.searchCode({ query: "SPECIAL_TOKEN", path: "." });
+
+  assert.equal(res.count, 1);
+  const match = res.matches[0];
+  assert.ok(match.length <= 350, `match line must be <= 350 chars, got ${match.length}`);
+  assert.ok(match.includes("SPECIAL_TOKEN"), "query must be visible in centered preview");
+  assert.ok(match.includes("match at col 75001"), `must indicate column coordinate, got: ${match}`);
+});
+
+test("F-14 (adversarial): targeting specific file via path parameter bounds git grep to only that file", async () => {
+  const dir = makeTmpDir("path_scope_");
+  fs.writeFileSync(path.join(dir, "target.txt"), "needle in target\n", "utf8");
+  fs.writeFileSync(path.join(dir, "other.txt"), "needle in other\n", "utf8");
+  gitInit(dir);
+  gitCommitAll(dir);
+
+  const svc = new SandboxFsService({ root: dir });
+  const resTarget = await svc.searchCode({ query: "needle", path: "target.txt" });
+
+  assert.equal(resTarget.count, 1, `expected 1 match in target.txt, got ${resTarget.count}`);
+  assert.ok(resTarget.matches[0].includes("target.txt"), "must match target.txt");
+  assert.ok(!resTarget.matches.some((m) => m.includes("other.txt")), "must not match other.txt");
+
+  // Verify path alias dirPath also works
+  const resAlias = await svc.searchCode({ query: "needle", dirPath: "target.txt" });
+  assert.equal(resAlias.count, 1);
+  assert.ok(resAlias.matches[0].includes("target.txt"));
+});
+
+test("F-14 (adversarial): giant line truncation on fallback walk path", async () => {
+  const dir = makeTmpDir("giant_fb_");
+  // Non-git directory -> fallback walk
+  const base64Junk = "B".repeat(50_000);
+  fs.writeFileSync(path.join(dir, "huge.txt"), `prefix ${base64Junk} FALLBACK_NEEDLE ${base64Junk}\n`, "utf8");
+
+  const svc = new SandboxFsService({ root: dir });
+  const res = await svc.searchCode({ query: "FALLBACK_NEEDLE", path: "." });
+
+  assert.equal(res.count, 1);
+  const match = res.matches[0];
+  assert.ok(match.length <= 350, `fallback match line must be <= 350 chars, got ${match.length}`);
+  assert.ok(match.includes("FALLBACK_NEEDLE"), "query must be visible in preview");
+  assert.ok(match.includes("[truncated line:"), "must include truncation marker");
+});
+
+test("F-14 (adversarial): aggregate 32KB payload limit caps massive multi-match result sets", async () => {
+  const dir = makeTmpDir("payload_cap_");
+  // 300 lines of 250 chars = 75,000 bytes > 32KB
+  const lines = Array.from({ length: 300 }, (_, i) => `line ${i}: ` + "Z".repeat(240) + " MULTI_TOKEN");
+  fs.writeFileSync(path.join(dir, "massive.txt"), lines.join("\n") + "\n", "utf8");
+  gitInit(dir);
+  gitCommitAll(dir);
+
+  const svc = new SandboxFsService({ root: dir });
+  const res = await svc.searchCode({ query: "MULTI_TOKEN", path: ".", max_results: 300 });
+
+  assert.ok(res.truncated === true, "must report truncated: true when payload cap reached");
+  assert.ok(
+    res.matches.some((m) => m.includes("reached 32KB result payload limit")),
+    "must append aggregate payload limit warning"
+  );
+  const totalBytes = res.matches.reduce((sum, m) => sum + Buffer.byteLength(m, "utf8"), 0);
+  assert.ok(totalBytes <= 35 * 1024, `total bytes must be bounded under ~35KB, got ${totalBytes}`);
+});

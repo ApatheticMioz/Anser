@@ -31,6 +31,7 @@ process.env.QWEN_STATE_DIR = TMP_STATE;
 process.env.HOME = TMP_STATE;
 process.env.QWEN_WSL_HOME = TMP_STATE;
 process.env.QWEN_WIN_HOME = TMP_STATE;
+process.env.TEST_OFFLINE = "1";
 
 let TEST_PORT = 0;
 

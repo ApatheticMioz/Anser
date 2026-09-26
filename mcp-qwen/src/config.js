@@ -156,7 +156,7 @@ export const TASK_RETENTION_MS = (() => {
 // inter-heartbeat gap (the slot heartbeat is 15s) yet short enough to clear a
 // mid-session death within the retention cadence. Overridable via
 // QWEN_ORPHAN_REAP_STALE_MS for tests / operators.
-export const DEFAULT_ORPHAN_REAP_STALE_MS = 3_600_000; // 1 hour
+export const DEFAULT_ORPHAN_REAP_STALE_MS = 20_000; // 20s (clears dead-PID crashes fast while honoring the 15s heartbeat window)
 export const ORPHAN_REAP_STALE_MS = (() => {
   const parsed = parseInt(process.env.QWEN_ORPHAN_REAP_STALE_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ORPHAN_REAP_STALE_MS;
@@ -288,6 +288,13 @@ export const ENGINE_BOOT_LOCK_TTL_MS = BOOT_TIMEOUT_MS;
 export const ENGINE_LOG_PATH = process.env.QWEN_LOG_PATH || "/tmp/mcp_launch_huge.log";
 export const WEDGE_COUNTER_FILE = path.join(TASK_DIR, ".wedge_counter.json");
 export const PROXY_MAX_BODY_BYTES = 50 * 1024 * 1024; // 50MB
+
+// DANGEROUS OVERRIDE FLAG: by default, any test execution, offline verification,
+// or non-production environment is STRICTLY FORBIDDEN from interrupting, probing,
+// killing, rebooting, or issuing completion requests to the live vLLM engine.
+// Live hardware operations are blocked by default unless ALLOW_ENGINE_INTERRUPT is
+// explicitly set to "1".
+export const ALLOW_ENGINE_INTERRUPT = process.env.ALLOW_ENGINE_INTERRUPT === "1";
 
 // Execution engine: the native Anser runner is hard-wired; there is no engine selection.
 

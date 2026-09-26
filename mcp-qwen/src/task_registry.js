@@ -75,7 +75,7 @@ export function isTaskOrphaned(diskTask) {
   // LIVE-OWNER & FRESH-HEARTBEAT INVARIANT:
   // A task with a fresh heartbeat (within the staleness window) is NEVER an orphan!
   // Active workers make tool calls and write heartbeats to disk.
-  const staleThreshold = ORPHAN_REAP_STALE_MS ? Math.min(ORPHAN_REAP_STALE_MS, 300_000) : 300_000;
+  const staleThreshold = ORPHAN_REAP_STALE_MS;
   if (lastActive && now - lastActive <= staleThreshold) {
     return false;
   }
@@ -688,6 +688,9 @@ export const statusHttpServer = http.createServer(async (req, res) => {
     }
     const taskId = waitMatch[1];
     let task = tasks.get(taskId);
+    if (task && !task.done && isTaskOrphaned(task)) {
+      task = markTaskOrphanedOnDisk(task);
+    }
     let diskTask = null;
     if (!task) {
       diskTask = readTaskFromDisk(taskId);
@@ -887,7 +890,13 @@ export const statusHttpServer = http.createServer(async (req, res) => {
   const getMatch = pathname.match(/^\/task\/([^/]+)$/);
   if (req.method === "GET" && getMatch) {
     const taskId = getMatch[1];
-    let task = tasks.get(taskId) || readTaskFromDisk(taskId);
+    let task = tasks.get(taskId);
+    if (task && !task.done && isTaskOrphaned(task)) {
+      task = markTaskOrphanedOnDisk(task);
+    }
+    if (!task) {
+      task = readTaskFromDisk(taskId);
+    }
     if (task && task.corrupted) {
       // D11 (FX6): a corrupt task file is an explicit corruption signal,
       // never conflated with a clean not-found. Surface it as a 500 with the
