@@ -174,7 +174,7 @@ mcp-qwen/
 - **ALWAYS** surface the unadulterated error (Rule 8: fail-fast, zero-masking).
 - **ALWAYS** keep `CLAUDE.md` and `GEMINI.md` shared invariants
   byte-identical (locked by `tests/protocol_sync.test.js`).
-- **ALWAYS** use the sanctioned workspace scratchpad (`<workspace>/.scratch/` or repository-local helper scripts) for intermediate data extractions, log slicing, and multi-item audit ledgers rather than attempting to hold large matrices in reasoning context.
+- **ALWAYS** use the sanctioned workspace scratchpad (`<workspace>/.scratch/` or repository-local helper scripts) for empirical reproduction scripts (`repro.py`, `test_case.js`), intermediate data extractions, log slicing, and multi-item audit ledgers rather than attempting to hold large matrices in reasoning context.
 - **ALWAYS** treat the Coworker as an interactive pair-programmer: accept intermediate checkpoint findings and respond to targeted inquiries when high-entropy or ambiguous choices arise.
 
 ### 4.2 ASK FIRST
@@ -196,7 +196,7 @@ mcp-qwen/
 - **NEVER** route vision/image tasks to the local Qwen (`--language-model-only`).
 - **NEVER** silently catch, suppress, or mask errors or upstream HTTP status
   codes (Rule 8).
-- **NEVER** impose "write no files" restrictions on multi-step audits or log analyses (forces reasoning context explosion and ceiling deaths). Temporary analysis artifacts must reside in the workspace scratchpad (`.scratch/`).
+- **NEVER** impose "write no files" or "no mutation" restrictions on scratchpad usage during exploration or debugging (forces reasoning context explosion, ceiling deaths, and runaway inline-bash probe streaks). The coworker has full, unrestricted write freedom in the workspace scratchpad (`.scratch/`) to empirically isolate bugs and verify hypotheses before touching production code.
 - **NEVER** hand-edit line endings or "fix" CRLF by re-typing a file — use
   `edit_file` / `apply_patch`, which normalize deterministically.
 - **NEVER** edit a file that is not in the active Evo candidate's snapshot
@@ -217,7 +217,7 @@ There is **no root `package.json`** — always use `--prefix mcp-qwen`.
 # Fast offline gate - 54 suites, no GPU needed. Run this FIRST.
 npm run test --prefix mcp-qwen
 
-# Full gate - 58 suites (superset of `test`). The authoritative pass/fail.
+# Full gate - 59 suites (superset of `test`). The authoritative pass/fail.
 npm run test:all --prefix mcp-qwen
 
 # GPU-less / CI: force the 4 live suites to skip honestly.
@@ -227,9 +227,9 @@ TEST_OFFLINE=1 npm run test:all --prefix mcp-qwen
 **Suite truth (verified):**
 | Command | Suites | Notes |
 |---|---|---|
-| `npm run test` | **54** | Fast fail-offline gate (54 offline suites). |
-| `npm run test:all` | **58** | Full superset; the CI pass/fail signal (54 offline + 4 live). |
-| On-disk `.test.js` | **58** | Union of the two. |
+| `npm run test` | **54** | Fast fail-offline gate (54 suites). |
+| `npm run test:all` | **59** | Full superset; the CI pass/fail signal (55 offline + 4 live). |
+| On-disk `.test.js` | **59** | Union of the two. |
 
 **Live suites** (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) need a
 running vLLM on `:18020` + a 24 GB GPU. They **skip honestly** when

@@ -289,7 +289,7 @@ export class LineageDag {
    * @param {object} [candidate.metrics]
    * @returns {object} The created candidate node
    */
-  addCandidate({ id, parentId, hypothesis, filesModified = [], metrics = {} }) {
+  addCandidate({ id, parentId, hypothesis, filesModified = [], skillsModified = [], metrics = {} }) {
     const candidateId = id || `cand_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const effectiveParent = parentId || this.currentHeadId || this.rootId;
 
@@ -298,6 +298,7 @@ export class LineageDag {
       parentId: effectiveParent,
       hypothesis,
       filesModified,
+      skillsModified,
       metrics: {
         fitness: null,
         status: "pending",

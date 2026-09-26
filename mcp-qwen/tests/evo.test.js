@@ -40,7 +40,7 @@ const { ClosedLoopEvaluator } = await import("../src/harness/evo/evaluator.js");
 const { EvoWatchdog } = await import("../src/harness/evo/watchdog.js");
 const { EvoOperator } = await import("../src/harness/evo/evo_operator.js");
 const { AnserRunner } = await import("../src/harness/runner.js");
-const { isEngineAvailable } = await import("./helpers/engine_probe.js");
+const { isEngineAvailable, isEngineIdle } = await import("./helpers/engine_probe.js");
 
 const TEST_DIR = path.resolve(process.cwd(), ".test_evo_tmp");
 
@@ -244,10 +244,10 @@ async function runTests() {
   // -------------------------------------------------------------
   console.log("[Test 6] Live vLLM Streaming & Direct Microkernel Execution...");
   {
-    const vllmOnline = !process.env.TEST_OFFLINE && (await isEngineAvailable());
+    const vllmOnline = !process.env.TEST_OFFLINE && (await isEngineAvailable()) && (await isEngineIdle());
 
     if (!vllmOnline) {
-      console.log("  -> [SKIP] vLLM endpoint offline or TEST_OFFLINE set (skipping live inference test)");
+      console.log("  -> [SKIP] vLLM endpoint offline, busy, or TEST_OFFLINE set (skipping live inference test)");
     } else {
       const liveDir = path.resolve(process.cwd(), ".test_live_tmp");
       fs.mkdirSync(liveDir, { recursive: true });

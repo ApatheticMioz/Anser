@@ -38,12 +38,40 @@ export async function isEngineAvailable({ port = VLLM_PORT, timeoutMs = 3000 } =
 }
 
 /**
- * Honest skip guard for live-engine tests. If the engine is down, print a
- * visible `[SKIP] engine down` line and exit 0 so the suite stays green
- * offline. If the engine is up, return true and let the caller run for real.
+ * Checks whether the engine has any actively running requests.
+ * On MAX_SEQS=1 hardware, live test suites cannot dispatch without queuing
+ * behind an active workload and timing out.
+ *
+ * @param {{port?: number, timeoutMs?: number}} [opts]
+ * @returns {Promise<boolean>}
+ */
+export async function isEngineIdle({ port = VLLM_PORT, timeoutMs = 3000 } = {}) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/metrics`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return true;
+    const text = await res.text();
+    for (const line of text.split("\n")) {
+      if (line.startsWith("vllm:num_requests_running")) {
+        const val = Number(line.slice(line.lastIndexOf(" ") + 1));
+        if (Number.isFinite(val) && val > 0) return false;
+      }
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Honest skip guard for live-engine tests. If the engine is down, or busy
+ * running an active generation on single-sequence hardware, print a visible
+ * `[SKIP]` line and exit 0 so the suite stays green. If the engine is up and
+ * idle, return true and let the caller run for real.
  *
  * @param {string} [label] Optional context appended to the skip line.
- * @returns {Promise<boolean>} true when the engine is available.
+ * @returns {Promise<boolean>} true when the engine is available and idle.
  */
 export async function requireEngineOrSkip(label = "") {
   if (process.env.TEST_OFFLINE) {
@@ -56,6 +84,13 @@ export async function requireEngineOrSkip(label = "") {
   if (!up) {
     console.log(
       `[SKIP] engine down${label ? ` (${label})` : ""} - skipping live-engine test`
+    );
+    process.exit(0);
+  }
+  const idle = await isEngineIdle();
+  if (!idle) {
+    console.log(
+      `[SKIP] engine busy (MAX_SEQS=1 active workload)${label ? ` (${label})` : ""} - skipping live-engine test`
     );
     process.exit(0);
   }
