@@ -5,6 +5,7 @@ import {
   MIN_TIMEOUT_MS,
   EXTENSION_BONUS_TIMEOUT_MS,
   MAX_TURNS,
+  BASE_TURN_BUDGET,
   SESSION_TURNS_RECOMMEND,
   getReasoningEffort,
 } from "./config.js";
@@ -203,6 +204,9 @@ export function startAnserTask({
     finishedAt: null,
     lastActivityAt: null,
     lastHeartbeatAt: Date.now(),
+    budgetTurns: BASE_TURN_BUDGET,
+    leaseExtensionsCount: 0,
+    lastActivityPreview: "",
     streamBytes: 0,
     streamTail: "",
     status: "queued",
@@ -281,13 +285,19 @@ export function startAnserTask({
       const abortController = new AbortController();
       taskEntry.abortController = abortController;
 
-      const maxTurnsVal = MAX_TURNS || 100;
+      const maxTurnsVal = taskEntry.budgetTurns || MAX_TURNS || BASE_TURN_BUDGET;
       try {
         const runResult = await runner.run({
           prompt: finalTaskPrompt,
           cwd: targetCwd,
           sessionId,
           maxTurns: maxTurnsVal,
+          getDynamicBudget: () => taskEntry.budgetTurns || maxTurnsVal,
+          onActivity: (preview) => {
+            taskEntry.lastActivityPreview = preview;
+            taskEntry.lastHeartbeatAt = Date.now();
+            saveTaskToDisk(taskEntry);
+          },
           // Task-local reasoning-effort override (per-dispatch). Threaded RAW
           // (may be undefined) to the provider so its existing dynamic
           // QWEN_REASONING_EFFORT read remains the fallback when the param is

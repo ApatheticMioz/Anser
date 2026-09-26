@@ -16,6 +16,8 @@ import {
   TASK_RETENTION_MS,
   PROMPT_BUDGET_CHARS,
   ALLOW_ENGINE_INTERRUPT,
+  BASE_TURN_BUDGET,
+  MAX_ELASTIC_TURNS,
 } from "./config.js";
 import {
   normalizeWorkspacePath,
@@ -45,6 +47,7 @@ import {
   saveTaskToDisk,
   notifyWaiters,
   cancelAllTasks,
+  extendTaskBudget,
   statusServerOwned,
   hasLiveWork,
 } from "./task_registry.js";
@@ -334,20 +337,30 @@ export function registerTools(server) {
       description: "Check status, retrieve output, cancel, or list background Qwen coworker tasks.",
       inputSchema: {
         action: z
-          .enum(["status", "cancel", "cancel_all", "list", "kill", "stats"])
-          .describe("Action to perform on background tasks (status, cancel, list, or stats for cumulative token usage/savings)"),
+          .enum(["status", "cancel", "cancel_all", "list", "kill", "stats", "extend_lease"])
+          .describe("Action to perform on background tasks (status, cancel, list, stats, or extend_lease to grant additional execution turns)"),
         task_id: z
           .string()
           .optional()
           .describe(
-            "Task ID (required for 'status', optional for 'cancel'/'cancel_all'/'kill' to cancel all tasks)"
+            "Task ID (required for 'status' and 'extend_lease', optional for 'cancel'/'cancel_all'/'kill' to cancel all tasks)"
           ),
+        turns: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Additional turns to grant for 'extend_lease' (default 25)"),
+        reason: z
+          .string()
+          .optional()
+          .describe("Optional reason for supervisor lease extension"),
       },
       annotations: {
         readOnlyHint: true,
       },
     },
-    async ({ action, task_id }) => {
+    async ({ action, task_id, turns, reason }) => {
       try {
       if (action === "kill") {
         action = "cancel";
@@ -392,6 +405,31 @@ export function registerTools(server) {
               text: JSON.stringify({ tasks: Array.from(merged.values()) }, null, 2),
             },
           ],
+        };
+      }
+
+      if (action === "extend_lease") {
+        if (!task_id) {
+          return {
+            content: [{ type: "text", text: "Error: `task_id` parameter is required for action: 'extend_lease'." }],
+            isError: true,
+          };
+        }
+        const extResult = extendTaskBudget(task_id, turns || 25, reason);
+        if (!extResult.success) {
+          return {
+            content: [{ type: "text", text: `Failed to extend lease for task \`${task_id}\`: ${extResult.error}` }],
+            isError: true,
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Granted ${turns || 25} additional turns to task \`${task_id}\` (budget: ${extResult.previousBudget} -> ${extResult.budgetTurns} turns, extension #${extResult.leaseExtensionsCount}).`,
+            },
+          ],
+          isError: false,
         };
       }
 
@@ -500,11 +538,16 @@ export function registerTools(server) {
             isError: false,
           };
         }
+        const budgetInfo = `budget: ${task.budgetTurns || BASE_TURN_BUDGET} turns (extensions: ${task.leaseExtensionsCount || 0})`;
+        let activityBlock = "";
+        if (task.lastActivityPreview) {
+          activityBlock = `\n\nRecent Activity Preview:\n> ${task.lastActivityPreview.replace(/\n/g, "\n> ")}`;
+        }
         return {
           content: [
             {
               type: "text",
-              text: `Task \`${task_id}\` is actively EXECUTING (${elapsedS}s elapsed, ${task.toolCallsCount || 0} tool calls made).${hint}`,
+              text: `Task \`${task_id}\` is actively EXECUTING (${elapsedS}s elapsed, ${task.toolCallsCount || 0} tool calls made, ${budgetInfo}).${activityBlock}${hint}`,
             },
           ],
           isError: false,

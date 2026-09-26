@@ -22,6 +22,7 @@ import { webPlugin } from "./services/web_service.js";
 import { McpBridge } from "./services/mcp_bridge.js";
 import { injectSkills, matchSkills } from "../skills.js";
 import { normalizeWorkspacePath, canonicalizePath } from "../wsl_bridge.js";
+import { LoopDetector } from "./loop_detector.js";
 import {
   MAX_CONTINUATION_TURNS,
   EMPTY_STREAM_RETRIES,
@@ -38,6 +39,13 @@ import {
   CONTEXT_WARN_TOKENS,
   CONTEXT_HIGH_WATERMARK_TOKENS,
   PROMPT_BUDGET_CHARS,
+  BASE_TURN_BUDGET,
+  MAX_ELASTIC_TURNS,
+  KV_CACHE_HEADROOM_CEILING,
+  SPEC_ACCEPTANCE_FLOOR,
+  LOOP_DETECTION_WINDOW,
+  LOOP_DETECTION_REPETITIONS,
+  SUPERVISOR_PREVIEW_CHARS,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
 import { recordTurnTelemetry, recordToolExecution, sampleLiveVllmMetrics } from "../telemetry.js";
@@ -171,7 +179,7 @@ export class AnserRunner {
     // so a junction/symlink cwd is stored as its real path before it is
     // handed to any sandboxed service.
     this.defaultCwd = canonicalizePath(options.cwd ? normalizeWorkspacePath(options.cwd) : process.cwd());
-    this.defaultMaxTurns = options.maxTurns || 100;
+    this.defaultMaxTurns = options.maxTurns || BASE_TURN_BUDGET;
     // Optional injection seams (used by offline tests to substitute a mock
     // LLM / logger without touching the network or the real vLLM provider).
     this._llm = options.llm || null;
@@ -216,12 +224,18 @@ export class AnserRunner {
     onToken,
     onMetrics,
     onToolCall,
+    onActivity,
+    getDynamicBudget,
     extensions,
     targetInWsl = false,
     testCommand,
     enableEvo = false,
   }) {
     const t0 = Date.now();
+    const loopDetector = new LoopDetector({
+      windowSize: LOOP_DETECTION_WINDOW,
+      threshold: LOOP_DETECTION_REPETITIONS,
+    });
     // P4i: canonicalize the per-run cwd through the OS symlink/junction layer
     // so every plugin mounted below (sandbox fs, shell, Evo, AST) receives a
     // real path, not a junction literal.
@@ -384,26 +398,28 @@ export class AnserRunner {
           break;
         }
 
-        if (maxTurns && turnsTaken >= maxTurns && continuationsInjected === 0) {
+        const currentMaxTurns = typeof getDynamicBudget === "function" ? getDynamicBudget() : (maxTurns || BASE_TURN_BUDGET);
+
+        if (currentMaxTurns && turnsTaken >= currentMaxTurns && continuationsInjected === 0) {
           status = finalText.trim() !== "" ? "completed_budget_exhausted" : "turn_limit_reached";
           break;
         }
 
-        // Cooperative landing: on the final turn before maxTurns, strip tools and mandate synthesis.
+        // Cooperative landing: on the final turn before currentMaxTurns, strip tools and mandate synthesis.
         // If a length cutoff occurs on the ceiling turn, isCeilingTurn remains active across continuations.
         const isCeilingTurn = Boolean(
-          (maxTurns && maxTurns > 1 && turnsTaken === maxTurns - 1) ||
-          (maxTurns && turnsTaken >= maxTurns && continuationsInjected > 0)
+          (currentMaxTurns && currentMaxTurns > 1 && turnsTaken === currentMaxTurns - 1) ||
+          (currentMaxTurns && turnsTaken >= currentMaxTurns && continuationsInjected > 0)
         );
         if (isCeilingTurn && continuationsInjected === 0) {
           messages.push({
             role: "user",
-            content: `[MANDATORY SYNTHESIS - TURN CEILING REACHED (${turnsTaken + 1}/${maxTurns})]: You have reached the maximum allowed turns for this dispatch. All tools are now disabled. Synthesize your final deliverable, findings, code changes, and grounded conclusions immediately based on the facts gathered so far.`,
+            content: `[MANDATORY SYNTHESIS - TURN CEILING REACHED (${turnsTaken + 1}/${currentMaxTurns})]: You have reached the maximum allowed turns for this dispatch. All tools are now disabled. Synthesize your final deliverable, findings, code changes, and grounded conclusions immediately based on the facts gathered so far.`,
           });
           logger.append({
             type: "turn_ceiling_synthesis",
             turnsTaken: turnsTaken + 1,
-            maxTurns,
+            maxTurns: currentMaxTurns,
           });
         }
 
@@ -713,6 +729,9 @@ export class AnserRunner {
 
         if (turnResult.content) {
           finalText = turnResult.content;
+          if (onActivity) {
+            onActivity(turnResult.content.trim().slice(-SUPERVISOR_PREVIEW_CHARS));
+          }
         }
 
         // If no tool calls, the model concluded its turn - UNLESS the output
@@ -852,6 +871,11 @@ export class AnserRunner {
             }
           }
 
+          if (onActivity) {
+            const previewSnippet = `[${tc.function.name}] ${toolOutputString.trim().slice(-SUPERVISOR_PREVIEW_CHARS)}`;
+            onActivity(previewSnippet);
+          }
+
           messages.push({
             role: "tool",
             tool_call_id: tc.id,
@@ -888,6 +912,7 @@ export class AnserRunner {
           // inline-python measurement bash calls on open-ended layout targets).
           const toolName = tc.function.name;
           if (MUTATING_TOOLS.has(toolName)) {
+            loopDetector.recordMutation();
             probeStreak = 0;
           } else if (BASH_TOOLS.has(toolName)) {
             probeStreak++;
@@ -908,6 +933,31 @@ export class AnserRunner {
               probeStreak = 0;
             }
           }
+
+          // Action-hash loop detection: fingerprint non-mutating repetitions
+          const loopCheck = loopDetector.recordAction(tc.function.name, parsedArgs, toolExecution);
+          if (loopCheck.isLoop) {
+            logger.append({
+              type: "action_loop_detected",
+              fingerprint: loopCheck.fingerprint,
+              repeats: loopCheck.repeats,
+              threshold: loopDetector.threshold,
+              toolName: tc.function.name,
+            });
+            messages.push({
+              role: "user",
+              content: `[Action Loop Detected]: You have executed identical action '${tc.function.name}' ${loopCheck.repeats} times consecutively with no state mutation. Alter your approach, inspect alternative files, or synthesize conclusions.`,
+            });
+            if (loopCheck.repeats >= loopDetector.threshold + 1) {
+              status = "stagnant_action_loop";
+              finalText = `StagnantActionLoopError: Execution terminated after repeated non-mutating action '${tc.function.name}' (${loopCheck.repeats} consecutive calls).`;
+              break;
+            }
+          }
+        }
+
+        if (status === "stagnant_action_loop") {
+          break;
         }
 
         // If the turn was cut off by the token ceiling AND it carried tool

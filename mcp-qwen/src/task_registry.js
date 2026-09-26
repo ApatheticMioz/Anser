@@ -8,6 +8,9 @@ import {
   DEFAULT_TIMEOUT_MS,
   INACTIVITY_TIMEOUT_MS,
   ORPHAN_REAP_STALE_MS,
+  BASE_TURN_BUDGET,
+  MAX_ELASTIC_TURNS,
+  SUPERVISOR_PREVIEW_CHARS,
 } from "./config.js";
 import {
   pidAlive,
@@ -51,6 +54,9 @@ export function saveTaskToDisk(task) {
       status: task.status,
       done: task.done,
       isError: task.isError,
+      budgetTurns: task.budgetTurns || BASE_TURN_BUDGET,
+      leaseExtensionsCount: task.leaseExtensionsCount || 0,
+      lastActivityPreview: task.lastActivityPreview ? String(task.lastActivityPreview).slice(-SUPERVISOR_PREVIEW_CHARS) : "",
       fileOps: task.fileOps || [],
       toolCallsCount: task.toolCallsCount || 0,
       result: task.result || null,
@@ -449,6 +455,9 @@ export function notifyWaiters(task) {
       elapsed_s,
       startedAt: task.startedAt,
       lastActivitySecAgo,
+      budgetTurns: task.budgetTurns || BASE_TURN_BUDGET,
+      leaseExtensionsCount: task.leaseExtensionsCount || 0,
+      lastActivityPreview: task.lastActivityPreview || "",
       streamBytes: task.streamBytes || 0,
       streamTail: (task.streamTail || "")
         .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
@@ -544,6 +553,46 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
   clearReclaimableTaskSlots();
 
   return count;
+}
+
+/**
+ * Extends the execution turn budget for an active background task.
+ * Allows supervisor (Claude/Gemini) to grant extra turns dynamically
+ * without killing the task or re-dispatching from scratch.
+ *
+ * @param {string} taskId
+ * @param {number} [additionalTurns=25]
+ * @param {string} [reason="supervisor request"]
+ * @returns {{ success: boolean, taskId?: string, previousBudget?: number, budgetTurns?: number, leaseExtensionsCount?: number, error?: string, reason?: string }}
+ */
+export function extendTaskBudget(taskId, additionalTurns = 25, reason = "supervisor request") {
+  if (!taskId) return { success: false, error: "Task ID required" };
+  let task = tasks.get(taskId);
+  if (!task) {
+    task = readTaskFromDisk(taskId);
+  }
+  if (!task) {
+    return { success: false, error: "Task not found" };
+  }
+  if (task.corrupted) {
+    return { success: false, error: `Task file corrupted: ${task.error}` };
+  }
+  if (task.done) {
+    return { success: false, error: "Task already finished" };
+  }
+  const current = task.budgetTurns || BASE_TURN_BUDGET;
+  const newBudget = Math.min(current + additionalTurns, MAX_ELASTIC_TURNS);
+  task.budgetTurns = newBudget;
+  task.leaseExtensionsCount = (task.leaseExtensionsCount || 0) + 1;
+  saveTaskToDisk(task);
+  return {
+    success: true,
+    taskId,
+    previousBudget: current,
+    budgetTurns: newBudget,
+    leaseExtensionsCount: task.leaseExtensionsCount,
+    reason,
+  };
 }
 
 export let statusServerOwned = false;
@@ -749,6 +798,9 @@ export const statusHttpServer = http.createServer(async (req, res) => {
             elapsed_s,
             startedAt: t.startedAt,
             lastActivitySecAgo,
+            budgetTurns: t.budgetTurns || BASE_TURN_BUDGET,
+            leaseExtensionsCount: t.leaseExtensionsCount || 0,
+            lastActivityPreview: t.lastActivityPreview || "",
             streamBytes: t.streamBytes || 0,
             streamTail: (t.streamTail || "")
               .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
@@ -852,6 +904,9 @@ export const statusHttpServer = http.createServer(async (req, res) => {
                 elapsed_s,
                 startedAt: t.startedAt,
                 lastActivitySecAgo,
+                budgetTurns: t.budgetTurns || BASE_TURN_BUDGET,
+                leaseExtensionsCount: t.leaseExtensionsCount || 0,
+                lastActivityPreview: t.lastActivityPreview || "",
                 streamBytes: t.streamBytes || 0,
                 streamTail: (t.streamTail || "")
                   .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
@@ -936,6 +991,9 @@ export const statusHttpServer = http.createServer(async (req, res) => {
           elapsed_s,
           startedAt: task.startedAt,
           lastActivitySecAgo,
+          budgetTurns: task.budgetTurns || BASE_TURN_BUDGET,
+          leaseExtensionsCount: task.leaseExtensionsCount || 0,
+          lastActivityPreview: task.lastActivityPreview || "",
           streamBytes: task.streamBytes || 0,
           streamTail: (task.streamTail || "")
             .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
@@ -948,6 +1006,37 @@ export const statusHttpServer = http.createServer(async (req, res) => {
         2
       )
     );
+  }
+
+  // POST /task/:id/extend_lease (Supervisor Dynamic Lease Extension)
+  const extendMatch = pathname.match(/^\/task\/([^/]+)\/extend_lease$/);
+  if (req.method === "POST" && extendMatch) {
+    const taskId = extendMatch[1];
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(body || "{}");
+      } catch {}
+      const turns = typeof parsed.turns === "number" ? parsed.turns : 25;
+      const resData = extendTaskBudget(taskId, turns, parsed.reason);
+      res.writeHead(
+        resData.success
+          ? 200
+          : resData.error === "Task not found"
+          ? 404
+          : 400,
+        {
+          "Content-Type": "application/json",
+          Connection: "close",
+        }
+      );
+      res.end(JSON.stringify(resData, null, 2));
+    });
+    return;
   }
 
   // POST /task/:id/cancel

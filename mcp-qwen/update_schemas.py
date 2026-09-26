@@ -142,8 +142,10 @@ tools = {
             '$schema': 'http://json-schema.org/draft-07/schema#',
             'type': 'object',
             'properties': {
-                'action': {'type': 'string', 'enum': ['status', 'cancel', 'cancel_all', 'list', 'kill', 'stats'], 'description': 'Action to perform on background tasks (status, cancel, list, or stats for cumulative token usage/savings)'},
-                'task_id': {'type': 'string', 'description': 'Task ID (required for \'status\', optional for \'cancel\'/\'cancel_all\'/\'kill\' to cancel all tasks)'}
+                'action': {'type': 'string', 'enum': ['status', 'cancel', 'cancel_all', 'list', 'kill', 'stats', 'extend_lease'], 'description': 'Action to perform on background tasks (status, cancel, list, stats, or extend_lease to grant additional execution turns)'},
+                'task_id': {'type': 'string', 'description': 'Task ID (required for \'status\' and \'extend_lease\', optional for \'cancel\'/\'cancel_all\'/\'kill\' to cancel all tasks)'},
+                'turns': {'type': 'integer', 'exclusiveMinimum': 0, 'maximum': 9007199254740991, 'description': 'Additional turns to grant for \'extend_lease\' (default 25)'},
+                'reason': {'type': 'string', 'description': 'Optional reason for supervisor lease extension'}
             },
             'required': ['action']
         }
@@ -182,8 +184,10 @@ To dispatch work to the local autonomous Qwen3.8-27B coworker, call `call_mcp_to
 - **ServerName**: `"qwen38-local"`
 - **ToolName**: `"qwen_task"`
 - **Arguments**:
-  - `action`: `"status"` | `"cancel"` | `"kill"` (alias for cancel) | `"cancel_all"` | `"list"` | `"stats"`
-  - `task_id` (string): ID of background task (required for status/cancel/kill).
+  - `action`: `"status"` | `"cancel"` | `"kill"` (alias for cancel) | `"cancel_all"` | `"list"` | `"stats"` | `"extend_lease"`
+  - `task_id` (string): ID of background task (required for status/cancel/kill/extend_lease).
+  - `turns` (integer, optional): Additional turns to grant for extend_lease (default 25).
+  - `reason` (string, optional): Audit reason for lease extension.
 
 ### Tool 3: `qwen_server`
 - **ServerName**: `"qwen38-local"`

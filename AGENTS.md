@@ -103,6 +103,11 @@ python <repo>/mcp-qwen/update_schemas.py
 | `QWEN_REASONING_EFFORT` | `medium` | Fallback effort when a dispatch sends none; per-dispatch `reasoning_effort` overrides. Engine accepts {xhigh, medium, low}. `xhigh` is explicit-only. |
 | `TEST_OFFLINE` | *(unset)* | Set to `1` to force live suites to skip (GPU-less runs). |
 | `ALLOW_ENGINE_INTERRUPT` | `0` | Dangerous override: by default, test suites NEVER interrupt, probe (:18020), or reboot vLLM. Set to `1` only to explicitly test live GPU inference. |
+| `QWEN_BASE_TURN_BUDGET` | `80` | Base turn budget before requiring supervisor lease extension or triggering cooperative landing. |
+| `QWEN_MAX_ELASTIC_TURNS` | `200` | Maximum allowed turn ceiling via supervisor lease extension. |
+| `QWEN_LOOP_DETECTION_WINDOW` | `6` | Sliding window size for action-hash stagnation detection. |
+| `QWEN_LOOP_DETECTION_REPETITIONS` | `3` | Consecutive identical non-mutating actions before circuit-breaking. |
+| `QWEN_SUPERVISOR_PREVIEW_CHARS` | `300` | Length of recent activity preview returned in task status and HTTP wait endpoints. |
 
 ---
 
@@ -219,7 +224,7 @@ There is **no root `package.json`** — always use `--prefix mcp-qwen`.
 # Fast canary gate - 8 critical suites (~4s, offline, zero engine interruption). Run during active development.
 npm test --prefix mcp-qwen
 
-# Full authoritative gate - 59 suites (single-pass complete verification). Run before PR / milestone commit.
+# Full authoritative gate - 61 suites (single-pass complete verification). Run before PR / milestone commit.
 npm run test:all --prefix mcp-qwen
 
 # GPU-less / CI: live suites skip honestly by default when ALLOW_ENGINE_INTERRUPT is unset or TEST_OFFLINE=1.
@@ -230,8 +235,8 @@ TEST_OFFLINE=1 npm run test:all --prefix mcp-qwen
 | Command | Suites | Runtime | Purpose |
 |---|---|---|---|
 | `npm test` | **8** | ~4 s | Instant canary gate (security, AST canary, syntax gates, edit_file guard, search_code guard, schema parity, platform, protocol sync). |
-| `npm run test:all` | **59** | ~48 s | Full authoritative offline & integration gate. Single-pass run (authoritative CI signal). |
-| On-disk `.test.js` | **59** | — | Total test suites in repository. |
+| `npm run test:all` | **61** | ~48 s | Full authoritative offline & integration gate. Single-pass run (authoritative CI signal). |
+| On-disk `.test.js` | **61** | — | Total test suites in repository. |
 
 **Zero Engine Interruption Invariant:**
 By default, tests NEVER interrupt, probe, or reboot a running vLLM instance (`ALLOW_ENGINE_INTERRUPT=0`). Live suites (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) **skip honestly** by default so running background Anser workloads on single-sequence hardware are protected. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.

@@ -298,10 +298,60 @@ export const ALLOW_ENGINE_INTERRUPT = process.env.ALLOW_ENGINE_INTERRUPT === "1"
 
 // Execution engine: the native Anser runner is hard-wired; there is no engine selection.
 
-// Execution & Turn limits
+// Execution & Turn limits:
+// Base turn budget defaults to 80 (where advisory review begins).
+// Elastic horizon allows extending up to MAX_ELASTIC_TURNS (default 200)
+// as long as physical telemetry (KV cache < 85%, spec acceptance >= 2.5)
+// and action hash entropy confirm forward non-stagnant progress.
+export const DEFAULT_BASE_TURN_BUDGET = 80;
+export const BASE_TURN_BUDGET = (() => {
+  const parsed = parseInt(process.env.QWEN_BASE_TURN_BUDGET, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BASE_TURN_BUDGET;
+})();
+
+export const DEFAULT_MAX_ELASTIC_TURNS = 200;
+export const MAX_ELASTIC_TURNS = (() => {
+  const parsed = parseInt(process.env.QWEN_MAX_ELASTIC_TURNS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_ELASTIC_TURNS;
+})();
+
+// Physical telemetry gating thresholds
+export const DEFAULT_KV_CACHE_HEADROOM_CEILING = 85.0;
+export const KV_CACHE_HEADROOM_CEILING = (() => {
+  const parsed = parseFloat(process.env.QWEN_KV_CACHE_HEADROOM_CEILING);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_KV_CACHE_HEADROOM_CEILING;
+})();
+
+export const DEFAULT_SPEC_ACCEPTANCE_FLOOR = 2.5;
+export const SPEC_ACCEPTANCE_FLOOR = (() => {
+  const parsed = parseFloat(process.env.QWEN_SPEC_ACCEPTANCE_FLOOR);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SPEC_ACCEPTANCE_FLOOR;
+})();
+
+// Action-hash loop detection thresholds
+export const DEFAULT_LOOP_DETECTION_WINDOW = 6;
+export const LOOP_DETECTION_WINDOW = (() => {
+  const parsed = parseInt(process.env.QWEN_LOOP_DETECTION_WINDOW, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_LOOP_DETECTION_WINDOW;
+})();
+
+export const DEFAULT_LOOP_DETECTION_REPETITIONS = 3;
+export const LOOP_DETECTION_REPETITIONS = (() => {
+  const parsed = parseInt(process.env.QWEN_LOOP_DETECTION_REPETITIONS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_LOOP_DETECTION_REPETITIONS;
+})();
+
+// Supervisor log preview length in status / wait telemetry (150-300 chars)
+export const DEFAULT_SUPERVISOR_PREVIEW_CHARS = 300;
+export const SUPERVISOR_PREVIEW_CHARS = (() => {
+  const parsed = parseInt(process.env.QWEN_SUPERVISOR_PREVIEW_CHARS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SUPERVISOR_PREVIEW_CHARS;
+})();
+
 export const MAX_TURNS = process.env.QWEN_MAX_TURNS
   ? parseInt(process.env.QWEN_MAX_TURNS, 10)
   : null; // null = unbounded, let orchestrator govern
+
 
 // Continuation budget: max times we re-prompt the model after a
 // finish_reason: "length" (token-ceiling) cutoff before giving up.

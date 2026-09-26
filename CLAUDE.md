@@ -11,7 +11,7 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
 - **Plan Mode Orchestrator (GLM 5.3 - Strictly Pure Text)**:
   - System architecture, task decomposition, and formal interface design.
   - Granular milestone planning and ground-truth validation against source files and code ASTs.
-  - **Plan & Manifest Authorship**: Author and maintain `implementation_plan.md` and `AUDIT_MANIFEST.md` in cloud context; synthesize facts and test outputs gathered from coworker exploration turns.
+  - **Plan Authorship**: Author and maintain implementation plans in cloud context; synthesize facts and test outputs gathered from coworker exploration turns.
   - **Zero Cloud Bulk Exploration**: Strictly avoid bulk-reading repository source files or hoarding tokens into cloud context; offload codebase exploration systematically to local Qwen in bite-sized, single-concern inquiry slices.
   - **STRICT Vision Prohibition in Plan Mode**: GLM 5.3 operates in pure text mode and lacks multimodal vision capabilities. It MUST NOT invoke visual tools (`Read` on `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, screenshot analysis, or OCR). All visual verifications are explicitly deferred to Execution Mode.
 - **Execution Mode Orchestrator (GLM 5.3-flash - Native Multimodal Authority)**:
@@ -37,9 +37,9 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
      2. Multimodal inspection of a single user-targeted visual deliverable (e.g. inspecting an image, UI component, or compiled PDF page) when the user specifically requests visual, layout, or design review.
    - **Systematic Exploration Offloading in Bounded Patches**: Exploration is offloaded to `qwen_coworker` strictly in **focused, single-concern inquiry slices** (e.g. Turn 1: Run baseline test suite for Subsystem A, inspect git diff for File B, and return stderr/stdout).
    - **Anti-Monolithic Turn 1 Dispatch**: The orchestrator MUST NOT dump broad overhauls, multi-subsystem audits, or open-ended debugging requests into Qwen on Turn 1. Monolithic prompts that bundle multiple layers force runaway tool loops (20+ tool calls, 20+ min latency) and degrade speculative decoding.
-   - **Cloud Authorship of Plans & Manifests**: Qwen returns raw ground-truth facts, diff excerpts, and test telemetry. The orchestrator synthesizes these facts and authors/updates `implementation_plan.md` and `AUDIT_MANIFEST.md` in cloud context. Qwen is NEVER asked to author high-level architecture documents, project roadmaps, or audit manifests.
+   - **Cloud Authorship of Plans**: Qwen returns raw ground-truth facts, diff excerpts, and test telemetry. The orchestrator synthesizes these facts and authors/updates implementation plans in cloud context. Qwen is NEVER asked to author high-level architecture documents or project roadmaps.
    - **Turn 1 Discovery & Scratchpad Empirical Isolation**:
-     - *Production Code Protected*: Production source code (`src/`, `lib/`, `package.json`, `tests/`) is protected from premature patching or shotgun edits until reproduction, root cause, or interface alignment are established.
+     - *Production Code Protected*: Production source code is protected from premature patching or shotgun edits until reproduction, root cause, or interface alignment are established.
      - *Full Scratchpad Liberty*: The coworker has unrestricted write and execution freedom in the workspace scratchpad (`<workspace>/.scratch/` or throwaway helper scripts). Writing minimal reproduction scripts (`.scratch/repro.py`, `.scratch/test_case.js`), dumping intermediate data tables, or testing isolated hypotheses in `.scratch/` is explicitly encouraged on Turn 1. Empirical verification in `.scratch/` prevents reasoning-context hoarding and eliminates inline-bash probe streaks.
      - Code modifications to production files are executed in subsequent targeted slices (§3.1).
 2. **Zero-Turn Execution & Wait Contract**:
@@ -51,12 +51,6 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
    - In Plan Mode (GLM-5.3), visual inspection is prohibited; analyze text source code, data formats, and configs directly.
    - In Execution Mode (5.3-flash), the orchestrator inspects visual outputs directly, extracts design tokens or visual defects into structured text, and passes textual specifications to the coworker.
    - Never read binary files (`.pdf`, `.png`, `.jpg`, `.webp`, …) on a text-only orchestrator or engine: binary bytes are not valid text payloads and invalidate the model transcript. The Anser harness enforces this invariant with an immediate magic-number fail-fast (`BinaryFileError`) on coworker-side reads. Inspect binary outputs using native multimodal vision, or extract plaintext via shell utilities (`pdftotext`, `strings`).
-   - **Document & Academic Paper Review Protocol (PDF vs. Source Ground Truth)**:
-     - **Compiled Artifact vs. Ground Truth**: A compiled document (`.pdf`, `.docx`) is a build artifact, NOT the primary editable ground truth. The true ground truth lives in the project's **text source files**: LaTeX (`.tex`), BibTeX (`.bib`), raw data tables (`.csv`/`.tsv`), figures generation scripts (`.py`), or markdown (`.md`).
-     - **Dual Review Division**:
-       1. **Visual & Aesthetic Review**: Inspect rendered PDF pages, figure geometry, layout overlaps, and typography directly using native multimodal vision.
-       2. **Content, Citation, Math, & Data Review (Coworker @ $0)**: Direct Qwen to inspect underlying plaintext source files (`.tex`, `.bib`, `.csv`, `.py`). Offload focused slices: cross-reference citation tags against `.bib`, verify claims against data tables, and check equations in `.tex`. Never pass binary files to Qwen; always point Qwen to text sources.
-       3. **Locating Source Coordinates**: If the user only names the compiled binary (`paper.pdf`), Turn 1 Coworker slice locates the document sources (`find . -name "*.tex" -o -name "*.bib"`) or build scripts, returning the exact source coordinates to the orchestrator.
 4. **Ground Truth Hierarchy**:
    - Ground truth consists exclusively of active source code, configuration files, raw data matrices, test suites, and verifiable build artifacts.
    - Secondary documentation, historical audit reports, and markdown notes are reference ledgers, not executable ground truth. Claims and invariants must be validated against current source code and live test runs.
@@ -69,11 +63,13 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
    - Line endings are deterministically enforced repository-wide by `.gitattributes` (`* text=auto eol=lf`).
    - `edit_file` automatically normalizes newlines and preserves the file's existing line-ending format. `apply_patch` normalizes newlines to LF per repository `.gitattributes` (`* text=auto eol=lf`).
    - Autonomous agents must never squander prompt tokens, cognitive budget, or context space on superstitious line-ending warnings or chanting in LLM dispatches.
+
 8. **Fail-Fast, Zero-Masking Engineering Invariant**:
    - Do not cater to fallbacks or use overly defensive engineering; errors are useful and provide valid signals.
    - NEVER silently catch, suppress, or discard errors.
    - NEVER mask upstream HTTP status codes (e.g. 400 Bad Request, 500 Internal Error) or wrap downstream engine errors into synthetic assistant completions.
    - When an upstream service, parser, or subprocess fails, surface the unadulterated error status and stack trace immediately.
+
 9. **High-Reasoning Compute & Unaltered Deliberation (`reasoning_effort`)**:
    - Local Qwen defaults to balanced deliberation (`reasoning_effort: "medium"`), optimizing execution speed and avoiding reasoning-token bloat during routine tasks, file editing, and test runs.
    - High-reasoning compute (`reasoning_effort: "xhigh"`) is strictly **explicit-only**: reserve it for deep root-cause debugging, complex architectural proofs, or intricate algorithmic/AST refactors.
@@ -115,9 +111,9 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
   2. Functional requirement, interface contract, and invariant boundaries.
   3. Failure condition, reproduction steps, or compiler error trace.
   4. Acceptance criteria and verification command (e.g. `npm run test:slice`).
-  5. Numeric acceptance targets for layout/geometry/visual-quality work (e.g. "zero `get_tightbbox()` overlaps", "margin >= 12pt") — subjective descriptors ("make it look balanced") force unbounded measurement probe loops; objective numeric targets are required.
+  5. Objective acceptance targets (e.g. numeric thresholds, exit codes, test outputs) — subjective descriptors force unbounded measurement probe loops; objective targets are required.
 - **Verbatim Code Spoon-Feeding Prohibition**: The Lead Architect is **STRICTLY PROHIBITED** from writing out verbatim multi-line code implementations, full JSX component blocks, or replacement functions in coworker prompts. Local Qwen operates with 245K context and high-reasoning compute (`reasoning_effort: "xhigh"`); Qwen authors the code locally.
-- **Harness-Enforced Guardrails (Anser)**: the harness mechanically enforces what this protocol prescribes — Single-Pass Mutation is built into the static system prompt to maximize vLLM prefix cache (APC) reuse; consecutive non-mutating `bash` probing beyond budget (default 4, `QWEN_PROBE_BUDGET`) injects an advisory and emits `probe_budget_warning`; oversized prompts (>1,500 chars) are fail-fast rejected at the MCP gateway (`MonolithicDispatchRejected`) to enforce single-concern scoping without code spoon-feeding; session rollover advisories fire at 60 turns (`session_warning`) and 80 turns (`SessionTurnLimitRecommendation` appended in-band); turn ceiling (100 turns) triggers Cooperative Landing (tools stripped, mandatory synthesis requested, returning `completed_budget_exhausted` with a structured advisory banner rather than hard killing); binary reads fail fast with `BinaryFileError`. Protocol docs instruct; the harness enforces.
+- **Harness-Enforced Guardrails (Anser)**: the harness mechanically enforces what this protocol prescribes — Single-Pass Mutation is built into the static system prompt to maximize vLLM prefix cache (APC) reuse; consecutive non-mutating `bash` probing beyond budget (default 4, `QWEN_PROBE_BUDGET`) injects an advisory and emits `probe_budget_warning`; sliding-window action-hash loop detection trips on real stagnation early (`action_loop_detected` / `stagnant_action_loop`); oversized prompts (>1,500 chars) are fail-fast rejected at the MCP gateway (`MonolithicDispatchRejected`) to enforce single-concern scoping without code spoon-feeding; session rollover advisories fire at 60 turns (`session_warning`) and 80 turns (`SessionTurnLimitRecommendation` appended in-band); base turn ceiling (`BASE_TURN_BUDGET`, default 80) is dynamically extendable via supervisor lease extension (`qwen_task(action: "extend_lease", task_id, turns)`) up to `MAX_ELASTIC_TURNS` (200 turns) or triggers Cooperative Landing (tools stripped, mandatory synthesis requested, returning `completed_budget_exhausted` with a structured advisory banner rather than hard killing); binary reads fail fast with `BinaryFileError`. Protocol docs instruct; the harness enforces.
 
 ### 4. Ground-Truth & Verification Discipline
 - **Session events are ground truth; planner transcripts are intent ledgers.** Before diagnosing a "duplicate" or a "stale task", or re-dispatching, verify against `~/.qwen/sessions/<id>/events.jsonl` and `~/.qwen/tasks/*.json`.
@@ -142,7 +138,7 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
      curl -fsS --max-time 550 --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:18021/task/<id>/wait
      ```
    - If the task is still executing after 550s, `curl` exits cleanly with code 28 (timeout).
-   - On timeout wakeup (exit code 28), Claude Code samples telemetry via `qwen_task(action: "status")` (`toolCallsCount`, `fileOps`, `lastActivitySecAgo`) to verify forward progress, and immediately re-arms another `--max-time 550` wait window.
+   - On timeout wakeup (exit code 28), Claude Code samples telemetry via `qwen_task(action: "status")` (`toolCallsCount`, `fileOps`, `lastActivitySecAgo`, `lastActivityPreview`) to verify forward progress, optionally extends the lease if needed via `qwen_task(action: "extend_lease", task_id, turns: 25)`, and re-arms another `--max-time 550` wait window.
    - **Never cancel healthy work**: A cancel destroys 100% of an in-flight task's accumulated context and tool progress. Cancel only on explicit user instruction, budget exhaustion, or a confirmed wedge (heartbeat stale beyond the inactivity window AND zero tool-call progress).
    - **Telemetry before any kill**: Advancing `toolCallsCount` means healthy regardless of wall-clock age. Silence in the orchestrator transcript is not evidence of death; verify from session events.
 
@@ -153,10 +149,10 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 1. **Incremental Milestone Verification & Test Gates**:
    - Verify changes after each component batch using the **Fast Canary Gate** (`npm test --prefix mcp-qwen`, ~4s).
    - **Zero Engine Interruption Invariant**: Testing runs offline by default (`ALLOW_ENGINE_INTERRUPT=0`). Automated test suites and offline checks must NEVER probe port 18020, fire canary completions, or reboot the vLLM server while tasks are in flight. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
-   - Run the full authoritative test suite (`npm run test:all --prefix mcp-qwen`, 59 suites) and build validation before concluding the milestone.
-2. **Mandatory Audit Manifest & Reconciliation Gate Invariant**:
-   - The orchestrator maintains a structured audit manifest (`AUDIT_MANIFEST.md` or JSON) in cloud context, populating persistent tracking IDs (`F-1`, `F-2`, ...) as findings and regressions are uncovered across Qwen's systematic exploration slices.
-   - **Zero-Tolerance Closure Gate**: Before declaring milestone completion or executing git commits, the orchestrator must conduct an explicit reconciliation pass against the manifest. 100% of findings must be verified and cataloged as `[RESOLVED: commit_sha / verified_slice]`, `[DEFERRED: tracked_issue_id]`, or `[WONTFIX: technical_rationale]`. Committing or closing with forgotten or unaddressed findings trips an immediate milestone failure.
+   - Run the full authoritative test suite (`npm run test:all --prefix mcp-qwen`, 61 suites) and build validation before concluding the milestone.
+2. **Milestone Verification Gate**:
+   - Before declaring milestone completion or executing git commits, verify all changes against active test suites and ensure no regressions were introduced.
+   - Confirm all requirements for the active milestone are fully verified with verifiable test evidence.
 3. **Mandatory Git Protocol**:
    - Inspect `git status` prior to and following modifications.
    - Produce clean, conventional atomic git commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`) and push to remote tracking branches.
@@ -178,10 +174,11 @@ Use these explicit schema definitions directly for all lazy-loaded `qwen38-local
 - **`timeout_ms`** (number, optional): Task timeout in ms (default 14,400,000ms / 4 hours, min 600,000ms).
 
 ### `qwen_task` (Background Task & Telemetry Management)
-- **`action`** (string, required): `"status"` | `"cancel"` | `"kill"` (alias for cancel) | `"cancel_all"` | `"list"`.
-- **`task_id`** (string, optional): Target task ID (required for `"status"`, optional for `"cancel"`/`"kill"`).
+- **`action`** (string, required): `"status"` | `"cancel"` | `"kill"` (alias for cancel) | `"cancel_all"` | `"list"` | `"stats"` | `"extend_lease"`.
+- **`task_id`** (string, optional): Target task ID (required for `"status"` and `"extend_lease"`, optional for `"cancel"`/`"kill"`).
+- **`turns`** (number, optional): Additional turns to grant for `"extend_lease"` (default: 25).
+- **`reason`** (string, optional): Optional audit reason for lease extension.
 
 ### `qwen_server` (vLLM Engine Lifecycle)
 - **`action`** (string, required): `"status"` | `"start"` | `"stop"`.
 - **`force`** (boolean, optional): Force stop even if a task is actively executing (only on user request).
-
