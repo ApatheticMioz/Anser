@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { IS_WINDOWS, BOOT_TIMEOUT_MS } from "./config.js";
+import { IS_WINDOWS, BOOT_TIMEOUT_MS, ALLOW_ENGINE_INTERRUPT, IS_TEST_ENV } from "./config.js";
 import { wslDistro, wslHome, winHome, apiKeyCandidates } from "./platform.js";
 import { pidAlive } from "./semaphore.js";
 
@@ -262,6 +262,13 @@ function runWslCommandSync(cmd) {
       const out = wslCommandSyncRunner(cmd);
       return Buffer.isBuffer(out) ? out : Buffer.from(String(out ?? ""));
     } catch {
+      return Buffer.from("");
+    }
+  }
+  // ZERO ENGINE INTERRUPTION & TEST SAFETY INVARIANT:
+  // Tests are strictly forbidden from running real kill signals in WSL without explicit ALLOW_ENGINE_INTERRUPT=1.
+  if ((!ALLOW_ENGINE_INTERRUPT || IS_TEST_ENV || process.env.TEST_OFFLINE === "1") && !wslCommandSyncRunner) {
+    if (cmd.includes("kill") || cmd.includes("stop_server.sh") || cmd.includes("pkill")) {
       return Buffer.from("");
     }
   }

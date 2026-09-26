@@ -17,6 +17,7 @@ import {
   ENGINE_LOG_PATH,
   WEDGE_COUNTER_FILE,
   ALLOW_ENGINE_INTERRUPT,
+  IS_TEST_ENV,
 } from "./config.js";
 import { getApiKeySync, runWslCommand } from "./wsl_bridge.js";
 import { streamProxyPath } from "./platform.js";
@@ -350,7 +351,7 @@ export async function engineWedgeState() {
 }
 
 export async function healWedgedEngine(statsAgeSec) {
-  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1")) {
+  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
     return { healed: false, note: "heal refused: engine interruption disabled by default (ALLOW_ENGINE_INTERRUPT unset)" };
   }
   // HEAL BACKSTOP: refuse to stop/reboot the engine while live work is in
@@ -649,7 +650,7 @@ export async function ensureServerRunning() {
 }
 
 export async function stopServer() {
-  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1")) {
+  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
     return {
       stopped: false,
       reason: "stop_refused_offline_protected",

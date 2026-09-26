@@ -152,11 +152,9 @@ export const TASK_RETENTION_MS = (() => {
 // status:"running", dead ownerPid, no terminal event) stays "running" forever
 // and misleads every later probe. The liveness reaper (reapOrphans) reaps a
 // not-done task only when BOTH its heartbeat is older than this window AND its
-// owner pid is dead. Default 1h (3_600_000ms) is well above any legitimate
-// inter-heartbeat gap (the slot heartbeat is 15s) yet short enough to clear a
-// mid-session death within the retention cadence. Overridable via
-// QWEN_ORPHAN_REAP_STALE_MS for tests / operators.
-export const DEFAULT_ORPHAN_REAP_STALE_MS = 20_000; // 20s (clears dead-PID crashes fast while honoring the 15s heartbeat window)
+// owner pid is dead. Default 10m (600_000ms) protects against long reasoning turns,
+// web fetches, or heavy compiler runs. Overridable via QWEN_ORPHAN_REAP_STALE_MS.
+export const DEFAULT_ORPHAN_REAP_STALE_MS = 600_000; // 10m
 export const ORPHAN_REAP_STALE_MS = (() => {
   const parsed = parseInt(process.env.QWEN_ORPHAN_REAP_STALE_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ORPHAN_REAP_STALE_MS;
@@ -173,7 +171,27 @@ export const SLOT_HEARTBEAT_MS = 15_000;
 export const SLOT_WEDGED_MS = 300_000;
 export const SLOT_POLL_MS = 1_000;
 
+export const IS_TEST_ENV = Boolean(
+  process.env.NODE_ENV === "test" ||
+  process.env.TEST_OFFLINE === "1" ||
+  (process.env.npm_lifecycle_event && process.env.npm_lifecycle_event.includes("test")) ||
+  process.argv.some((arg) => typeof arg === "string" && (arg.endsWith(".test.js") || arg.includes(".test.") || arg === "--test"))
+);
+
+if (IS_TEST_ENV && process.env.NODE_ENV !== "test") {
+  process.env.NODE_ENV = "test";
+}
+
 export const QWEN_STATE_DIR = process.env.QWEN_STATE_DIR || (() => {
+  // CRITICAL TEST ISOLATION INVARIANT:
+  // When running in ANY test environment, QWEN_STATE_DIR MUST NEVER default to production ~/.qwen!
+  // It automatically allocates an isolated temporary scratchpad so tests can NEVER touch,
+  // read, cancel, or reap real user tasks or processes.
+  if (IS_TEST_ENV) {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen_test_state_"));
+    process.env.QWEN_STATE_DIR = testDir;
+    return testDir;
+  }
   if (IS_WINDOWS) return path.join(os.homedir(), ".qwen");
   const winHomeWslPath = winHomeWsl();
   if (winHomeWslPath) {
@@ -539,5 +557,12 @@ export const CONTEXT_HIGH_WATERMARK_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_CONTEXT_HIGH_WATERMARK_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_HIGH_WATERMARK_TOKENS;
 })();
+
+export const DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS = 215000;
+export const CONTEXT_EMERGENCY_CEILING_TOKENS = (() => {
+  const parsed = parseInt(process.env.QWEN_CONTEXT_EMERGENCY_CEILING_TOKENS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS;
+})();
+
 
 

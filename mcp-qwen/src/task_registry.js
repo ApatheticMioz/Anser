@@ -59,6 +59,8 @@ export function saveTaskToDisk(task) {
       lastActivityPreview: task.lastActivityPreview ? String(task.lastActivityPreview).slice(-SUPERVISOR_PREVIEW_CHARS) : "",
       fileOps: task.fileOps || [],
       toolCallsCount: task.toolCallsCount || 0,
+      toolOpsSummary: task.toolOpsSummary || { reads: 0, mutations: 0, commands: 0, web: 0 },
+      lastTool: task.lastTool || null,
       result: task.result || null,
       stderr: task.stderr ? task.stderr.slice(-2000) : "",
     };
@@ -107,19 +109,26 @@ export function markTaskOrphanedOnDisk(diskTask) {
   diskTask.finishedAt = Date.now();
   diskTask.result = {
     isError: true,
-    text: `Task orphaned: worker process (PID ${diskTask.ownerPid || "unknown"}) exited unexpectedly before completion.`,
+    text: `Task orphaned: worker process (PID ${diskTask.ownerPid || process.pid || "unknown"}) exited unexpectedly before completion.`,
     toolCalls: diskTask.toolCallsCount || 0,
     errors: ["WORKER_PROCESS_TERMINATED"],
     fileOps: diskTask.fileOps || [],
   };
   saveTaskToDisk(diskTask);
-  // Orphaned tasks must leave a terminal trace in the session event log.
-  // Without this, a session killed by an external process-tree death (the MCP
-  // server instance dying and taking its child runner with it) ends with NO
-  // session_end/session_error — undetectable after the fact except by absence
-  // (verified in production: session pattern_test_s1, 2026-09-11 10:12:47Z).
-  // Append a single-line terminal event so the silent infra death is detectable.
   appendOrphanTerminalEvent(diskTask);
+
+  // Clean up in-memory task handles and execution slot immediately
+  const mem = tasks.get(diskTask.id);
+  if (mem) {
+    if (mem.abortController) {
+      try { mem.abortController.abort(); } catch {}
+      mem.abortController = null;
+    }
+    if (mem.slot) {
+      try { releaseTaskSlot(mem.slot); } catch {}
+      mem.slot = null;
+    }
+  }
   return diskTask;
 }
 
@@ -289,6 +298,7 @@ export function listTasksFromDisk() {
     // swallowed that failure, so these orphans accumulated forever). The tmp
     // lifetime is sub-second, so the same mtime age gate reaps them.
     const isTmpOrphan = /^task_.*\.json\.tmp_\d+_\d+$/.test(f);
+    if (!f.startsWith("task_")) continue;
     if (!f.endsWith(".json") && !isTmpOrphan) continue;
     const filePath = path.join(TASK_DIR, f);
     let stat;
@@ -391,8 +401,10 @@ export function reapOrphans() {
     if (task.status !== "running" && task.status !== "queued") continue;
     const lastActive = task.lastHeartbeatAt || task.startedAt || task.createdAt;
     if (!lastActive || now - lastActive <= ORPHAN_REAP_STALE_MS) continue; // fresh: leave it
-    // LIVE-OWNER INVARIANT: never reap a task whose owner is alive.
-    if (task.ownerPid && pidAlive(task.ownerPid, task.ownerPlatform)) continue;
+    // LIVE-OWNER INVARIANT: never reap an in-memory task whose owner is alive.
+    const ownerPid = task.ownerPid || process.pid;
+    const ownerPlatform = task.ownerPlatform || process.platform;
+    if (pidAlive(ownerPid, ownerPlatform)) continue;
     markTaskOrphanedOnDisk(task);
     reaped++;
   }
@@ -521,11 +533,14 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
     }
   }
 
-  // 2. Cancel disk tasks
-  // P15: collect the session ids of the disk tasks we cancel here.
+  // 2. Cancel disk tasks (only this process's own tasks or dead owners' tasks)
   const diskSessionIds = new Set();
   for (const diskTask of listTasksFromDisk()) {
     if (!diskTask.done) {
+      // LIVE-OWNER INVARIANT: Never cancel or kill tasks owned by another living process.
+      if (diskTask.ownerPid && diskTask.ownerPid !== process.pid && pidAlive(diskTask.ownerPid, diskTask.ownerPlatform)) {
+        continue;
+      }
       diskTask.status = "cancelled";
       diskTask.done = true;
       diskTask.isError = true;

@@ -18,6 +18,7 @@ import {
   ALLOW_ENGINE_INTERRUPT,
   BASE_TURN_BUDGET,
   MAX_ELASTIC_TURNS,
+  IS_TEST_ENV,
 } from "./config.js";
 import {
   normalizeWorkspacePath,
@@ -221,6 +222,18 @@ export function registerTools(server) {
         };
       }
       const resolvedSession = resolveSessionId(workingDir, session_id);
+
+      if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && IS_TEST_ENV)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `[offline_protected] task dispatch accepted without engine execution for prompt (${prompt.length} chars)`,
+            },
+          ],
+          isError: false,
+        };
+      }
 
       const { taskId, taskEntry, executionPromise, totalTimeoutMs } = startAnserTask({
         cwd: workingDir,
@@ -552,16 +565,42 @@ export function registerTools(server) {
             isError: false,
           };
         }
+        const lastActiveSec = task.lastHeartbeatAt
+          ? Math.max(0, Math.round((Date.now() - task.lastHeartbeatAt) / 1000))
+          : null;
+        const livenessStr = lastActiveSec !== null ? `${lastActiveSec}s ago` : "active";
+
+        const ops = task.toolOpsSummary || {
+          reads: 0,
+          mutations: 0,
+          commands: 0,
+          web: 0,
+        };
+        const opsSummary = `reads: ${ops.reads}, mutations: ${ops.mutations}, commands: ${ops.commands}${ops.web > 0 ? `, web: ${ops.web}` : ""}`;
+
+        let lastActionDetail = "";
+        if (task.lastTool?.name) {
+          lastActionDetail = `\n- Last action: \`${task.lastTool.name}\`${task.lastTool.summary ? ` (\`${task.lastTool.summary}\`)` : ""} (${livenessStr})`;
+        } else {
+          lastActionDetail = `\n- Last heartbeat: ${livenessStr}`;
+        }
+
         const budgetInfo = `budget: ${task.budgetTurns || BASE_TURN_BUDGET} turns (extensions: ${task.leaseExtensionsCount || 0})`;
         let activityBlock = "";
         if (task.lastActivityPreview) {
           activityBlock = `\n\nRecent Activity Preview:\n> ${task.lastActivityPreview.replace(/\n/g, "\n> ")}`;
         }
+
+        let steeringAdvisory = "";
+        if (ops.commands >= 4 && ops.mutations === 0) {
+          steeringAdvisory = `\n\n> [!NOTE]\n> Consecutive shell commands observed without mutations. The coworker may be running exploration, diagnostics, or test suites.`;
+        }
+
         return {
           content: [
             {
               type: "text",
-              text: `Task \`${task_id}\` is actively EXECUTING (${elapsedS}s elapsed, ${task.toolCallsCount || 0} tool calls made, ${budgetInfo}).${activityBlock}${hint}`,
+              text: `Task \`${task_id}\` is actively EXECUTING (${elapsedS}s elapsed, ${task.toolCallsCount || 0} tool calls made [${opsSummary}], ${budgetInfo}).${lastActionDetail}${activityBlock}${steeringAdvisory}${hint}`,
             },
           ],
           isError: false,
@@ -839,13 +878,13 @@ export function registerTools(server) {
         };
       }
       if (action === "stop") {
-        if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && process.env.NODE_ENV === "test")) {
+        if (!ALLOW_ENGINE_INTERRUPT || IS_TEST_ENV || process.env.TEST_OFFLINE === "1") {
           return {
             content: [
               {
                 type: "text",
                 text: JSON.stringify(
-                  { stopped: false, reason: "stop_refused_offline_protected", note: "offline_protected: stop refused without ALLOW_ENGINE_INTERRUPT=1" },
+                  { stopped: false, reason: "stop_refused_offline_protected", note: "stop refused: engine interruption disabled by default (requires ALLOW_ENGINE_INTERRUPT=1 and explicit user approval)" },
                   null,
                   2
                 ),

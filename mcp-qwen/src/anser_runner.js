@@ -31,6 +31,20 @@ import { AnserRunner } from "./harness/runner.js";
 import { injectSkills } from "./skills.js";
 import { recordTaskResult } from "./telemetry.js";
 
+const READ_TOOLS = new Set(["read_file", "list_dir", "search_code", "ast_search"]);
+const MUTATION_TOOLS = new Set([
+  "write_file",
+  "edit_file",
+  "apply_patch",
+  "ast_replace",
+  "ast_replace_batch",
+  "evo_propose_candidate",
+  "evo_select_candidate",
+  "evo_revert_candidate",
+]);
+const COMMAND_TOOLS = new Set(["bash"]);
+const WEB_TOOLS = new Set(["web_search", "web_fetch"]);
+
 /**
  * Pure predicate: does a runner status represent a successful task completion?
  *
@@ -199,6 +213,8 @@ export function startAnserTask({
     cwd,
     prompt,
     reasoningEffort: effectiveReasoningEffort,
+    ownerPid: process.pid,
+    ownerPlatform: process.platform,
     createdAt: Date.now(),
     startedAt: null,
     finishedAt: null,
@@ -207,6 +223,8 @@ export function startAnserTask({
     budgetTurns: BASE_TURN_BUDGET,
     leaseExtensionsCount: 0,
     lastActivityPreview: "",
+    toolOpsSummary: { reads: 0, mutations: 0, commands: 0, web: 0 },
+    lastTool: null,
     streamBytes: 0,
     streamTail: "",
     status: "queued",
@@ -286,6 +304,16 @@ export function startAnserTask({
       taskEntry.abortController = abortController;
 
       const maxTurnsVal = taskEntry.budgetTurns || MAX_TURNS || BASE_TURN_BUDGET;
+      const heartbeatTimer = setInterval(() => {
+        if (taskEntry.done) {
+          clearInterval(heartbeatTimer);
+          return;
+        }
+        taskEntry.lastHeartbeatAt = Date.now();
+        saveTaskToDisk(taskEntry);
+      }, 5_000);
+      heartbeatTimer.unref();
+
       try {
         const runResult = await runner.run({
           prompt: finalTaskPrompt,
@@ -318,6 +346,27 @@ export function startAnserTask({
           onToolCall: (tc) => {
             taskEntry.toolCallsCount = (taskEntry.toolCallsCount || 0) + 1;
             taskEntry.fileOps.push(`${tc.name}:${tc.args?.path || ""}`);
+            if (!taskEntry.toolOpsSummary) {
+              taskEntry.toolOpsSummary = { reads: 0, mutations: 0, commands: 0, web: 0 };
+            }
+            if (READ_TOOLS.has(tc.name)) taskEntry.toolOpsSummary.reads++;
+            else if (MUTATION_TOOLS.has(tc.name)) taskEntry.toolOpsSummary.mutations++;
+            else if (COMMAND_TOOLS.has(tc.name)) taskEntry.toolOpsSummary.commands++;
+            else if (WEB_TOOLS.has(tc.name)) taskEntry.toolOpsSummary.web++;
+
+            let argSummary = "";
+            if (tc.args?.path) argSummary = String(tc.args.path);
+            else if (tc.args?.command) argSummary = String(tc.args.command).replace(/[\r\n]+/g, " ").slice(0, 80);
+            else if (tc.args?.query) argSummary = String(tc.args.query).slice(0, 60);
+            else if (tc.args?.url) argSummary = String(tc.args.url).slice(0, 60);
+
+            taskEntry.lastTool = {
+              name: tc.name,
+              summary: argSummary,
+              timestamp: Date.now(),
+            };
+            taskEntry.lastActivityAt = Date.now();
+            taskEntry.lastHeartbeatAt = Date.now();
             saveTaskToDisk(taskEntry);
           },
         });
@@ -391,6 +440,8 @@ export function startAnserTask({
         saveTaskToDisk(taskEntry);
         notifyWaiters(taskEntry);
         return taskEntry.result;
+      } finally {
+        clearInterval(heartbeatTimer);
       }
     },
     taskEntry,

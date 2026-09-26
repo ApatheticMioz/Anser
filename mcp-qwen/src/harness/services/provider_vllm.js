@@ -264,6 +264,7 @@ export class VllmProviderService {
     const reader = response.body.getReader();
     let buffer = "";
     let fullContent = "";
+    let fullReasoning = "";
     let finishReason = null;
     let ttft = null;
     let completionTokens = 0;
@@ -422,6 +423,7 @@ export class VllmProviderService {
                     : null;
               if (reasoningText && reasoningText.length > 0) {
                 hadReasoning = true;
+                fullReasoning += reasoningText;
                 // ~chars/4 is a reasonable token estimate for thinking text.
                 reasoningTokens += Math.max(1, Math.round(reasoningText.length / 4));
               }
@@ -563,6 +565,7 @@ export class VllmProviderService {
 
     return {
       content: fullContent,
+      reasoning: fullReasoning,
       toolCalls,
       finishReason: effectiveFinish,
       metrics,

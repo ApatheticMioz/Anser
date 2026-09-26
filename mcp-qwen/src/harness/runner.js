@@ -38,6 +38,7 @@ import {
   SESSION_TURNS_RECOMMEND,
   CONTEXT_WARN_TOKENS,
   CONTEXT_HIGH_WATERMARK_TOKENS,
+  CONTEXT_EMERGENCY_CEILING_TOKENS,
   PROMPT_BUDGET_CHARS,
   BASE_TURN_BUDGET,
   MAX_ELASTIC_TURNS,
@@ -93,8 +94,8 @@ You pair with the Lead Architect (Gemini in Antigravity / GLM in Claude Code) as
 Operating Principles:
 1. Peer Partnership & Two-Way Discussion:
    - You are an autonomous engineering peer, not a blind batch executor. Discussion and collaborative alignment from both sides is the foundational operating principle.
-   - Never treat a dispatch as "life or death" where you must silently force code to pass at all costs.
-   - When an empirical test fails an acceptance gate, when requirements are ambiguous, or when multiple technical paths exist, DO NOT loop in solitary trial-and-error.
+   - Autonomous Slicing on Clear Tasks: When objectives and acceptance criteria are clearly defined, execute the complete slice (investigate, modify, verify) autonomously across your toolset without micro-confirmations.
+   - Collaborative Pause on Ambiguity or Impasse: Never treat a dispatch as "life or death" where you must silently force solutions at all costs. When an empirical test fails an acceptance gate, when requirements are ambiguous, or when multiple paths exist, DO NOT loop in solitary trial-and-error.
    - State your verified findings concisely, present the concrete trade-offs or root causes, and provide your technical recommendation to the Lead Architect in plain text. Concluding your turn with a clear, grounded inquiry or status report IS successful fulfillment of the turn.
 2. Ground Truth in Code & Tests:
    - Ground truth lives exclusively in active source code, test suites, and verifiable build artifacts. Never assume or hallucinate.
@@ -364,6 +365,9 @@ export class AnserRunner {
     let sessionRecommendLatched = false;
     let contextDepthLatched = false;
     let contextHighWatermarkLatched = false;
+    let contextEmergencyCeilingLatched = false;
+    let contextEmergencySynthesisEmitted = false;
+    let lastPromptTokens = 0;
 
     // --- M7 (P2, F1/F2): dispatch prompt-budget telemetry ------------------
     // The audit's failure cluster (27/45 dispatches over budget; monolithic
@@ -397,24 +401,37 @@ export class AnserRunner {
 
         const currentMaxTurns = typeof getDynamicBudget === "function" ? getDynamicBudget() : (maxTurns || BASE_TURN_BUDGET);
 
+        if (contextEmergencySynthesisEmitted && continuationsInjected === 0) {
+          status = "completed_budget_exhausted";
+          break;
+        }
+
         if (currentMaxTurns && turnsTaken >= currentMaxTurns && continuationsInjected === 0) {
           status = finalText.trim() !== "" ? "completed_budget_exhausted" : "turn_limit_reached";
           break;
         }
 
-        // Cooperative landing: on the final turn before currentMaxTurns, strip tools and mandate synthesis.
-        // If a length cutoff occurs on the ceiling turn, isCeilingTurn remains active across continuations.
+        // Cooperative landing: on the final turn before currentMaxTurns OR when context emergency ceiling is latched,
+        // strip tools and mandate synthesis.
         const isCeilingTurn = Boolean(
+          contextEmergencyCeilingLatched ||
           (currentMaxTurns && currentMaxTurns > 1 && turnsTaken === currentMaxTurns - 1) ||
           (currentMaxTurns && turnsTaken >= currentMaxTurns && continuationsInjected > 0)
         );
         if (isCeilingTurn && continuationsInjected === 0) {
+          if (contextEmergencyCeilingLatched) {
+            contextEmergencySynthesisEmitted = true;
+          }
+          const synthesisPrompt = contextEmergencyCeilingLatched
+            ? `[Emergency Context Landing (${lastPromptTokens || "215,000+"}/245,760 tokens)]: Context space is near capacity. Tools are now disabled to prevent an unhandled engine crash. Synthesize your final deliverable, findings, code changes, and grounded conclusions immediately.`
+            : `[Dispatch Budget Notice (${turnsTaken + 1}/${currentMaxTurns})]: You have reached the final turn of your allotted budget for this dispatch. Synthesize your final deliverable, findings, code changes, and grounded conclusions immediately based on the facts gathered so far.`;
+
           messages.push({
             role: "user",
-            content: `[MANDATORY SYNTHESIS - TURN CEILING REACHED (${turnsTaken + 1}/${currentMaxTurns})]: You have reached the maximum allowed turns for this dispatch. All tools are now disabled. Synthesize your final deliverable, findings, code changes, and grounded conclusions immediately based on the facts gathered so far.`,
+            content: synthesisPrompt,
           });
           logger.append({
-            type: "turn_ceiling_synthesis",
+            type: contextEmergencyCeilingLatched ? "context_emergency_synthesis" : "turn_ceiling_synthesis",
             turnsTaken: turnsTaken + 1,
             maxTurns: currentMaxTurns,
           });
@@ -558,6 +575,14 @@ export class AnserRunner {
               backoffMs,
               ...deathContext,
             });
+            // If the model completed deliberation inside thinking tags but omitted visible content or tool calls,
+            // prompt it directly to emit its conclusion instead of repeating the identical prompt.
+            if (isEmptyStop && (turnResult.hadReasoning || (turnResult.reasoning && turnResult.reasoning.trim()))) {
+              messages.push({
+                role: "user",
+                content: "You concluded your internal deliberation without emitting a response or tool call. Please output your conclusion or next action directly now.",
+              });
+            }
             await new Promise((r) => setTimeout(r, backoffMs));
             continue;
           }
@@ -679,6 +704,10 @@ export class AnserRunner {
           });
         }
 
+        if (typeof turnResult.metrics?.promptTokens === "number") {
+          lastPromptTokens = turnResult.metrics.promptTokens;
+        }
+
         // --- Context High-Watermark Advisory (180,000 tokens) ---------------
         // When promptTokens reaches the 180k high-watermark (~73% of nominal 245K
         // context ceiling), emit a one-shot advisory event and inject an in-band
@@ -702,6 +731,23 @@ export class AnserRunner {
               `(high-watermark: ${CONTEXT_HIGH_WATERMARK_TOKENS}, max ceiling: 245,760). ` +
               `Wrap up your deliverable and return your final response now. ` +
               `Advise the user/orchestrator to roll into a fresh session_id for subsequent dispatches to prevent context exhaustion.`,
+          });
+        }
+
+        // --- Context Emergency Ceiling Latch (215,000 tokens) ----------------
+        // When promptTokens approaches the 245K ceiling (~87%), strip tools on the
+        // subsequent turn to trigger emergency synthesis and prevent an unhandled
+        // context_exhausted crash.
+        if (
+          !contextEmergencyCeilingLatched &&
+          typeof turnResult.metrics?.promptTokens === "number" &&
+          turnResult.metrics.promptTokens >= CONTEXT_EMERGENCY_CEILING_TOKENS
+        ) {
+          contextEmergencyCeilingLatched = true;
+          logger.append({
+            type: "context_emergency_ceiling",
+            promptTokens: turnResult.metrics.promptTokens,
+            threshold: CONTEXT_EMERGENCY_CEILING_TOKENS,
           });
         }
 

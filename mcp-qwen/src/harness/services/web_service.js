@@ -17,9 +17,52 @@ import { getSearchConfig } from "../../config.js";
 export const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Anser/2026.1";
 
-export const MAX_FETCH_CHARS = 60_000;
+export const DEFAULT_MAX_FETCH_CHARS = 24_000;
+export const MAX_FETCH_CHARS = (() => {
+  const parsed = parseInt(process.env.QWEN_MAX_FETCH_CHARS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_FETCH_CHARS;
+})();
 export const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
 export const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
+
+const NOISE_JSON_KEYS = new Set([
+  "avatar_url",
+  "gravatar_id",
+  "node_id",
+  "followers_url",
+  "following_url",
+  "gists_url",
+  "starred_url",
+  "subscriptions_url",
+  "organizations_url",
+  "repos_url",
+  "events_url",
+  "received_events_url",
+  "site_admin",
+  "user_view_type",
+  "reactions",
+]);
+
+export function pruneJsonPayload(val, depth = 0) {
+  if (depth > 8) return val;
+  if (Array.isArray(val)) {
+    const maxItems = 30;
+    const pruned = val.slice(0, maxItems).map((item) => pruneJsonPayload(item, depth + 1));
+    if (val.length > maxItems) {
+      pruned.push({ _notice: `...[${val.length - maxItems} additional items omitted for context efficiency]...` });
+    }
+    return pruned;
+  }
+  if (val && typeof val === "object") {
+    const res = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (NOISE_JSON_KEYS.has(k)) continue;
+      res[k] = pruneJsonPayload(v, depth + 1);
+    }
+    return res;
+  }
+  return val;
+}
 
 // Leaky-bucket serialization queue for DuckDuckGo unauthenticated requests
 let lastDdgRequestTime = 0;
@@ -371,10 +414,11 @@ export class WebService {
 
     const contentType = (response.headers.get("content-type") || "").toLowerCase();
 
-    // 1. JSON handling
+    // 1. JSON handling (with automatic token distillation)
     if (contentType.includes("application/json")) {
       const data = await response.json();
-      const jsonStr = JSON.stringify(data, null, 2);
+      const distilled = pruneJsonPayload(data);
+      const jsonStr = JSON.stringify(distilled, null, 2);
       const truncated = jsonStr.length > max_chars ? jsonStr.slice(0, max_chars) + "\n...[truncated]" : jsonStr;
       return {
         url: parsedUrl.href,

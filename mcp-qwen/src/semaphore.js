@@ -35,11 +35,14 @@ export function pidAlive(pid, platform = process.platform) {
   if (IS_WINDOWS && platform === "linux") {
     try {
       execFileSync("wsl.exe", ["-d", wslDistro(), "--", "kill", "-0", String(pid)], {
-        timeout: 3000,
+        timeout: 10000,
         stdio: "ignore",
       });
       return true;
-    } catch {
+    } catch (err) {
+      // Conservative: a probe timeout (ETIMEDOUT) indicates heavy WSL/host load,
+      // NOT process death. Never falsely declare a live worker orphaned on timeout.
+      if (err && (err.code === "ETIMEDOUT" || err.signal === "SIGTERM")) return true;
       return false;
     }
   }
@@ -48,11 +51,14 @@ export function pidAlive(pid, platform = process.platform) {
   if (!IS_WINDOWS && platform === "win32") {
     try {
       execFileSync("powershell.exe", ["-NoProfile", "-Command", `Get-Process -Id ${pid}`], {
-        timeout: 3000,
+        timeout: 10000,
         stdio: "ignore",
       });
       return true;
-    } catch {
+    } catch (err) {
+      // Conservative: a probe timeout (ETIMEDOUT) indicates heavy host load,
+      // NOT process death. Never falsely declare a live worker orphaned on timeout.
+      if (err && (err.code === "ETIMEDOUT" || err.signal === "SIGTERM")) return true;
       return false;
     }
   }
@@ -102,7 +108,20 @@ export function leaseReclaimable(lease) {
   if (!lease) return true; // unreadable = crashed mid-write
   // If the claiming process is dead, reclaim the slot immediately
   if (!pidAlive(lease.pid, lease.platform)) return true;
-  // LIVE PROCESS INVARIANT: A live process's lease is NEVER reclaimable!
+  // If the lease is tied to a task that has reached a terminal state (done: true),
+  // it is an orphaned zombie lease — reclaim it immediately regardless of owner liveness.
+  if (lease.taskId) {
+    try {
+      const taskFile = path.join(TASK_DIR, `${lease.taskId}.json`);
+      if (fs.existsSync(taskFile)) {
+        const diskTask = JSON.parse(fs.readFileSync(taskFile, "utf8"));
+        if (diskTask && diskTask.done) {
+          return true;
+        }
+      }
+    } catch {}
+  }
+  // LIVE PROCESS INVARIANT: A live process's lease running an active task is NEVER reclaimable!
   // Prevents dual-generation collisions on the MAX_SEQS=1 engine during long tasks.
   return false;
 }
@@ -165,10 +184,13 @@ export async function acquireTaskSlot(taskEntry) {
           fs.closeSync(fd);
           const refresh = setInterval(() => {
             try {
+              if (taskEntry && taskEntry.done) {
+                clearInterval(refresh);
+                return;
+              }
               const cur = readLease(file);
-              // If someone stole our lease (>5min stall), stop refreshing; release
-              // will refuse to unlink a lease we no longer own.
-              if (cur && cur.pid !== process.pid) {
+              // Stop refreshing if lease was deleted, stolen by another process, or assigned to a different task
+              if (!cur || cur.pid !== process.pid || (cur.taskId && taskEntry?.id && cur.taskId !== taskEntry.id)) {
                 clearInterval(refresh);
                 return;
               }
@@ -298,7 +320,7 @@ export function clearReclaimableTaskSlots() {
       for (const f of fs.readdirSync(SLOTS_DIR)) {
         if (!f.startsWith("slot_") || !f.endsWith(".json")) continue;
         const lease = readLease(path.join(SLOTS_DIR, f));
-        if (lease && lease.pid !== process.pid && pidAlive(lease.pid)) continue;
+        if (lease && !leaseReclaimable(lease)) continue;
         fs.rmSync(path.join(SLOTS_DIR, f), { force: true });
       }
     }

@@ -187,8 +187,8 @@ await checkAsync("AnserRunner strips tools and mandates synthesis on ceiling tur
   const finalMessages = messagesSeen[3];
   const lastUserMsg = finalMessages.filter((m) => m.role === "user").slice(-1)[0];
   assert.ok(
-    lastUserMsg.content.includes("[MANDATORY SYNTHESIS - TURN CEILING REACHED (4/4)]"),
-    "mandatory synthesis prompt must be injected into user messages"
+    lastUserMsg.content.includes("[Dispatch Budget Notice (4/4)]"),
+    "dispatch budget notice must be injected into user messages"
   );
 
   // Assert logger recorded turn_ceiling_synthesis event
