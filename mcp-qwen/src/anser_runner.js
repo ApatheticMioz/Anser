@@ -408,7 +408,7 @@ export function startAnserTask({
           isError: !isSuccess,
           text: resultText,
           toolCalls: taskEntry.toolCallsCount,
-          fileOps: taskEntry.fileOps,
+          fileOps: (taskEntry.fileOps || []).slice(-5),
           durationMs: runResult.durationMs,
         };
         try {

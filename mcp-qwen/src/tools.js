@@ -310,34 +310,12 @@ export function registerTools(server) {
 
       const responseText = [
         `### Qwen Task Dispatched (Background Execution)`,
-        `- **Task ID**: \`${taskId}\``,
-        `- **Session**: \`${resolvedSession}\``,
+        `- **Task ID**: \`${taskId}\` | **Session**: \`${resolvedSession}\` | **Status**: \`${taskStatus}\``,
         `- **Working Directory**: \`${workingDir}\``,
-        `- **Status**: \`${taskStatus}\``,
-        `- **Time Elapsed**: ${elapsedSec}s (Task continuing in background with ${Math.round(totalTimeoutMs / 60000)} min budget)`,
-        `- **Unified Event Ledger**:`,
-        `  - Windows: \`${sessionEventsWin}\``,
-        `  - WSL: \`${sessionEventsWsl}\``,
-        `- **Task State File**:`,
-        `  - Windows: \`${taskFileWin}\``,
-        `  - WSL: \`${taskFileWsl}\``,
-        ``,
-        statusCallout,
-        ``,
-        `> **Zero-Turn Reactive Wait Commands (Blocks at $0 until task completes)**:`,
-        `> - **Windows (PowerShell / CMD)**:`,
-        `\`\`\`powershell`,
-        `${waitCmdWin}`,
-        `\`\`\``,
-        `> - **WSL / Linux (Bash)**:`,
-        `\`\`\`bash`,
-        `${waitCmdWsl}`,
-        `\`\`\``,
-        `> For extended background tasks, enforce decaying check-ins via bounded wait windows (\`--max-time 3000\` -> \`1800\` -> \`900\` -> \`300\`).`,
-        `> **Chain Invariant**: When chaining sequential task waits, always use \`&&\` (stop on error), never \`;\`.`,
-        ``,
-        `Or inspect status via tool: \`qwen_task(action: "status", task_id: "${taskId}")\`.`,
-      ];
+        statusCallout ? `${statusCallout}` : null,
+        `- **Wait Command**: \`${waitCmdWin}\` (WSL: \`${waitCmdWsl}\`)`,
+        `- **Status Command**: \`qwen_task(action: "status", task_id: "${taskId}")\``,
+      ].filter(Boolean);
 
       return {
         content: [{ type: "text", text: responseText.join("\n") }],
@@ -393,12 +371,12 @@ export function registerTools(server) {
         action = "cancel";
       }
       if (action === "stats") {
-        const { summary, stats } = formatTelemetrySummary();
+        const { summary } = formatTelemetrySummary();
         return {
           content: [
             {
               type: "text",
-              text: `${summary}\n\n${JSON.stringify(stats, null, 2)}`,
+              text: summary,
             },
           ],
         };
@@ -410,6 +388,7 @@ export function registerTools(server) {
             id: dt.id,
             sessionId: dt.sessionId,
             status: dt.status,
+            createdAt: dt.createdAt,
             elapsed_s: Math.round(((dt.finishedAt || Date.now()) - dt.createdAt) / 1000),
             done: dt.done,
             isError: dt.isError,
@@ -420,16 +399,34 @@ export function registerTools(server) {
             id: t.id,
             sessionId: t.sessionId,
             status: t.status,
+            createdAt: t.createdAt,
             elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
             done: t.done,
             isError: t.isError,
           });
         }
+        const all = Array.from(merged.values());
+        const active = all.filter((t) => !t.done);
+        const completed = all.filter((t) => t.done);
+        completed.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        // Keep active tasks + 5 most recent completed tasks to prevent massive context bloat
+        const recentCompleted = completed.slice(0, 5);
+        const payloadTasks = [...active, ...recentCompleted].map(({ createdAt, ...rest }) => rest);
+
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ tasks: Array.from(merged.values()) }, null, 2),
+              text: JSON.stringify(
+                {
+                  tasks: payloadTasks,
+                  active_count: active.length,
+                  total_tasks: all.length,
+                  archived_completed: Math.max(0, completed.length - recentCompleted.length),
+                },
+                null,
+                2
+              ),
             },
           ],
         };
@@ -535,11 +532,7 @@ export function registerTools(server) {
         }
         const waitCmdWin = `curl.exe -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait`;
         const waitCmdWsl = `curl -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait`;
-        const hint = [
-          `\n\nWait Commands (blocks at $0 until task completes):`,
-          `- Windows: \`${waitCmdWin}\``,
-          `- WSL / Bash: \`${waitCmdWsl}\``,
-        ].join("\n");
+        const hint = `\n\nWait: \`${waitCmdWin}\` (WSL: \`${waitCmdWsl}\`)`;
 
         if (task.status === "queued") {
           const slotStatus = getSlotStatus(process.pid);
@@ -547,7 +540,7 @@ export function registerTools(server) {
           if (slotStatus.isAlienActive) {
             const alienPids = [...new Set(slotStatus.alienHolders.map((h) => h.pid))].join(", ");
             const alienTasks = slotStatus.alienHolders.map((h) => `\`${h.taskId}\``).join(", ");
-            queueDiagnosis = ` Qwen is currently executing tasks for another active session (tenant PID: ${alienPids}; active task: ${alienTasks}).\n\n> [!NOTE]\n> **DO NOT PANIC, CANCEL, OR RETRY.** The engine enforces single-tenant multi-slot exclusivity (up to 2 concurrent slots for the active session) to avoid GPU KV cache thrashing. Your task is queued and will execute automatically as soon as the active session yields.`;
+            queueDiagnosis = ` Qwen is currently executing tasks for another active session (tenant PID: ${alienPids}; active task: ${alienTasks}). Your task is queued and will execute automatically when the slot yields.`;
           } else if (slotStatus.isSameActive && slotStatus.isFullyOccupied) {
             const sameTasks = slotStatus.sameHolders.map((h) => `\`${h.taskId}\``).join(", ");
             queueDiagnosis = ` Both execution slots are actively running tasks from this session (${sameTasks}). Your task will run as soon as one completes.`;
@@ -588,7 +581,14 @@ export function registerTools(server) {
         const budgetInfo = `budget: ${task.budgetTurns || BASE_TURN_BUDGET} turns (extensions: ${task.leaseExtensionsCount || 0})`;
         let activityBlock = "";
         if (task.lastActivityPreview) {
-          activityBlock = `\n\nRecent Activity Preview:\n> ${task.lastActivityPreview.replace(/\n/g, "\n> ")}`;
+          const previewClean = String(task.lastActivityPreview)
+            .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text|exitCode|timedOut|latencyMs/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(-150);
+          if (previewClean) {
+            activityBlock = `\n- Activity: > ${previewClean}`;
+          }
         }
 
         let steeringAdvisory = "";

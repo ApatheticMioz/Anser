@@ -475,7 +475,7 @@ export function notifyWaiters(task) {
         .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
         .replace(/\s+/g, " ")
         .slice(-250),
-      fileOps: task.fileOps || [],
+      fileOps: (task.fileOps || []).slice(-5),
       toolCallsCount: task.toolCallsCount || 0,
       result: task.result || null,
     },
@@ -1014,7 +1014,7 @@ export const statusHttpServer = http.createServer(async (req, res) => {
             .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
             .replace(/\s+/g, " ")
             .slice(-250),
-          fileOps: task.fileOps || [],
+          fileOps: (task.fileOps || []).slice(-5),
           toolCallsCount: task.toolCallsCount || 0,
         },
         null,
