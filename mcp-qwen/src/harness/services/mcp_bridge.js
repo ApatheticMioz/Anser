@@ -1,36 +1,31 @@
 /**
  * Generic MCP Extension Bridge (Anser primary engine)
  *
- * Makes `extensions[]` first-class on the native engine.
+ * Makes `extensions[]` first-class on the native engine by porting onto the
+ * official `@modelcontextprotocol/sdk` Client and StdioClientTransport.
  *
- * `extensions[]` on a dispatch (e.g. `npx -y @upstash/context7-mcp`,
- * `uvx free-search-mcp`) is honored directly by the native engine: each spec
- * is normalized, its MCP server is spawned as a piped stdio child, and its
- * tools are registered on the Anser Context.
+ * `extensions[]` on a dispatch (e.g. custom user tools, domain APIs) is honored
+ * directly by the native engine: each spec is normalized, spawned via
+ * StdioClientTransport, connected via SDK Client, and its tools are registered
+ * on the Anser Context.
  *
- * This module:
- *   - Normalizes each extension spec (a string like "npx -y pkg" OR a
- *     structured { command, args, name }) into a uniform { command, args,
- *     serverName } shape.
- *   - Spawns each extension's MCP server as a piped stdio child through the
- *     platform spawn-profile helpers (buildSpawnProfile) so WSL/Windows stays
- *     abstract. NEVER shell-interpolated - argv arrays only.
- *   - Speaks JSON-RPC over stdio (newline-delimited): initialize ->
- *     notifications/initialized -> tools/list, then tools/call passthrough.
- *   - Registers each remote tool on the Anser Context with a namespaced name
- *     `ext_<server>_<tool>` (reversible via the kernel's disposers).
- *   - Teardown: dispose() kills every bridge child (process-tree kill) and
- *     unregisters the tools.
- *
- * Bounded by design: per-step timeouts (generous ~60s defaults for cold npx
- * downloads) and a per-server tool cap (default 64).
+ * Features:
+ *   - Normalizes each extension spec (string or { command, args, name }).
+ *   - Spawns each extension via StdioClientTransport and buildSpawnProfile
+ *     with Windows/WSL cross-platform path resolution. NEVER shell-interpolated.
+ *   - Speaks full modern MCP specification through `@modelcontextprotocol/sdk`.
+ *   - Registers each remote tool on Anser Context under `ext_<server>_<tool>`.
+ *   - Teardown: dispose() cleanly closes the Client and enforces process-tree
+ *     reaping (killProcessTreeSync) so zero child processes survive.
+ *   - Bounded timeouts (initTimeoutMs, callTimeoutMs) and per-server tool caps.
  */
 
-import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { IS_WINDOWS } from "../../config.js";
 import { buildSpawnProfile, resolveCommandPath } from "../../platform.js";
-import { killProcessTree } from "../../wsl_bridge.js";
+import { killProcessTree, killProcessTreeSync } from "../../wsl_bridge.js";
 
 const require = createRequire(import.meta.url);
 let PKG_VERSION = "0.0.0";
@@ -105,9 +100,8 @@ export function sanitizeName(s) {
  *   - a string like "npx -y @upstash/context7-mcp" or "uvx free-search-mcp"
  *   - a structured object { command, args, name? }
  *
- * When `targetInWsl` is set, the Windows `.cmd`/`.exe` suffixes and the
- * `context7@latest` alias are normalized so the spec is interpreted
- * identically inside WSL.
+ * When `targetInWsl` is set, Windows `.cmd`/`.exe` suffixes and aliases are
+ * normalized so the spec is interpreted cleanly inside WSL.
  *
  * @param {string|object} raw
  * @param {{ targetInWsl?: boolean }} [opts]
@@ -150,16 +144,15 @@ export function normalizeExtensionSpec(raw, { targetInWsl = false } = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * A single spawned MCP server child + its JSON-RPC state.
+ * A single spawned MCP server record + its SDK client state.
  */
 function makeServerRecord(spec) {
   return {
     spec,
     serverName: spec.serverName,
-    child: null,
-    pending: new Map(),
-    nextId: 0,
-    buffer: "",
+    client: null,
+    transport: null,
+    pid: null,
     stderr: "",
     toolDisposers: [],
     disposed: false,
@@ -228,12 +221,12 @@ export class McpBridge {
    * @returns {number[]}
    */
   getPids() {
-    return this.servers.map((s) => s.child?.pid).filter(Boolean);
+    return this.servers.map((s) => s.pid || s.transport?.pid).filter(Boolean);
   }
 
   /**
-   * Boot every extension, handshake, and register its tools on the Anser
-   * Context. Never throws: a bad spec or a failed handshake is logged to
+   * Boot every extension, handshake via MCP SDK, and register its tools on the
+   * Anser Context. Never throws: a bad spec or a failed handshake is logged to
    * stderr and skipped so it can never take down the dispatch.
    * @param {import("../core/kernel.js").Context} ctx
    */
@@ -263,7 +256,8 @@ export class McpBridge {
   }
 
   /**
-   * Spawn one extension, run the MCP handshake, and register its tools.
+   * Spawn one extension via SDK StdioClientTransport, run the MCP handshake,
+   * and register its tools on Context.
    * @param {import("../core/kernel.js").Context} ctx
    * @param {{ command: string, args: string[], serverName: string }} spec
    */
@@ -271,11 +265,6 @@ export class McpBridge {
     const server = makeServerRecord(spec);
     this.servers.push(server);
 
-    // P8 (orchestrator close-out): bare package runners (npx/uvx) are .cmd
-    // shims on Windows, which spawn() cannot resolve without a shell - and
-    // shell mode would break argv-array purity and stdio piping. Resolve the
-    // bare name to an absolute spawnable path via where/which first. WSL-mode
-    // dispatches resolve inside Linux and need nothing here.
     let command = spec.command;
     if (!this.targetInWsl && IS_WINDOWS) {
       command = resolveCommandPath(command) || command;
@@ -290,39 +279,58 @@ export class McpBridge {
       useCd: false,
     });
 
-    let child;
-    try {
-      child = spawn(profile.command, profile.args, profile.options);
-    } catch (err) {
-      throw new Error(`spawn failed: ${err.message}`);
-    }
-    server.child = child;
-
-    child.stdout.on("data", (chunk) => this._onData(server, chunk));
-    child.stderr.on("data", (chunk) => {
-      server.stderr += chunk.toString("utf8");
-      if (server.stderr.length > 20_000) server.stderr = server.stderr.slice(-20_000);
+    const transport = new StdioClientTransport({
+      command: profile.command,
+      args: profile.args,
+      env: profile.options.env,
+      cwd: profile.options.cwd,
+      stderr: "pipe",
     });
-    child.on("error", (err) => this._rejectAll(server, `spawn error: ${err.message}`));
-    child.on("close", () => this._rejectAll(server, "child closed before response"));
+    server.transport = transport;
 
-    // 1. initialize
-    await this._request(
-      server,
-      "initialize",
-      {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "mcp-qwen-bridge", version: PKG_VERSION },
-      },
-      this.initTimeoutMs
+    if (transport.stderr) {
+      transport.stderr.on("data", (chunk) => {
+        server.stderr += chunk.toString("utf8");
+        if (server.stderr.length > 20_000) server.stderr = server.stderr.slice(-20_000);
+      });
+    }
+
+    const client = new Client(
+      { name: "mcp-qwen-bridge", version: PKG_VERSION },
+      { capabilities: {} }
     );
+    server.client = client;
 
-    // 2. notifications/initialized (no response expected)
-    this._notify(server, "notifications/initialized", {});
+    // Timeout-bounded initialize handshake
+    let initTimer;
+    const timeoutPromise = new Promise((_, reject) => {
+      initTimer = setTimeout(() => {
+        reject(new Error(`MCP 'initialize' timed out after ${this.initTimeoutMs}ms`));
+      }, this.initTimeoutMs);
+    });
 
-    // 3. tools/list
-    const listResult = await this._request(server, "tools/list", {}, this.initTimeoutMs);
+    try {
+      await Promise.race([client.connect(transport), timeoutPromise]);
+    } finally {
+      clearTimeout(initTimer);
+      server.pid = transport.pid;
+    }
+
+    // Query tools/list with timeout
+    let listTimer;
+    const listTimeoutPromise = new Promise((_, reject) => {
+      listTimer = setTimeout(() => {
+        reject(new Error(`MCP 'tools/list' timed out after ${this.initTimeoutMs}ms`));
+      }, this.initTimeoutMs);
+    });
+
+    let listResult;
+    try {
+      listResult = await Promise.race([client.listTools(), listTimeoutPromise]);
+    } finally {
+      clearTimeout(listTimer);
+    }
+
     const tools = Array.isArray(listResult?.tools) ? listResult.tools : [];
     const capped = tools.slice(0, this.maxToolsPerServer);
     if (tools.length > capped.length) {
@@ -338,11 +346,10 @@ export class McpBridge {
         description: `[ext:${spec.serverName}] ${t.description || ""}`.trim(),
         parameters: t.inputSchema || { type: "object" },
         execute: async (args) => {
-          return this._request(
-            server,
-            "tools/call",
+          return client.callTool(
             { name: rawName, arguments: args || {} },
-            this.callTimeoutMs
+            undefined,
+            { timeout: this.callTimeoutMs }
           );
         },
       });
@@ -350,122 +357,41 @@ export class McpBridge {
     }
 
     process.stderr.write(
-      `[mcp-bridge] registered ${capped.length} tool(s) from '${spec.serverName}' (pid ${child.pid})\n`
+      `[mcp-bridge] registered ${capped.length} tool(s) from '${spec.serverName}' (pid ${server.pid || transport.pid})\n`
     );
   }
 
   /**
-   * Route an incoming newline-delimited JSON-RPC message to its pending
-   * request, if any.
-   * @param {object} server
-   * @param {Buffer} chunk
-   */
-  _onData(server, chunk) {
-    server.buffer += chunk.toString("utf8");
-    let idx;
-    while ((idx = server.buffer.indexOf("\n")) >= 0) {
-      const line = server.buffer.slice(0, idx).trim();
-      server.buffer = server.buffer.slice(idx + 1);
-      if (!line) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (msg.id !== undefined && server.pending.has(msg.id)) {
-        const { resolve, reject, timer } = server.pending.get(msg.id);
-        server.pending.delete(msg.id);
-        clearTimeout(timer);
-        if (msg.error) {
-          reject(new Error(msg.error.message || "JSON-RPC error"));
-        } else {
-          resolve(msg.result);
-        }
-      }
-    }
-  }
-
-  /**
-   * Send a JSON-RPC request and await its response, bounded by a timeout.
-   * @param {object} server
-   * @param {string} method
-   * @param {object} params
-   * @param {number} timeoutMs
-   */
-  _request(server, method, params, timeoutMs) {
-    return new Promise((resolve, reject) => {
-      if (server.disposed) {
-        reject(new Error("bridge disposed"));
-        return;
-      }
-      const id = ++server.nextId;
-      const timer = setTimeout(() => {
-        if (server.pending.has(id)) {
-          server.pending.delete(id);
-          reject(new Error(`MCP '${method}' timed out after ${timeoutMs}ms`));
-        }
-      }, timeoutMs);
-      server.pending.set(id, { resolve, reject, timer });
-      const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params });
-      try {
-        server.child.stdin.write(payload + "\n");
-      } catch (err) {
-        clearTimeout(timer);
-        server.pending.delete(id);
-        reject(err);
-      }
-    });
-  }
-
-  /**
-   * Send a JSON-RPC notification (no response expected).
-   * @param {object} server
-   * @param {string} method
-   * @param {object} params
-   */
-  _notify(server, method, params) {
-    try {
-      server.child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
-    } catch {}
-  }
-
-  /**
-   * Reject all in-flight requests for a server (child died / bridge disposed).
-   * @param {object} server
-   * @param {string} reason
-   */
-  _rejectAll(server, reason) {
-    for (const [id, p] of Array.from(server.pending.entries())) {
-      server.pending.delete(id);
-      clearTimeout(p.timer);
-      p.reject(new Error(reason));
-    }
-  }
-
-  /**
-   * Kill a single bridge child via the process-tree helper and reject any
-   * in-flight requests.
+   * Kill a single bridge child via process-tree helpers and close SDK client.
    * @param {object} server
    */
   _killServer(server) {
     if (server.disposed) return;
     server.disposed = true;
-    this._rejectAll(server, "bridge disposed");
-    const child = server.child;
-    if (child && child.pid) {
+    const pid = server.pid || server.transport?.pid;
+    const child = server.transport?._process || (pid ? { pid } : null);
+    try {
+      server.client?.close();
+    } catch {}
+    try {
+      server.transport?.close();
+    } catch {}
+    if (child && pid) {
       try {
-        killProcessTree(child, null);
+        killProcessTreeSync(child, null);
       } catch {}
       try {
-        child.kill("SIGKILL");
+        killProcessTree(child, null).catch?.(() => {});
+      } catch {}
+      try {
+        child.kill?.("SIGKILL");
       } catch {}
     }
   }
 
   /**
-   * Teardown: kill every bridge child (process-tree) and unregister all
-   * bridged tools via the kernel's reversible disposers. Idempotent.
+   * Teardown: cleanly close all SDK clients, kill every bridge child
+   * process-tree, and unregister all bridged tools. Idempotent.
    */
   dispose() {
     if (this.disposed) return;
