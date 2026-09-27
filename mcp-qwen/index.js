@@ -115,7 +115,7 @@ function setupProcessLifecycleHandlers() {
   });
 }
 
-export function createMcpServer() {
+function createMcpServer() {
   const server = new McpServer({
     name: pkgName ?? "qwen38-local",
     version: pkgVersion,

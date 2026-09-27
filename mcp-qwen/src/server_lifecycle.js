@@ -150,7 +150,7 @@ export async function serverInfo() {
   }
 }
 
-export async function currentMode() {
+async function currentMode() {
   const info = await serverInfo();
   if (!info) return null;
   if (info.maxModelLen >= 200_000) return "huge";
@@ -236,7 +236,7 @@ export async function canaryProbe(force = false) {
   return result;
 }
 
-export async function readLastEngineStatsLine() {
+async function readLastEngineStatsLine() {
   try {
     const { stdout } = await wslRun(
       `grep -a 'Engine 000:.*Running:' ${ENGINE_LOG_PATH} 2>/dev/null | tail -1`
@@ -247,7 +247,7 @@ export async function readLastEngineStatsLine() {
   }
 }
 
-export function parseEngineStats(line) {
+function parseEngineStats(line) {
   if (!line) return null;
   const ts = line.match(/(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
   if (!ts) return null;
@@ -388,7 +388,7 @@ export async function healWedgedEngine(statsAgeSec) {
   return { healed: true, boot: res.status };
 }
 
-export async function warmEngine() {
+async function warmEngine() {
   try {
     const key = getApiKeySync();
     // FX2: omit Authorization when no key file exists (honest, not fabricated).

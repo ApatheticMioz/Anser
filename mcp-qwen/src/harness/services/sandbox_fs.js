@@ -150,7 +150,7 @@ function isEnvFile(name) {
  * an unknown extension is NOT treated as binary here; the magic-byte check
  * is the authoritative gate.
  */
-export const BINARY_EXTENSIONS = new Set([
+const BINARY_EXTENSIONS = new Set([
   "pdf",
   "png",
   "jpg",

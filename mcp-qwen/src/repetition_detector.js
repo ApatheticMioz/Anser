@@ -35,7 +35,7 @@ export const GUARD_MARKER_TEMPLATE =
 
 // Characters that legitimately appear in long consecutive runs inside
 // legitimate model output (git-diff '+' hunks, code, URLs, JSON, math).
-export const CODE_REPEAT_CHARS = new Set(
+const CODE_REPEAT_CHARS = new Set(
   "+./\\<>|:;()[]{}'\"!?,~^&%$@".split("")
 );
 

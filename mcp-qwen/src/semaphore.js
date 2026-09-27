@@ -104,7 +104,7 @@ export function readLease(file) {
   }
 }
 
-export function leaseReclaimable(lease) {
+function leaseReclaimable(lease) {
   if (!lease) return true; // unreadable = crashed mid-write
   // If the claiming process is dead, reclaim the slot immediately
   if (!pidAlive(lease.pid, lease.platform)) return true;

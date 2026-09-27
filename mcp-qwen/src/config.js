@@ -27,7 +27,7 @@ export const BOOT_POLL_MS = 3000;
 // consume the entire budget before any content / tool calls are emitted.
 // Overridable per-dispatch via QWEN_MAX_TOKENS (the 245K context window easily
 // fits ~100k prompt + 49k output).
-export const DEFAULT_MAX_TOKENS = 49152;
+const DEFAULT_MAX_TOKENS = 49152;
 export const MAX_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_MAX_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_TOKENS;
@@ -50,13 +50,13 @@ export function getReasoningEffort() {
 // qwen_coworker `reasoning_effort` schema and the provider's fallback.
 export const REASONING_EFFORT_TIERS = ["xhigh", "medium", "low"];
 
-export const DEFAULT_RACE_MS = 15_000;
+const DEFAULT_RACE_MS = 15_000;
 export const RACE_MS = process.env.QWEN_RACE_MS
   ? parseInt(process.env.QWEN_RACE_MS, 10)
   : DEFAULT_RACE_MS;
 
 export const DEFAULT_TIMEOUT_MS = 14_400_000; // 4 hours
-export const DEFAULT_MIN_TIMEOUT_MS = 600_000;
+const DEFAULT_MIN_TIMEOUT_MS = 600_000;
 export const MIN_TIMEOUT_MS = (() => {
   const parsed = parseInt(process.env.QWEN_MIN_TIMEOUT_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MIN_TIMEOUT_MS;
@@ -80,7 +80,7 @@ export const FIRST_TOKEN_TIMEOUT_MS = (() => {
 // is overridable via QWEN_STREAM_IDLE_TIMEOUT_MS. This is a DIFFERENT axis
 // from max_tokens (generation-length cap); it only bounds how long the stream
 // may go SILENT before we declare the connection dead.
-export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 1_200_000; // 20 min
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 1_200_000; // 20 min
 export const STREAM_IDLE_TIMEOUT_MS = (() => {
   const parsed = parseInt(process.env.QWEN_STREAM_IDLE_TIMEOUT_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_TIMEOUT_MS;
@@ -93,7 +93,7 @@ export const STREAM_IDLE_TIMEOUT_MS = (() => {
 // provider arms this longer DEEP window (2400s / 40 min) instead so a healthy
 // long-thinking turn is not killed; the SHALLOW tier still bounds normal turns.
 // Both are overridable via env for tests / operators.
-export const DEFAULT_STREAM_IDLE_TIMEOUT_MS_DEEP = 2_400_000; // 40 min
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS_DEEP = 2_400_000; // 40 min
 export const STREAM_IDLE_TIMEOUT_MS_DEEP = (() => {
   const parsed = parseInt(process.env.QWEN_STREAM_IDLE_TIMEOUT_DEEP_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_TIMEOUT_MS_DEEP;
@@ -103,7 +103,7 @@ export const STREAM_IDLE_TIMEOUT_MS_DEEP = (() => {
 // this value is treated as "deep" and gets the DEEP idle tier. Default 35k
 // ensures any multi-turn research or audit session receives the generous 40m window.
 // Overridable via QWEN_STREAM_IDLE_DEPTH_TOKENS.
-export const DEFAULT_STREAM_IDLE_DEPTH_TOKENS = 35_000;
+const DEFAULT_STREAM_IDLE_DEPTH_TOKENS = 35_000;
 export const STREAM_IDLE_DEPTH_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_STREAM_IDLE_DEPTH_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_DEPTH_TOKENS;
@@ -122,7 +122,7 @@ export const STREAM_IDLE_DEPTH_TOKENS = (() => {
 // lands ("stop deliberating, emit edits with tools now") and the agent
 // CONTINUES instead of hogging the engine. Never suppresses thinking in
 // prompts — bounds it mechanically and hands the turn back.
-export const DEFAULT_MAX_REASONING_TOKENS = 32_768;
+const DEFAULT_MAX_REASONING_TOKENS = 32_768;
 export const MAX_REASONING_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_MAX_REASONING_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_REASONING_TOKENS;
@@ -138,7 +138,7 @@ export const TASK_RETENTION_FLOOR_MS = DEFAULT_TIMEOUT_MS + 1_800_000; // 4h + 3
 // work week. Overridable via QWEN_TASK_RETENTION_MS; any configured value
 // below the floor is clamped up to the floor (the invariant above must never
 // be violated, even by an operator misconfiguration).
-export const DEFAULT_TASK_RETENTION_MS = 604_800_000; // 7 days
+const DEFAULT_TASK_RETENTION_MS = 604_800_000; // 7 days
 export const TASK_RETENTION_MS = (() => {
   const parsed = parseInt(process.env.QWEN_TASK_RETENTION_MS, 10);
   const requested =
@@ -154,7 +154,7 @@ export const TASK_RETENTION_MS = (() => {
 // not-done task only when BOTH its heartbeat is older than this window AND its
 // owner pid is dead. Default 10m (600_000ms) protects against long reasoning turns,
 // web fetches, or heavy compiler runs. Overridable via QWEN_ORPHAN_REAP_STALE_MS.
-export const DEFAULT_ORPHAN_REAP_STALE_MS = 600_000; // 10m
+const DEFAULT_ORPHAN_REAP_STALE_MS = 600_000; // 10m
 export const ORPHAN_REAP_STALE_MS = (() => {
   const parsed = parseInt(process.env.QWEN_ORPHAN_REAP_STALE_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ORPHAN_REAP_STALE_MS;
@@ -207,8 +207,8 @@ export const TASK_DIR = path.join(QWEN_STATE_DIR, "tasks");
 export const SLOTS_DIR = path.join(TASK_DIR, "slots");
 
 // Global Configuration (~/.qwen/config.json and ~/.qwen/.env)
-export const GLOBAL_CONFIG_FILE = path.join(QWEN_STATE_DIR, "config.json");
-export const GLOBAL_ENV_FILE = path.join(QWEN_STATE_DIR, ".env");
+const GLOBAL_CONFIG_FILE = path.join(QWEN_STATE_DIR, "config.json");
+const GLOBAL_ENV_FILE = path.join(QWEN_STATE_DIR, ".env");
 
 /**
  * Loads the machine-wide global configuration from ~/.qwen/config.json or ~/.qwen/.env.
@@ -287,11 +287,11 @@ export function getSearchConfig() {
 }
 
 const _initSearchConfig = getSearchConfig();
-export const SEARCH_PROVIDER = _initSearchConfig.provider;
+const SEARCH_PROVIDER = _initSearchConfig.provider;
 export const BRAVE_API_KEY = _initSearchConfig.brave_api_key;
 export const TAVILY_API_KEY = _initSearchConfig.tavily_api_key;
-export const CONTEXT7_API_KEY = _initSearchConfig.context7_api_key;
-export const SEARXNG_URL = _initSearchConfig.searxng_url;
+const CONTEXT7_API_KEY = _initSearchConfig.context7_api_key;
+const SEARXNG_URL = _initSearchConfig.searxng_url;
 
 
 // Wedge detection & Auto-Heal (Preserves GPU headroom against core deadlocks)
@@ -321,26 +321,26 @@ export const ALLOW_ENGINE_INTERRUPT = process.env.ALLOW_ENGINE_INTERRUPT === "1"
 // Elastic horizon allows extending up to MAX_ELASTIC_TURNS (default 200)
 // as long as physical telemetry (KV cache < 85%, spec acceptance >= 2.5)
 // and action hash entropy confirm forward non-stagnant progress.
-export const DEFAULT_BASE_TURN_BUDGET = 80;
+const DEFAULT_BASE_TURN_BUDGET = 80;
 export const BASE_TURN_BUDGET = (() => {
   const parsed = parseInt(process.env.QWEN_BASE_TURN_BUDGET, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BASE_TURN_BUDGET;
 })();
 
-export const DEFAULT_MAX_ELASTIC_TURNS = 200;
+const DEFAULT_MAX_ELASTIC_TURNS = 200;
 export const MAX_ELASTIC_TURNS = (() => {
   const parsed = parseInt(process.env.QWEN_MAX_ELASTIC_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_ELASTIC_TURNS;
 })();
 
 // Physical telemetry gating thresholds
-export const DEFAULT_KV_CACHE_HEADROOM_CEILING = 85.0;
+const DEFAULT_KV_CACHE_HEADROOM_CEILING = 85.0;
 export const KV_CACHE_HEADROOM_CEILING = (() => {
   const parsed = parseFloat(process.env.QWEN_KV_CACHE_HEADROOM_CEILING);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_KV_CACHE_HEADROOM_CEILING;
 })();
 
-export const DEFAULT_SPEC_ACCEPTANCE_FLOOR = 2.5;
+const DEFAULT_SPEC_ACCEPTANCE_FLOOR = 2.5;
 export const SPEC_ACCEPTANCE_FLOOR = (() => {
   const parsed = parseFloat(process.env.QWEN_SPEC_ACCEPTANCE_FLOOR);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SPEC_ACCEPTANCE_FLOOR;
@@ -360,7 +360,7 @@ export const LOOP_DETECTION_REPETITIONS = (() => {
 })();
 
 // Supervisor log preview length in status / wait telemetry (150-300 chars)
-export const DEFAULT_SUPERVISOR_PREVIEW_CHARS = 300;
+const DEFAULT_SUPERVISOR_PREVIEW_CHARS = 300;
 export const SUPERVISOR_PREVIEW_CHARS = (() => {
   const parsed = parseInt(process.env.QWEN_SUPERVISOR_PREVIEW_CHARS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SUPERVISOR_PREVIEW_CHARS;
@@ -373,7 +373,7 @@ export const MAX_TURNS = process.env.QWEN_MAX_TURNS
 
 // Continuation budget: max times we re-prompt the model after a
 // finish_reason: "length" (token-ceiling) cutoff before giving up.
-export const DEFAULT_MAX_CONTINUATION_TURNS = 8;
+const DEFAULT_MAX_CONTINUATION_TURNS = 8;
 export const MAX_CONTINUATION_TURNS = (() => {
   const parsed = parseInt(process.env.QWEN_MAX_CONTINUATION_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CONTINUATION_TURNS;
@@ -384,7 +384,7 @@ export const MAX_CONTINUATION_TURNS = (() => {
 // finish_reason — the signature of an aborted/zero-byte stream that the
 // provider default-fills as "stop"). After this many empty turns we report
 // the honest status "engine_empty_response" instead of a false "completed".
-export const DEFAULT_EMPTY_STREAM_RETRIES = 2;
+const DEFAULT_EMPTY_STREAM_RETRIES = 2;
 export const EMPTY_STREAM_RETRIES = (() => {
   const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRIES, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRIES;
@@ -400,7 +400,7 @@ export const EMPTY_STREAM_RETRIES = (() => {
 // deep, the runner arms this longer DEEP budget instead so a transient cluster
 // has room to clear; the base budget still bounds normal (shallow) turns. Both
 // are overridable via env for tests / operators.
-export const DEFAULT_EMPTY_STREAM_RETRIES_DEEP = 4;
+const DEFAULT_EMPTY_STREAM_RETRIES_DEEP = 4;
 export const EMPTY_STREAM_RETRIES_DEEP = (() => {
   const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRIES_DEEP, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRIES_DEEP;
@@ -413,7 +413,7 @@ export const EMPTY_STREAM_RETRIES_DEEP = (() => {
 // (~150k tokens at ~3.5 chars/token) matches the observed death signature
 // (all three unrecovered empty streams were >100k ctx). Overridable via
 // QWEN_EMPTY_STREAM_RETRY_DEPTH_CHARS.
-export const DEFAULT_EMPTY_STREAM_RETRY_DEPTH_CHARS = 525_000;
+const DEFAULT_EMPTY_STREAM_RETRY_DEPTH_CHARS = 525_000;
 export const EMPTY_STREAM_RETRY_DEPTH_CHARS = (() => {
   const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRY_DEPTH_CHARS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRY_DEPTH_CHARS;
@@ -427,13 +427,13 @@ export const EMPTY_STREAM_RETRY_DEPTH_CHARS = (() => {
 // cluster time to clear before the next (expensive, deep) re-prefill. Both are
 // overridable via env so tests can shrink the sleep to milliseconds (the
 // recorded backoffMs still reflects the configured value).
-export const DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS = 2000;
+const DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS = 2000;
 export const EMPTY_STREAM_RETRY_BACKOFF_BASE_MS = (() => {
   const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS;
 })();
 
-export const DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_CAP_MS = 30_000;
+const DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_CAP_MS = 30_000;
 export const EMPTY_STREAM_RETRY_BACKOFF_CAP_MS = (() => {
   const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRY_BACKOFF_CAP_MS, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_CAP_MS;
@@ -481,7 +481,7 @@ export const PROMPT_BUDGET_CHARS = (() => {
 // 200 chars is well below any legitimate final answer but far above the
 // marker's own length (~110 chars), so a marker-only or near-marker final is
 // always caught while a real (even short) answer is never misclassified.
-export const DEFAULT_DEGENERATE_FINAL_SUBSTANTIVE_CHARS = 200;
+const DEFAULT_DEGENERATE_FINAL_SUBSTANTIVE_CHARS = 200;
 export const DEGENERATE_FINAL_SUBSTANTIVE_CHARS = (() => {
   const parsed = parseInt(process.env.QWEN_DEGENERATE_FINAL_SUBSTANTIVE_CHARS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DEGENERATE_FINAL_SUBSTANTIVE_CHARS;
@@ -492,7 +492,7 @@ export const DEGENERATE_FINAL_SUBSTANTIVE_CHARS = (() => {
 // done real work (many tool calls / turns) and is NOT degenerate — it is a
 // normal (if truncated) completion. Default 3 keeps the guard scoped to the
 // early-dead-session signature (the M3a repro died on turn 1).
-export const DEFAULT_DEGENERATE_FINAL_MAX_TURNS = 3;
+const DEFAULT_DEGENERATE_FINAL_MAX_TURNS = 3;
 export const DEGENERATE_FINAL_MAX_TURNS = (() => {
   const parsed = parseInt(process.env.QWEN_DEGENERATE_FINAL_MAX_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DEGENERATE_FINAL_MAX_TURNS;
@@ -507,7 +507,7 @@ export const DEGENERATE_FINAL_MAX_TURNS = (() => {
 // mutation dispatches are single-pass, and re-arms the counter for the next
 // run of N. Default 4 (the warning fires on the 5th consecutive non-mutating
 // bash call). Overridable via QWEN_PROBE_BUDGET.
-export const DEFAULT_PROBE_BUDGET = 4;
+const DEFAULT_PROBE_BUDGET = 4;
 export const PROBE_BUDGET = (() => {
   const parsed = parseInt(process.env.QWEN_PROBE_BUDGET, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_BUDGET;
@@ -524,13 +524,13 @@ export const PROBE_BUDGET = (() => {
 // ADVISORY ONLY — they never cancel or error the session, and the hard
 // MAX_TURNS cap (anser_runner) is untouched. Overridable via
 // QWEN_SESSION_WARN_TURNS / QWEN_SESSION_RECOMMEND_TURNS.
-export const DEFAULT_SESSION_TURNS_WARN = 60;
+const DEFAULT_SESSION_TURNS_WARN = 60;
 export const SESSION_TURNS_WARN = (() => {
   const parsed = parseInt(process.env.QWEN_SESSION_WARN_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SESSION_TURNS_WARN;
 })();
 
-export const DEFAULT_SESSION_TURNS_RECOMMEND = 80;
+const DEFAULT_SESSION_TURNS_RECOMMEND = 80;
 export const SESSION_TURNS_RECOMMEND = (() => {
   const parsed = parseInt(process.env.QWEN_SESSION_RECOMMEND_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SESSION_TURNS_RECOMMEND;
@@ -543,7 +543,7 @@ export const SESSION_TURNS_RECOMMEND = (() => {
 // sum for the anti-rabbit-hole system (a deep context AND a live probe streak
 // means the model is stuck in a long, deep, non-mutating loop). Overridable
 // via QWEN_CONTEXT_WARN_TOKENS.
-export const DEFAULT_CONTEXT_WARN_TOKENS = 65536;
+const DEFAULT_CONTEXT_WARN_TOKENS = 65536;
 export const CONTEXT_WARN_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_CONTEXT_WARN_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_WARN_TOKENS;
@@ -552,13 +552,13 @@ export const CONTEXT_WARN_TOKENS = (() => {
 // Context high-watermark threshold (default 180,000 tokens out of 245,760 nominal context ceiling).
 // When promptTokens reaches this watermark, the runner emits a one-shot advisory recommending
 // session rollover on the next turn, preventing unhandled context exhaustion crashes.
-export const DEFAULT_CONTEXT_HIGH_WATERMARK_TOKENS = 180000;
+const DEFAULT_CONTEXT_HIGH_WATERMARK_TOKENS = 180000;
 export const CONTEXT_HIGH_WATERMARK_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_CONTEXT_HIGH_WATERMARK_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_HIGH_WATERMARK_TOKENS;
 })();
 
-export const DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS = 215000;
+const DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS = 215000;
 export const CONTEXT_EMERGENCY_CEILING_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_CONTEXT_EMERGENCY_CEILING_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS;

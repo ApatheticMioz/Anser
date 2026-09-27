@@ -14,16 +14,16 @@ import TurndownService from "turndown";
 import { search, SafeSearchType } from "duck-duck-scrape";
 import { getSearchConfig } from "../../config.js";
 
-export const DEFAULT_USER_AGENT =
+const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Anser/2026.1";
 
-export const DEFAULT_MAX_FETCH_CHARS = 24_000;
-export const MAX_FETCH_CHARS = (() => {
+const DEFAULT_MAX_FETCH_CHARS = 24_000;
+const MAX_FETCH_CHARS = (() => {
   const parsed = parseInt(process.env.QWEN_MAX_FETCH_CHARS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_FETCH_CHARS;
 })();
-export const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
-export const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
+const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
+const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
 
 const NOISE_JSON_KEYS = new Set([
   "avatar_url",
@@ -43,7 +43,7 @@ const NOISE_JSON_KEYS = new Set([
   "reactions",
 ]);
 
-export function pruneJsonPayload(val, depth = 0) {
+function pruneJsonPayload(val, depth = 0) {
   if (depth > 8) return val;
   if (Array.isArray(val)) {
     const maxItems = 30;

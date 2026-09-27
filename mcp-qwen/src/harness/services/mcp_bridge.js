@@ -84,7 +84,7 @@ function deriveServerName(command, args) {
  * @param {string} s
  * @returns {string}
  */
-export function sanitizeName(s) {
+function sanitizeName(s) {
   let n = String(s)
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, "_")
@@ -409,4 +409,3 @@ export class McpBridge {
   }
 }
 
-export default McpBridge;

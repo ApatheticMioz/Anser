@@ -6,12 +6,12 @@ const TELEMETRY_DIR = path.join(QWEN_STATE_DIR, "telemetry");
 const STATS_FILE = path.join(TELEMETRY_DIR, "stats.json");
 
 // Frontier commercial baseline pricing (Claude Sonnet 5 tier: $2.00/M prompt, $10.00/M completion)
-export const PROMPT_COST_PER_MILLION = 2.0;
-export const COMPLETION_COST_PER_MILLION = 10.0;
-export const BENCHMARK_MODEL = "Claude Sonnet 5";
+const PROMPT_COST_PER_MILLION = 2.0;
+const COMPLETION_COST_PER_MILLION = 10.0;
+const BENCHMARK_MODEL = "Claude Sonnet 5";
 
 // Authoritative September 2026 frontier model reference rates
-export const FRONTIER_BENCHMARKS = {
+const FRONTIER_BENCHMARKS = {
   "Claude Sonnet 5": { promptPerM: 2.0, compPerM: 10.0, context: "500K" },
   "Claude Opus 5.5": { promptPerM: 4.0, compPerM: 20.0, context: "1,000K" },
   "Claude Fable 5.1": { promptPerM: 10.0, compPerM: 50.0, context: "1,000K" },

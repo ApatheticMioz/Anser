@@ -214,7 +214,7 @@ export function eventLoggerPlugin(ctx, options = {}) {
  * @param {number} [lastN=5]
  * @returns {string}
  */
-export function inspectSession(sessionId, lastN = 5) {
+function inspectSession(sessionId, lastN = 5) {
   const logger = new EventLoggerService({ sessionId });
   const events = logger.readAll();
   if (events.length === 0) {

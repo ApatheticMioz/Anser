@@ -615,7 +615,7 @@ let mcpServerFactory = null;
 export function setMcpServerFactory(fn) {
   mcpServerFactory = typeof fn === "function" ? fn : null;
 }
-export function getMcpServerFactory() {
+function getMcpServerFactory() {
   return mcpServerFactory;
 }
 export const activeSseSessions = new Map();

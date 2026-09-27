@@ -462,7 +462,7 @@ export async function killProcessTree(child, sessionId) {
  *
  * @param {string} tag
  */
-export function killTaggedWslProcessesSync(tag) {
+function killTaggedWslProcessesSync(tag) {
   if (!tag) return;
   const id = String(tag);
   let candidates = [];

@@ -22,7 +22,7 @@ const THIRD_PARTY_PATTERNS = [
   /pluggy\//i,
 ];
 
-export function isThirdPartyFrame(filePath) {
+function isThirdPartyFrame(filePath) {
   if (!filePath) return false;
   return THIRD_PARTY_PATTERNS.some((pattern) => pattern.test(filePath));
 }

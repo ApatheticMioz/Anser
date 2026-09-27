@@ -38,7 +38,7 @@ import { wslHome, winHome, winHomeWsl, toPosixWslPath } from "../../platform.js"
 // Pattern-level blocks (verbatim, not path-aware).
 // These match catastrophic commands by signature regardless of target path.
 // ---------------------------------------------------------------------------
-export const PATTERN_LEVEL_BLOCKS = [
+const PATTERN_LEVEL_BLOCKS = [
   /\b(mkfs(\.[a-z0-9]+)?|fdisk|parted)\b/i,
   /\bformat\s+[A-Za-z]:/i,
   /\bdd\s+.*of=\/dev\/(sd[a-z]|nvme|hd[a-z]|vd[a-z])/i,
@@ -48,20 +48,20 @@ export const PATTERN_LEVEL_BLOCKS = [
 // Destructive commands that operate on path operands.
 // Includes POSIX (rm) and Windows/PowerShell forms (del, rmdir, rd,
 // remove-item, ri, erase) so PowerShell/cmd aliases are analyzed too.
-export const DESTRUCTIVE_COMMANDS = new Set([
+const DESTRUCTIVE_COMMANDS = new Set([
   "rm", "del", "rmdir", "rd", "remove-item", "ri", "erase",
 ]);
 
 // Transparent prefix commands that are skipped before the real command.
 // `env` may be followed by VAR=value tokens, which are also skipped.
-export const TRANSPARENT_PREFIXES = new Set([
+const TRANSPARENT_PREFIXES = new Set([
   "sudo", "doas", "env", "nice", "nohup", "xargs",
 ]);
 
 // Shell wrappers: a shell command followed by its string-arg flag carries the
 // real command as an inner string. "single" = inner is the next (quoted) token;
 // "rest" = inner is the concatenation of all remaining tokens (cmd /c style).
-export const SHELL_WRAPPERS = {
+const SHELL_WRAPPERS = {
   bash: { flags: new Set(["-c"]), inner: "single" },
   sh: { flags: new Set(["-c"]), inner: "single" },
   dash: { flags: new Set(["-c"]), inner: "single" },
@@ -73,11 +73,11 @@ export const SHELL_WRAPPERS = {
 };
 
 // Bounded recursion depth for unwrapping nested shell wrappers.
-export const MAX_UNWRAP_DEPTH = 4;
+const MAX_UNWRAP_DEPTH = 4;
 
 // Known Windows flag tokens (slash-prefixed single-letter flags).
 // On Windows, `del /s /q` uses slashes as flags, not path separators.
-export const WINDOWS_FLAG_TOKENS = new Set([
+const WINDOWS_FLAG_TOKENS = new Set([
   "/f", "/s", "/q", "/p", "/a", "/c", "/e", "/t", "/y", "/i",
 ]);
 
@@ -107,7 +107,7 @@ export function assertDeadManFuse(command) {
  * Quote-aware tokenizer: splits a command string into tokens,
  * preserving quoted substrings (both single and double quotes).
  */
-export function tokenizeCommand(cmd) {
+function tokenizeCommand(cmd) {
   const tokens = [];
   let cur = "";
   let quote = null;
@@ -145,7 +145,7 @@ export function tokenizeCommand(cmd) {
  *
  * Returns an array of segment strings (whitespace-trimmed, empties dropped).
  */
-export function splitCommandSegments(cmd) {
+function splitCommandSegments(cmd) {
   const segments = [];
   let cur = "";
   let quote = null;
@@ -194,14 +194,14 @@ export function splitCommandSegments(cmd) {
 }
 
 /** Extract the command name (basename, lowercased) from the first token. */
-export function commandNameOf(token) {
+function commandNameOf(token) {
   if (!token) return "";
   const parts = token.split(/[\\/]/);
   return parts[parts.length - 1].toLowerCase();
 }
 
 /** Determine whether a token is a flag/option (not a path operand). */
-export function isFlag(token) {
+function isFlag(token) {
   if (token.startsWith("-")) return true; // POSIX flag
   if (WINDOWS_FLAG_TOKENS.has(token.toLowerCase())) return true; // Windows flag
   return false;
@@ -213,7 +213,7 @@ export function isFlag(token) {
  * backtick command substitution (`cmd`) — cannot be safely resolved, so it
  * must be blocked. Literal paths (no $ and no backtick) are unaffected.
  */
-export function hasUnexpandedReference(operand) {
+function hasUnexpandedReference(operand) {
   return /[$`]/.test(operand);
 }
 
@@ -224,7 +224,7 @@ export function hasUnexpandedReference(operand) {
  * Also handles `~user` (another user's home) so it can be checked against
  * protected roots.
  */
-export function expandTilde(operand, isWindowsCmd) {
+function expandTilde(operand, isWindowsCmd) {
   if (operand === "~") {
     return isWindowsCmd ? winHome() : wslHome();
   }
@@ -253,7 +253,7 @@ export function expandTilde(operand, isWindowsCmd) {
  * Normalize a path operand to a canonical POSIX form (lowercased, no trailing slash).
  * Uses the wsl_bridge translators (re-exported from platform.js) for Windows<->POSIX.
  */
-export function normalizeOperand(operand, cwd, isWindowsCmd) {
+function normalizeOperand(operand, cwd, isWindowsCmd) {
   let p = expandTilde(operand, isWindowsCmd);
   // Unicode/homoglyph defense: fold fullwidth & compatibility forms to their
   // canonical ASCII equivalents (e.g. fullwidth `Ｗ` U+FF37 -> `W`) so a
@@ -299,7 +299,7 @@ export function normalizeOperand(operand, cwd, isWindowsCmd) {
  * Includes: filesystem root, WSL home, Windows home (as /mnt/c/Users/<user>),
  * all drive roots (/mnt/a/ through /mnt/z/), C:\Windows, C:\Users, C:\Program Files.
  */
-export function buildProtectedRoots() {
+function buildProtectedRoots() {
   const roots = new Set();
   roots.add("/"); // filesystem root
   // WSL home (~)
@@ -327,7 +327,7 @@ export function buildProtectedRoots() {
 
 // Lazy cache for protected roots (platform resolvers are cached; this is cheap).
 let _protectedRoots = null;
-export function getProtectedRoots() {
+function getProtectedRoots() {
   if (!_protectedRoots) {
     _protectedRoots = buildProtectedRoots();
   }
@@ -338,7 +338,7 @@ export function getProtectedRoots() {
  * Check whether a normalized POSIX path is a protected root or its direct wildcard.
  * Also blocks /dev/sd* and related raw-device targets.
  */
-export function isProtectedRootOrWildcard(posixPath) {
+function isProtectedRootOrWildcard(posixPath) {
   const p = posixPath.toLowerCase();
   // Raw device targets: /dev/sdX, /dev/nvmeXnY, /dev/hdX, /dev/vdX (and direct wildcards)
   if (/^\/dev\/(sd[a-z]+|nvme\d+n\d+|hd[a-z]+|vd[a-z]+)(\/\*)?$/.test(p)) return true;
@@ -372,7 +372,7 @@ export function isProtectedRootOrWildcard(posixPath) {
  *      remove-item/ri/erase), fail closed on unexpanded shell references and
  *      block any operand that normalizes to a protected root or its wildcard.
  */
-export function analyzeSegment(command, cwd, depth) {
+function analyzeSegment(command, cwd, depth) {
   const tokens = tokenizeCommand(command);
   if (tokens.length === 0) return;
 
@@ -462,7 +462,7 @@ export function analyzeSegment(command, cwd, depth) {
  * (e.g. `cd /tmp && rm -rf /`) cannot slip past a first-segment-only check.
  * A single-segment command (no control operators) behaves exactly as before.
  */
-export function analyzeCommand(command, cwd, depth) {
+function analyzeCommand(command, cwd, depth) {
   // Pattern-level blocks (verbatim, not path-aware) run on the FULL command
   // string — NOT per-segment — because signatures like the fork bomb
   // `:(){ :|:& };:` span multiple `|`/`;`-separated segments. Running them on
