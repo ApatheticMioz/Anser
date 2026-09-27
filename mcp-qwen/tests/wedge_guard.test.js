@@ -114,8 +114,12 @@ globalThis.fetch = async (url, opts) => {
 
 // WSL runner stub: record every command, return empty stdout.
 let wslCalls = [];
+let mockStatsLine = "";
 setWslRunner(async (cmd) => {
   wslCalls.push(cmd);
+  if (cmd.includes("Engine 000:")) {
+    return { stdout: mockStatsLine, stderr: "" };
+  }
   return { stdout: "", stderr: "" };
 });
 
@@ -134,6 +138,7 @@ function recentStatsLine() {
 function reset() {
   fetchLog = [];
   wslCalls = [];
+  mockStatsLine = "";
   lastCanaryBody = null;
   metricsMap = {};
   canaryBehavior = "ok";
@@ -348,6 +353,38 @@ check(
   `f5: error mentions HTTP 500 (got: ${f5.error})`
 );
 check(f5.reply === undefined || f5.reply === "", "f5: reply absent/empty");
+
+// ---------------------------------------------------------------------------
+// (h) Phantom Silence Wedge: idle engine + old log line -> NOT wedged
+// ---------------------------------------------------------------------------
+console.log("\n[Test h: idle engine + stale log line -> no phantom silence wedge]");
+reset();
+metricsMap = {
+  "vllm:num_requests_running": 0,
+  "vllm:num_requests_waiting": 0,
+};
+const d1 = new Date(Date.now() - 600_000);
+const pad = (n) => String(n).padStart(2, "0");
+mockStatsLine = `${pad(d1.getMonth() + 1)}-${pad(d1.getDate())} ${pad(d1.getHours())}:${pad(d1.getMinutes())}:${pad(d1.getSeconds())} Engine 000: Running: 1 reqs, Waiting: 0 reqs`;
+canaryBehavior = "ok";
+const h = await engineWedgeState();
+check(h.engineBusy === false, "h: engine idle");
+check(h.isSilenceWedged === false, "h: isSilenceWedged=false because running_requests=0");
+check(h.wedged === false, "h: wedged=false (no phantom wedge)");
+check(h.canary.ok === true, "h: canary ok");
+
+// (h2) Real Silence Wedge: busy engine (running=1) + stale log line -> wedged
+console.log("\n[Test h2: busy engine + stale log line -> real silence wedge]");
+reset();
+metricsMap = {
+  "vllm:num_requests_running": 1,
+  "vllm:num_requests_waiting": 0,
+};
+mockStatsLine = `${pad(d1.getMonth() + 1)}-${pad(d1.getDate())} ${pad(d1.getHours())}:${pad(d1.getMinutes())}:${pad(d1.getSeconds())} Engine 000: Running: 1 reqs, Waiting: 0 reqs`;
+const h2 = await engineWedgeState();
+check(h2.engineBusy === true, "h2: engine busy");
+check(h2.isSilenceWedged === true, "h2: isSilenceWedged=true when requests running but stats silent");
+check(h2.wedged === true, "h2: wedged=true (real silence wedge triggers auto-heal)");
 
 // ---------------------------------------------------------------------------
 // cleanup

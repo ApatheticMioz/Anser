@@ -836,7 +836,7 @@ export function registerTools(server) {
         };
       }
       if (action === "stop") {
-        if (!ALLOW_ENGINE_INTERRUPT || IS_TEST_ENV || process.env.TEST_OFFLINE === "1") {
+        if (process.env.TEST_OFFLINE === "1" || (IS_TEST_ENV && !ALLOW_ENGINE_INTERRUPT)) {
           return {
             content: [
               {

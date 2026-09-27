@@ -248,7 +248,7 @@ function runWslCommandSync(cmd) {
   }
   // ZERO ENGINE INTERRUPTION & TEST SAFETY INVARIANT:
   // Tests are strictly forbidden from running real kill signals in WSL without explicit ALLOW_ENGINE_INTERRUPT=1.
-  if ((!ALLOW_ENGINE_INTERRUPT || IS_TEST_ENV || process.env.TEST_OFFLINE === "1") && !wslCommandSyncRunner) {
+  if ((process.env.TEST_OFFLINE === "1" || (IS_TEST_ENV && !ALLOW_ENGINE_INTERRUPT)) && !wslCommandSyncRunner) {
     if (cmd.includes("kill") || cmd.includes("stop_server.sh") || cmd.includes("pkill")) {
       return Buffer.from("");
     }

@@ -184,7 +184,7 @@ let canaryCache = { at: 0, result: null };
  *   `reply`/`content_chars`/`has_reasoning`/`finish_reason`/`error`.
  */
 export async function canaryProbe(force = false) {
-  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
+  if (wslRun === runWslCommand && (process.env.TEST_OFFLINE === "1" || (IS_TEST_ENV && !ALLOW_ENGINE_INTERRUPT))) {
     return { ok: true, skipped: "engine_protected_offline", latency_ms: 0 };
   }
   if (!force && canaryCache.result && Date.now() - canaryCache.at < 60_000) {
@@ -329,9 +329,9 @@ export async function engineWedgeState() {
   const line = await readLastEngineStatsLine();
   const stats = line ? parseEngineStats(line) : null;
 
-  // Stats silence while requests are supposedly running indicates a stalled engine core.
+  // Stats silence while requests are running indicates a stalled engine core.
   const isSilenceWedged = Boolean(
-    stats && stats.runningReqs > 0 && stats.ageSec > WEDGE_STATS_SILENCE_S
+    runningReqs > 0 && stats && stats.runningReqs > 0 && stats.ageSec > WEDGE_STATS_SILENCE_S
   );
 
   let canary;
@@ -349,10 +349,10 @@ export async function engineWedgeState() {
   }
 
   // When busy, the canary is ignored — only stats silence can declare a wedge.
-  // When idle, the canary remains authoritative.
+  // When idle, the canary probe is authoritative.
   const wedged = engineBusy
     ? isSilenceWedged
-    : Boolean(isCanaryWedged || isSilenceWedged);
+    : Boolean(isCanaryWedged);
 
   return {
     wedged,
@@ -385,7 +385,7 @@ export async function engineWedgeState() {
  *   `note` (when refused) or `boot` status (when healed).
  */
 export async function healWedgedEngine(statsAgeSec) {
-  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
+  if (wslRun === runWslCommand && (process.env.TEST_OFFLINE === "1" || (IS_TEST_ENV && !ALLOW_ENGINE_INTERRUPT))) {
     return { healed: false, note: "heal refused: engine interruption disabled by default (ALLOW_ENGINE_INTERRUPT unset)" };
   }
   // Refuse to stop/reboot the engine while live work is in flight.
@@ -612,7 +612,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
  *   included.
  */
 export async function ensureServerRunning() {
-  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
+  if (wslRun === runWslCommand && (process.env.TEST_OFFLINE === "1" || (IS_TEST_ENV && !ALLOW_ENGINE_INTERRUPT))) {
     return { switched: false, status: "boot_refused_offline_protected" };
   }
   const current = await currentMode();
@@ -674,7 +674,7 @@ export async function ensureServerRunning() {
  *   `stopped` is false and `mode` reports the detected engine mode.
  */
 export async function stopServer() {
-  if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
+  if (wslRun === runWslCommand && (process.env.TEST_OFFLINE === "1" || (IS_TEST_ENV && !ALLOW_ENGINE_INTERRUPT))) {
     return {
       stopped: false,
       reason: "stop_refused_offline_protected",
