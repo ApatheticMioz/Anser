@@ -228,7 +228,9 @@ export function loadGlobalConfig() {
         }
       }
     }
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`[config] Corrupt ${GLOBAL_CONFIG_FILE}: ${err.message}; defaults apply.\n`);
+  }
 
   try {
     if (fs.existsSync(GLOBAL_ENV_FILE)) {
@@ -247,7 +249,9 @@ export function loadGlobalConfig() {
         }
       }
     }
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`[config] Corrupt ${GLOBAL_ENV_FILE}: ${err.message}; defaults apply.\n`);
+  }
 
   return config;
 }

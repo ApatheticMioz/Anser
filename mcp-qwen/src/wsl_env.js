@@ -46,6 +46,7 @@ function _probeWslUser() {
   } catch {
     // WSL unavailable / probe failed: signal failure (null) so the caller
     // can fall back to root//root without throwing.
+    process.stderr.write(`[wsl_env] whoami probe failed; fabricating root identity.\n`);
     return null;
   }
 }

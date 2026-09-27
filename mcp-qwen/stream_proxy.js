@@ -197,7 +197,18 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
                 if (delta) {
                   const tokenText = delta.content || delta.reasoning || delta.reasoning_content || "";
                   if (tokenText) {
-                    const rep = repetitionDetector.feed(tokenText);
+                    let rep;
+                    try {
+                      rep = repetitionDetector.feed(tokenText);
+                    } catch (detErr) {
+                      console.error(`[StreamProxy] Repetition detector error: ${detErr.message}; truncating stream.`);
+                      if (pingInterval) clearInterval(pingInterval);
+                      hasDone = true;
+                      res.write(`data: ${JSON.stringify({ id: "chatcmpl-det-err", object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "qwen3.8-27b", choices: [{ index: 0, delta: { content: "[Stream truncated: repetition detector error]" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+                      res.end();
+                      upstreamReq.destroy();
+                      return;
+                    }
                     if (rep) {
                       console.error(`[StreamProxy Circuit Breaker] Runaway repetition detected (${rep.type}: ${JSON.stringify(rep.pattern)}, count: ${rep.count}). Safely aborting stream.`);
                       lifecycle.log(`repetition-breaker(${rep.type})`);
@@ -408,8 +419,8 @@ const server = http.createServer((req, res) => {
 
 server.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
-    console.log(`[StreamProxy] Port ${PROXY_PORT} is already in use, reusing running instance.`);
-    process.exit(0);
+    console.error(`[StreamProxy] Port ${PROXY_PORT} is already in use — port conflict is a failure, not a success.`);
+    process.exit(1);
   } else {
     console.error("[StreamProxy] Server error:", err);
     process.exit(1);

@@ -423,7 +423,9 @@ export class EvoOperator {
             }
           }
         }
-      } catch {}
+      } catch (err) {
+        console.error(`[EvoOperator] Manifest-based rollback failed (${err.message}); falling back to snapshot dir.`);
+      }
     } else if (fs.existsSync(snapshotDir)) {
       const files = fs.readdirSync(snapshotDir);
       for (const f of files) {

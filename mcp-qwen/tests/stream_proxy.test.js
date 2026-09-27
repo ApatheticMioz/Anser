@@ -272,4 +272,30 @@ describe("Stream Proxy - Signal Preserving & Error Forwarding Suite", () => {
       await new Promise((r) => mockUpstream.close(r));
     }
   });
+
+  test("C2: EADDRINUSE exits with code 1 (port conflict is a failure)", async () => {
+    // Occupy a port with a throwaway server
+    const blocker = http.createServer();
+    await new Promise((r) => blocker.listen(0, "127.0.0.1", r));
+    const port = blocker.address().port;
+
+    const child = spawn(
+      process.execPath,
+      [path.join(__dirname, "..", "stream_proxy.js")],
+      {
+        env: { ...process.env, VLLM_PORT: "9999", VLLM_PROXY_PORT: String(port) },
+        stdio: ["ignore", "ignore", "pipe"],
+      }
+    );
+
+    const code = await new Promise((resolve) => {
+      let stderr = "";
+      child.stderr.on("data", (c) => (stderr += c.toString()));
+      child.on("exit", (c) => resolve(c));
+      setTimeout(() => { child.kill(); resolve(null); }, 10000);
+    });
+
+    assert.strictEqual(code, 1, `EADDRINUSE must exit(1), got ${code}`);
+    await new Promise((r) => blocker.close(r));
+  });
 });

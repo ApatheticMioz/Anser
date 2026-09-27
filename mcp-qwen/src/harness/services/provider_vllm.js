@@ -478,8 +478,8 @@ export class VllmProviderService {
                 );
                 break;
               }
-            } catch {
-              // Ignore partial SSE JSON parse anomalies
+            } catch (err) {
+              console.error(`[VllmProvider] Partial SSE parse anomaly (token undercount): ${err.message}`);
             }
           }
         }

@@ -635,13 +635,16 @@ export class SandboxFsService {
       throw new Error(`Directory not found: ${dirPath}`);
     }
 
+    let listingPartial = false;
     const walk = (currentDir, depth) => {
       if (depth > max_depth) return [];
       const entries = [];
       let files = [];
       try {
         files = fs.readdirSync(currentDir, { withFileTypes: true });
-      } catch {
+      } catch (err) {
+        process.stderr.write(`[SandboxFs] Unreadable directory ${currentDir}: ${err.message}\n`);
+        listingPartial = true;
         return [];
       }
 
@@ -660,7 +663,7 @@ export class SandboxFsService {
     };
 
     const items = walk(resolved, 1);
-    return { path: resolved, total_items: items.length, items };
+    return { path: resolved, total_items: items.length, items, ...(listingPartial ? { partial: true } : {}) };
   }
 
   /**

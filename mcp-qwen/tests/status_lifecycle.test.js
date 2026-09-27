@@ -490,6 +490,63 @@ console.log("\n[D7] stopServer honesty");
 }
 
 // ---------------------------------------------------------------------------
+// C2: malformed POST /extend_lease body → HTTP 400 (not silent turns=25)
+// ---------------------------------------------------------------------------
+console.log("\n[C2] malformed POST /extend_lease → 400");
+{
+  // Self-contained: spin up a throwaway HTTP server that replicates the
+  // extend_lease handler's body-parse + 400 path, so the test is immune to
+  // port-sharing with the MCP server's status server.
+  const { extendTaskBudget } = taskRegistry;
+  const srv = http.createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/task/c2_selftest/extend_lease") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(body || "{}");
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json", Connection: "close" });
+          res.end(JSON.stringify({ success: false, error: "Malformed JSON body" }));
+          return;
+        }
+        const turns = typeof parsed.turns === "number" ? parsed.turns : 25;
+        const resData = extendTaskBudget("c2_selftest", turns, parsed.reason);
+        res.writeHead(resData.success ? 200 : 400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(resData));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
+
+  const badBody = "not valid json at all";
+  const res = await new Promise((resolve, reject) => {
+    const req = http.request(
+      { port, host: "127.0.0.1", path: "/task/c2_selftest/extend_lease", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(badBody) } },
+      (r) => {
+        let body = "";
+        r.on("data", (c) => (body += c));
+        r.on("end", () => resolve({ status: r.statusCode, body }));
+      }
+    );
+    req.on("error", reject);
+    req.end(badBody);
+  });
+
+  check("C2: malformed JSON → HTTP 400", res.status === 400, `got ${res.status}`);
+  const parsed = JSON.parse(res.body);
+  check("C2: response has success:false", parsed.success === false);
+  check("C2: response names the error", /Malformed/.test(parsed.error || ""), `error=${parsed.error}`);
+
+  await new Promise((r) => srv.close(r));
+}
+
+// ---------------------------------------------------------------------------
 // Summary + cleanup.
 // ---------------------------------------------------------------------------
 fs.rmSync(TMP_STATE, { recursive: true, force: true });

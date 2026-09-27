@@ -201,7 +201,9 @@ export async function acquireTaskSlot(taskEntry) {
                 "utf8"
               );
               fs.renameSync(tmp, file);
-            } catch {}
+            } catch (err) {
+              process.stderr.write(`[Semaphore] Heartbeat write failed for ${file}: ${err.message}\n`);
+            }
           }, SLOT_HEARTBEAT_MS);
           refresh.unref();
           return { file, refresh };

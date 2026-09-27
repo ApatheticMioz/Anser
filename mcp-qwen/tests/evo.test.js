@@ -138,6 +138,24 @@ async function runTests() {
       replacement_content: "return 42",
     });
     const readBack = await fsService.readFile({ path: "app.py" });
+
+    // C2: unreadable subdirectory → partial flag (contract-visible)
+    const unreadableDir = path.join(TEST_DIR, "unreadable_sub");
+    fs.mkdirSync(unreadableDir, { recursive: true });
+    fs.writeFileSync(path.join(unreadableDir, "inner.txt"), "x");
+    if (process.platform !== "win32") {
+      fs.chmodSync(unreadableDir, 0o000);
+    }
+    const partialResult = await fsService.listDir({ path: ".", max_depth: 3 });
+    if (process.platform !== "win32") {
+      assert.strictEqual(partialResult.partial, true, "partial flag set when a subdirectory is unreadable");
+    } else {
+      // Windows: chmod is a no-op, so no partial flag expected
+      assert.strictEqual(partialResult.partial, undefined, "no partial flag on Windows (chmod no-op)");
+    }
+    if (process.platform !== "win32") {
+      fs.chmodSync(unreadableDir, 0o755);
+    }
     assert.ok(readBack.content.includes("return 42"), "Edit file replacement failed");
     console.log("  -> Passed!");
   }

@@ -285,7 +285,9 @@ export function bumpWedgeCounter(reason) {
     const tmp = `${WEDGE_COUNTER_FILE}.tmp_${Date.now()}_${process.pid}`;
     fs.writeFileSync(tmp, JSON.stringify(cur), "utf8");
     fs.renameSync(tmp, WEDGE_COUNTER_FILE);
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`[server_lifecycle] Failed to bump wedge counter: ${err.message}\n`);
+  }
 }
 
 export async function engineWedgeState() {

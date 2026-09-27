@@ -1031,10 +1031,14 @@ export const statusHttpServer = http.createServer(async (req, res) => {
       body += chunk;
     });
     req.on("end", () => {
-      let parsed = {};
+      let parsed;
       try {
         parsed = JSON.parse(body || "{}");
-      } catch {}
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json", Connection: "close" });
+        res.end(JSON.stringify({ success: false, error: "Malformed JSON body" }));
+        return;
+      }
       const turns = typeof parsed.turns === "number" ? parsed.turns : 25;
       const resData = extendTaskBudget(taskId, turns, parsed.reason);
       res.writeHead(
