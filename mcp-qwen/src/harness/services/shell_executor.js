@@ -1,22 +1,15 @@
 /**
- * ============================================================================
- * ⚠️ DANGER DANGER DANGER — LIVE HOST PROCESS SPAWNING BOUNDARY — READ THIS ⚠️
- * ============================================================================
+ * Sandboxed Shell Executor Service (Anser Subprocess Runner).
  *
- * ATTENTION ALL FUTURE AGENTS & DEVELOPERS:
- * 1. THIS MODULE SPAWNS LIVE OPERATING SYSTEM PROCESSES (cmd.exe, wsl.exe, bash).
- * 2. NEVER, UNDER ANY CIRCUMSTANCES, PASS REAL DESTRUCTIVE OR SYSTEM-NUKE
- *    COMMANDS (e.g. `rm -rf /`, `del C:\*`, `format C:`) TO `execute()` FOR "TESTING".
- * 3. ALL DESTRUCTIVE COMMAND TESTS MUST BE PASSED EXCLUSIVELY TO
- *    `validateShellSafety` IN `shell_validator.js` (ZERO-EXECUTION ENCLAVE).
- * 4. TO TEST THIS EXECUTOR SERVICE, YOU MUST:
- *    - USE ONLY HARMLESS CANARY COMMANDS (e.g. `echo "test"`), OR
- *    - CONSTRUCT WITH `{ dryRun: true }` OR SET `QWEN_SHELL_DRY_RUN=1`.
- * 5. A LOW-LEVEL DEAD-MAN FUSE GUARDS THE PRE-SPAWN LINE, BUT YOU MUST NEVER
- *    RELY ON RUNTIME INTERCEPTION FOR SYSTEM SAFETY.
- * ============================================================================
+ * Spawns live operating-system processes (cmd.exe, wsl.exe, bash).
  *
- * Sandboxed Shell Executor Service (Anser Subprocess Runner)
+ * Safety invariants:
+ * - Destructive or system-level commands must not be passed to execute();
+ *   test them via validateShellSafety in shell_validator.js (zero-execution).
+ * - To test this executor, use harmless canary commands (e.g. `echo "test"`)
+ *   or run in dry-run mode ({ dryRun: true } or QWEN_SHELL_DRY_RUN=1).
+ * - A dead-man fuse guards the pre-spawn line; do not rely on runtime
+ *   interception for system safety.
  *
  * Provides:
  * - Cross-environment command execution (Windows Host + WSL)
@@ -41,21 +34,18 @@ import {
 // Re-export validator and canary token for backwards compatibility
 export { validateShellSafety, assertDeadManFuse, CANARY_DISASTER_FUSE_TOKEN };
 
-// FX2: escape a single quote for use INSIDE a single-quoted POSIX shell
-// string (the classic close-quote / escaped-quote / reopen-quote idiom). Used by ALL THREE shell branches (WSL,
-// Git-Bash, Linux) so the command can never break out of the surrounding
-// single quotes and inject a second command. Same idiom as the WSL branch.
+// Escapes a single quote for use inside a single-quoted POSIX shell string
+// (close-quote / escaped-quote / reopen-quote idiom). Used by all shell
+// branches so the command cannot break out of the surrounding single quotes.
 function escapeSingleQuote(s) {
   return String(s).replace(/'/g, "'\\''");
 }
 
 export class ShellExecutorService {
   constructor(options = {}) {
-    // P4i: canonicalize the default cwd through the OS symlink/junction
-    // resolution layer so a junction/symlink cwd is stored as its real path.
-    // The CWD containment check in validateShellSafety then compares real
-    // against real, eliminating false PathEscapeError while still catching
-    // real escapes.
+    // Canonicalize the default cwd through the OS symlink/junction resolution
+    // layer so a junction/symlink cwd is stored as its real path; the CWD
+    // containment check in validateShellSafety then compares real against real.
     const rawCwd = options.cwd ? normalizeWorkspacePath(options.cwd) : process.cwd();
     this.defaultCwd = canonicalizePath(rawCwd);
     this.defaultTimeoutMs = options.defaultTimeoutMs || 60_000;
@@ -74,13 +64,11 @@ export class ShellExecutorService {
    */
   async execute({ command, cwd, timeout_ms, use_wsl = false }) {
     const t0 = Date.now();
-    // P4i: canonicalize the effective cwd through the OS symlink/junction
-    // layer. this.defaultCwd is already canonical (from the constructor);
-    // canonicalize the per-call cwd the same way so the CWD containment
-    // check in validateShellSafety compares real-vs-real. This also closes a
-    // real escape vector: a symlink INSIDE the workspace that points OUTSIDE,
-    // used as a cwd, now resolves to its real (outside) location and is
-    // blocked, instead of passing a lexical in-root check.
+    // Canonicalize the per-call cwd through the OS symlink/junction layer so
+    // the CWD containment check in validateShellSafety compares real against
+    // real. A symlink inside the workspace that points outside resolves to
+    // its real (outside) location and is blocked, rather than passing a
+    // lexical in-root check.
     const effectiveCwd = cwd ? canonicalizePath(normalizeWorkspacePath(cwd)) : this.defaultCwd;
     const timeout = timeout_ms || this.defaultTimeoutMs;
 
@@ -113,48 +101,45 @@ export class ShellExecutorService {
       if (isWslTarget) {
         executable = "wsl.exe";
         const posixCwd = toPosixWslPath(effectiveCwd);
-        // P15: Windows-side env (childEnv) never crosses into WSL without
-        // WSLENV, so the color-forcing vars are sanitized INSIDE the -c
-        // payload: Node >= 24 honors FORCE_COLOR on piped stdout and would
-        // otherwise corrupt JSON.parse'd ast-grep output and metric regexes.
+        // Windows-side env (childEnv) does not cross into WSL without WSLENV,
+        // so the color-forcing vars are sanitized inside the -c payload to
+        // keep output plain text (Node >= 24 honors FORCE_COLOR on piped
+        // stdout, which would corrupt JSON.parse'd ast-grep output and metric
+        // regexes).
         args = ["-d", wslDistro(), "--", "bash", "-c", `exec -a "${execTag}" bash -c 'unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat EXEC_TAG="${execTag}"; cd "${posixCwd}" && ${escapeSingleQuote(command)}'`];
         spawnCwd = undefined; // let WSL handle cd
       } else if (process.env.QWEN_SHELL_MODE !== "cmd" && posixShell()) {
-        // POSIX shell routing (P4g): the command is handed to a real
-        // bash-compatible shell (Git Bash preferred) as a SINGLE -c operand
-        // via an argv array — never through `cmd.exe /c` string
-        // interpolation, which mangles quotes (Bug 1.2) and lacks POSIX
-        // pipes/utilities (Bug 1.1).
+        // POSIX shell routing: the command is handed to a real bash-compatible
+        // shell (Git Bash preferred) as a single -c operand via an argv array,
+        // never through `cmd.exe /c` string interpolation (which mangles
+        // quotes and lacks POSIX pipes/utilities).
         //
-        // CWD FIDELITY: Git Bash consumes Windows paths (D:\foo\bar) as cwd
+        // CWD fidelity: Git Bash consumes Windows paths (D:\foo\bar) as cwd
         // directly, so the normalized path is passed verbatim. If a
-        // POSIX-style path (/mnt/d/x) arrives, translate it with the
-        // existing toWindowsPath() (maps /mnt/d/x -> D:\x) — NEVER by naive
-        // string concat (a D:\mnt\d -> D:\ junction exists on this machine
-        // and realpath through it produces a false SymlinkEscapeError).
+        // POSIX-style path (/mnt/d/x) arrives, translate it with
+        // toWindowsPath() (maps /mnt/d/x -> D:\x) — never by naive string
+        // concat, which can mis-resolve through a junction.
         let posixSpawnCwd = effectiveCwd;
         if (effectiveCwd.startsWith("/")) {
           posixSpawnCwd = toWindowsPath(effectiveCwd);
         }
         executable = posixShell();
-        // FX2: uniform with the WSL branch — `exec -a` sets the process
-        // argv[0] to the exec tag (so the anchored pgrep sweep can match it)
-        // and the command is single-quote-wrapped with the ''' escape idiom
-        // so it can never break out of the quoting. Git Bash's bash supports
-        // `exec -a` (verified), so no deviation from the WSL mechanism.
+        // `exec -a` sets the process argv[0] to the exec tag (so the anchored
+        // pgrep sweep can match it) and the command is single-quote-wrapped
+        // with the ''' escape idiom so it cannot break out of the quoting.
         args = ["-c", `exec -a "${execTag}" bash -c 'unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat EXEC_TAG="${execTag}"; ${escapeSingleQuote(command)}'`];
         spawnCwd = posixSpawnCwd;
       } else {
-        // Legacy cmd.exe path: zero regression for machines without a
-        // POSIX shell, and the QWEN_SHELL_MODE=cmd escape hatch.
+        // cmd.exe path: used when no POSIX shell is available or when
+        // QWEN_SHELL_MODE=cmd is set.
         executable = process.env.ComSpec || "cmd.exe";
         args = ["/d", "/s", "/c", command];
       }
     } else {
       executable = "bash";
-      // FX2: uniform with the WSL branch — `exec -a` sets the process argv[0]
-      // to the exec tag and the command is single-quote-wrapped with the
-      // ''' escape idiom so it can never break out of the quoting.
+      // `exec -a` sets the process argv[0] to the exec tag and the command is
+      // single-quote-wrapped with the ''' escape idiom so it cannot break out
+      // of the quoting.
       args = ["-c", `exec -a "${execTag}" bash -c 'unset FORCE_COLOR CLICOLOR CLICOLOR_FORCE; export NO_COLOR=1 CI=1 PAGER=cat EXEC_TAG="${execTag}"; ${escapeSingleQuote(command)}'`];
     }
 
