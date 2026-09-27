@@ -424,7 +424,7 @@ export async function healWedgedEngine(statsAgeSec) {
 async function warmEngine() {
   try {
     const key = getApiKeySync();
-    // FX2: omit Authorization when no key file exists (honest, not fabricated).
+    // Omit Authorization header when no key file is present.
     const headers = { "Content-Type": "application/json" };
     if (key) headers.Authorization = `Bearer ${key}`;
     await fetch(`${BASE_URL}/chat/completions`, {

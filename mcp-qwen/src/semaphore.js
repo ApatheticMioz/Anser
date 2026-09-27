@@ -13,9 +13,12 @@ import {
 import { wslDistro } from "./wsl_env.js";
 
 /**
- * Checks whether a given PID is currently alive on the host or across the WSL/Windows boundary.
- * @param {number} pid - Target process ID
- * @param {string} [platform=process.platform] - OS platform ('win32' | 'linux')
+ * Checks whether a given PID is currently alive on the host or across the
+ * WSL/Windows boundary.
+ * @param {number} pid - Target process ID.
+ * @param {string} [platform=process.platform] - OS platform ('win32' | 'linux').
+ * @returns {boolean} true if the PID is alive (or the probe timed out, which
+ *   is treated as alive to avoid falsely declaring a live worker orphaned).
  */
 export function pidAlive(pid, platform = process.platform) {
   if (!pid) return false;
@@ -226,23 +229,21 @@ export async function acquireTaskSlot(taskEntry) {
 }
 
 /**
- * Releases a held task slot lease.
+ * Releases a held task slot lease. Idempotent: a double-release or a release
+ * after natural completion is a no-op. The atomic-heartbeat design (O_EXCL
+ * claim, heartbeat refresh, ownership-guarded unlink) is preserved.
  *
- * FX5-A (D6): this is now IDEMPOTENT and returns a distinguishable result
- * instead of throwing, so a cancel that lands after natural completion (or a
- * double-release from runQueued's finally AND a cancel path) is a harmless
- * no-op. The atomic-heartbeat design (O_EXCL claim, heartbeat refresh,
- * ownership-guarded unlink) is untouched.
- *
+ * @param {{file: string, refresh: NodeJS.Timeout, released?: boolean}} slot -
+ *   The slot handle returned by {@link acquireTaskSlot}.
  * @returns {{released: boolean, reason?: string}}
- *   - {released:true}  we freed a lease we owned (or a dead/unreadable one).
- *   - {released:false, reason:"no_slot"}         no handle passed in.
- *   - {released:false, reason:"already_released"} this handle was already
+ *   - {released:true}  A lease we owned (or a dead/unreadable one) was freed.
+ *   - {released:false, reason:"no_slot"}         No handle passed in.
+ *   - {released:false, reason:"already_released"} This handle was already
  *     released (idempotent no-op).
- *   - {released:false, reason:"not_ours"}        another LIVE instance owns
- *     the lease; we never delete it (P15 multi-instance invariant).
- *   - {released:false, reason:"release_failed"} the unlink threw; the handle
- *     is NOT marked released so a later call may retry.
+ *   - {released:false, reason:"not_ours"}        Another live instance owns
+ *     the lease; it is not deleted.
+ *   - {released:false, reason:"release_failed"} The unlink threw; the handle
+ *     is not marked released so a later call may retry.
  */
 export function releaseTaskSlot(slot) {
   if (!slot) return { released: false, reason: "no_slot" };
@@ -255,7 +256,7 @@ export function releaseTaskSlot(slot) {
       slot.released = true;
       return { released: true };
     }
-    // Another LIVE instance owns this lease — never delete it (P15).
+    // Another live instance owns this lease; it is not deleted.
     slot.released = true;
     return { released: false, reason: "not_ours" };
   } catch {
@@ -312,9 +313,9 @@ export function getSlotStatus(currentPid = process.pid) {
 /**
  * Clears reclaimable slot lease locks in SLOTS_DIR.
  *
- * P15: only deletes leases whose owner is this process or whose owner pid is
- * not alive. A lease that cannot be parsed (truncated mid-write) is treated
- * as reclaimable, matching the readLease/leaseReclaimable convention.
+ * Only deletes leases whose owner is this process or whose owner pid is not
+ * alive. A lease that cannot be parsed (truncated mid-write) is treated as
+ * reclaimable, matching the readLease/leaseReclaimable convention.
  */
 export function clearReclaimableTaskSlots() {
   try {
@@ -342,10 +343,9 @@ export async function runQueued(fn, taskEntry, onStart) {
       }
     );
   }
-  // FX5-A (D6): record the live slot handle on the task entry so a cancel
-  // path (tools.js `cancel`, the HTTP /task/:id/cancel, or cancelAllTasks)
-  // can release the slot immediately instead of waiting for natural
-  // completion. Cleared in the finally below once the slot is released.
+  // Record the live slot handle on the task entry so a cancel path (tools.js
+  // `cancel`, the HTTP /task/:id/cancel, or cancelAllTasks) can release the
+  // slot. Cleared in the finally below once the slot is released.
   if (taskEntry) taskEntry.slot = slot;
   if (taskEntry?.done || taskEntry?.status === "cancelled") {
     releaseTaskSlot(slot);
