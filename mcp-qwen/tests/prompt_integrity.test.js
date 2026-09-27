@@ -182,7 +182,9 @@ test("prompt_integrity: runner caps consecutive reasoning cutoffs to 1 and termi
 
   // Call 1: Turn 1 (hits ceiling) -> triggers continuation 1 with REASONING_CONTINUATION_DIRECTIVE
   // Call 2: Turn 2 (continuation turn, hits ceiling again) -> consecutiveReasoningContinuations > 1 -> breaks!
-  assert.equal(calls, 2, "Must make exactly 2 calls before terminating consecutive reasoning loops");
+  // Call 3: E2 salvage extraction pass (bounded, tools disabled, low effort)
+  //   The mock always returns empty content, so the salvage is "empty" (salvage_empty).
+  assert.equal(calls, 3, "Must make exactly 3 calls (2 reasoning cutoffs + 1 salvage)");
   assert.equal(result.status, "reasoning_budget_exhausted", "Status must be reasoning_budget_exhausted");
   assert.ok(
     result.finalText.includes("ReasoningBudgetExhaustedError"),
@@ -194,6 +196,10 @@ test("prompt_integrity: runner caps consecutive reasoning cutoffs to 1 and termi
   assert.equal(contEvents.length, 1, "Must inject exactly 1 continuation for reasoning cutoff");
   assert.equal(contEvents[0].directive, "balanced_landing");
   assert.equal(contEvents[0].content, REASONING_CONTINUATION_DIRECTIVE);
+
+  // E2: the salvage call returned empty (mock always returns empty) -> salvage_empty
+  const salvageEmpty = events.filter((e) => e.type === "salvage_empty");
+  assert.equal(salvageEmpty.length, 1, "Must log one salvage_empty (mock returns empty content)");
 });
 
 test("prompt_integrity: runner allows normal content cutoffs up to MAX_CONTINUATION_TURNS", async () => {
@@ -478,6 +484,25 @@ test("prompt_integrity: empirical tool call resets consecutive reasoning continu
           metrics,
         };
       }
+      // Call 5: E2 salvage extraction pass (bounded, tools disabled, low effort).
+      // Returns empty content (the mock has no scripted salvage response).
+      if (calls === 5) {
+        const metrics = {
+          promptTokens: 100,
+          completionTokens: 0,
+          ttftMs: 10,
+          totalMs: 20,
+          reasoningTokens: 0,
+          hadReasoning: false,
+        };
+        if (onMetrics) onMetrics(metrics);
+        return {
+          content: "",
+          toolCalls: [],
+          finishReason: "stop",
+          metrics,
+        };
+      }
       throw new Error(`Unexpected call ${calls}`);
     },
   };
@@ -503,7 +528,8 @@ test("prompt_integrity: empirical tool call resets consecutive reasoning continu
   // Call 2: Turn 2 (tool call) -> executes tool, resets counter
   // Call 3: Turn 3 (hits ceiling) -> continuation 2 (consecutive = 1)
   // Call 4: Turn 4 (hits ceiling again) -> consecutive = 2 -> terminates!
-  assert.equal(calls, 4, "Must survive past call 3 because call 2 executed a tool");
+  // Call 5: E2 salvage extraction pass (bounded, tools disabled, low effort)
+  assert.equal(calls, 5, "Must survive past call 3 because call 2 executed a tool (+1 salvage)");
   assert.equal(result.status, "reasoning_budget_exhausted", "Status must be reasoning_budget_exhausted");
 
   const contEvents = events.filter((e) => e.type === "continuation_injected");

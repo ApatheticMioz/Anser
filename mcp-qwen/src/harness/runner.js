@@ -49,6 +49,7 @@ import {
   LOOP_DETECTION_WINDOW,
   LOOP_DETECTION_REPETITIONS,
   SUPERVISOR_PREVIEW_CHARS,
+  SALVAGE_MAX_TOKENS,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
 import { recordTurnTelemetry, recordToolExecution, sampleLiveVllmMetrics } from "../telemetry.js";
@@ -140,6 +141,28 @@ export const REASONING_CONTINUATION_DIRECTIVE =
   "Your deliberation was paused at the token ceiling. " +
   "If you have reached a resolution, proceed with your tool call or response. " +
   "If you are facing an ambiguous requirement or an impasse, state what you have determined so far and request guidance from the supervisor.";
+
+/**
+ * E2: non-coercive salvage directive injected on the single bounded extraction
+ * turn that fires when the reasoning budget is exhausted (F6.3 data-loss
+ * salvage). The model's deliberation has hit the ceiling and the session is
+ * about to terminate with the honest `reasoning_budget_exhausted` status.
+ * Rather than discarding whatever partial findings / tables / conclusions the
+ * model accumulated in its thinking, we give it ONE short, tool-less, low-effort
+ * turn to record that accumulated work to a scratch file so the orchestrator
+ * can recover it.
+ *
+ * NON-COERCIVE (policed by prompt_integrity): it does NOT command the model to
+ * "conclude immediately" or "emit a forced action" (the F4-class coercion that
+ * causes hallucinations). It simply asks the model to write down what it has
+ * already determined, and to state what remains incomplete. The path is
+ * substituted in at call time (see `salvageReasoningBudget`).
+ */
+export const SALVAGE_DIRECTIVE =
+  "Your deliberation has reached the token ceiling and this session is about to conclude. " +
+  "Do not reason further. In one short message, record the findings, tables, and conclusions you have " +
+  "already accumulated to the file <SALVAGE_PATH>, and briefly state what remains incomplete. " +
+  "This is a best-effort salvage of your partial work — if you have nothing concrete to record, simply say so.";
 
 /**
  * M4: advisory injected when the model has run more than PROBE_BUDGET
@@ -259,6 +282,103 @@ export class AnserRunner {
     // LLM / logger without touching the network or the real vLLM provider).
     this._llm = options.llm || null;
     this._logger = options.logger || null;
+  }
+
+  /**
+   * E2: bounded salvage extraction pass on deliberation-budget exhaustion (F6.3).
+   *
+   * When the reasoning budget is exhausted, the model has accumulated partial
+   * findings in its thinking that would otherwise be discarded. This method
+   * fires ONE bounded extraction turn (tools disabled, low reasoning effort,
+   * short max_tokens) to capture those findings as plain text, then writes the
+   * text to `<workspace>/.scratch/salvage_<sessionId>.md`.
+   *
+   * Best-effort: any failure (throw, empty response, missing FS service, write
+   * error) is logged as `salvage_failed` / `salvage_empty` and the method
+   * returns `{ salvaged: false }`. The caller proceeds to the honest
+   * `reasoning_budget_exhausted` break regardless — the salvage never masks the
+   * exhaustion status (zero-masking invariant).
+   *
+   * @param {object} params
+   * @param {object} params.llm The LLM provider (ctx.get("llm")).
+   * @param {object} params.logger The event logger (ctx.get("logger")).
+   * @param {object} [params.fsService] The sandboxed FS service (ctx.get("fs")).
+   * @param {string} params.sessionId The session ID.
+   * @param {AbortSignal} [params.signal] Cancellation signal.
+   * @returns {Promise<{ salvaged: boolean, path?: string, error?: string }>}
+   */
+  async salvageReasoningBudget({ llm, logger, fsService, sessionId, signal }) {
+    const safeId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "session";
+    const salvagePath = `.scratch/salvage_${safeId}.md`;
+    const directive = SALVAGE_DIRECTIVE.replace("<SALVAGE_PATH>", salvagePath);
+
+    let salvageContent = "";
+    try {
+      // CRITICAL: use a MINIMAL message set (system prompt + directive only),
+      // NOT the full conversation history. The session is about to terminate
+      // precisely because the context is deep (near the 245K ceiling); passing
+      // the full history would re-trigger ContextExhaustedError. The salvage
+      // is a fresh, short extraction turn.
+      const salvageMessages = [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: directive },
+      ];
+      const salvageResult = await llm.streamChat({
+        messages: salvageMessages,
+        tools: [],
+        reasoningEffort: "low",
+        maxTokens: SALVAGE_MAX_TOKENS,
+        signal,
+        sessionId,
+      });
+      salvageContent = (salvageResult?.content || "").trim();
+    } catch (err) {
+      logger.append({
+        type: "salvage_failed",
+        error: err.message,
+        path: salvagePath,
+      });
+      return { salvaged: false, error: err.message };
+    }
+
+    if (salvageContent === "") {
+      logger.append({
+        type: "salvage_empty",
+        path: salvagePath,
+      });
+      return { salvaged: false };
+    }
+
+    if (!fsService) {
+      logger.append({
+        type: "salvage_failed",
+        error: "No FS service available",
+        path: salvagePath,
+      });
+      return { salvaged: false, error: "No FS service available" };
+    }
+
+    try {
+      const res = await fsService.writeFile({
+        path: salvagePath,
+        content: salvageContent,
+        overwrite: true,
+      });
+      const writtenPath = res?.path || salvagePath;
+      logger.append({
+        type: "salvage_extracted",
+        path: writtenPath,
+        bytes: Buffer.byteLength(salvageContent, "utf8"),
+      });
+      return { salvaged: true, path: writtenPath };
+    } catch (err) {
+      logger.append({
+        type: "salvage_failed",
+        error: err.message,
+        path: salvagePath,
+      });
+      return { salvaged: false, error: err.message };
+    }
   }
 
   /**
@@ -880,6 +1000,18 @@ export class AnserRunner {
               if (consecutiveReasoningContinuations > 1) {
                 status = "reasoning_budget_exhausted";
                 finalText = "ReasoningBudgetExhaustedError: The model reached the deliberation ceiling across consecutive continuation turns without taking action or concluding.";
+                // E2: bounded salvage extraction pass (F6.3). Best-effort;
+                // never alters the honest status above.
+                const salvage = await this.salvageReasoningBudget({
+                  llm,
+                  logger,
+                  fsService: ctx.get("fs"),
+                  sessionId,
+                  signal,
+                });
+                if (salvage.salvaged) {
+                  finalText += `\n\n[Salvage] Partial findings saved to: ${salvage.path}`;
+                }
                 break;
               }
               continuationsInjected++;
@@ -925,6 +1057,18 @@ export class AnserRunner {
             } else if (hadReasoning) {
               status = "reasoning_budget_exhausted";
               finalText = "ReasoningBudgetExhaustedError: The model exhausted the continuation reasoning budget without emitting visible actions or content.";
+              // E2: bounded salvage extraction pass (F6.3). Best-effort;
+              // never alters the honest status above.
+              const salvage = await this.salvageReasoningBudget({
+                llm,
+                logger,
+                fsService: ctx.get("fs"),
+                sessionId,
+                signal,
+              });
+              if (salvage.salvaged) {
+                finalText += `\n\n[Salvage] Partial findings saved to: ${salvage.path}`;
+              }
             } else {
               status = "length_limit_reached";
             }

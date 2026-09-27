@@ -345,7 +345,7 @@ Two layers of defense:
 
 ## Test Suite
 
-`npm test` runs 9 critical suites (offline, zero engine interruption). `npm run test:all` runs all 63 suites (all must exit 0). The table below is a representative listing of the core suites; the full 63-suite list is the authoritative `test:all` invocation in `package.json`.
+`npm test` runs 9 critical suites (offline, zero engine interruption). `npm run test:all` runs all 64 suites (all must exit 0). The table below is a representative listing of the core suites; the full 63-suite list is the authoritative `test:all` invocation in `package.json`.
 
 | # | Suite | Command | Type | Purpose |
 |---|-------|---------|------|---------|
@@ -383,7 +383,7 @@ Two layers of defense:
 | 32 | `status_lifecycle.test.js` | `npm test` | Offline | Status-server keeper re-election, elapsed fix, cancel slot release, honest `stopServer` |
 | 33 | `shell_hardening.test.js` | `npm test` | Offline | Shell-injection hardening (session-id charset, pgrep escape), credential honesty |
 
-**Live-engine test gating**: Suites 6, 19, 20, and 26 use `tests/helpers/engine_probe.js` (`isEngineAvailable` / `requireEngineOrSkip`) to probe `/v1/models` with a 3s timeout. When vLLM is running, all 63 suites execute live; when offline, those four print `[SKIP]` and exit 0 (the remaining 59 run offline or against a mock upstream). Under active engine operation, `npm run test:all` runs all 63 suites with **zero skips and zero failures**.
+**Live-engine test gating**: Suites 6, 19, 20, and 26 use `tests/helpers/engine_probe.js` (`isEngineAvailable` / `requireEngineOrSkip`) to probe `/v1/models` with a 3s timeout. When vLLM is running, all 64 suites execute live; when offline, those four print `[SKIP]` and exit 0 (the remaining 59 run offline or against a mock upstream). Under active engine operation, `npm run test:all` runs all 64 suites with **zero skips and zero failures**.
 
 ## 11-Hour Production Verification & Telemetry Ledger
 

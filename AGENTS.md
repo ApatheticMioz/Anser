@@ -160,7 +160,7 @@ mcp-qwen/
                            #   web_service, provider_vllm, mcp_bridge, event_logger
       evo/                 # evo_operator, lineage_dag, evaluator,
                            #   trace_repair, watchdog
-  tests/                   # 63 suites (see section 5)
+  tests/                   # 64 suites (see section 5)
 ```
 **New tools** are in-process microkernel plugins under `src/harness/services/`
 — never external CLI subprocesses (in-process = sub-millisecond).
@@ -224,7 +224,7 @@ There is **no root `package.json`** — always use `--prefix mcp-qwen`.
 # Fast canary gate - 9 critical suites (~4s, offline, zero engine interruption). Run during active development.
 npm test --prefix mcp-qwen
 
-# Full authoritative gate - 63 suites (single-pass complete verification). Run before PR / milestone commit.
+# Full authoritative gate - 64 suites (single-pass complete verification). Run before PR / milestone commit.
 npm run test:all --prefix mcp-qwen
 
 # GPU-less / CI: live suites skip honestly by default when ALLOW_ENGINE_INTERRUPT is unset or TEST_OFFLINE=1.
@@ -262,7 +262,7 @@ By default, tests NEVER interrupt, probe, or reboot a running vLLM instance (`AL
 `.github/workflows/ci.yml` runs the gate on every push/PR across a
 **Node 22 & 24 x ubuntu-latest & windows-latest** matrix (4 jobs, no
 fail-fast). It uses `npm ci` in `mcp-qwen/` and runs the authoritative
-`test:all` gate (63 suites). A green CI is required before a PR is mergeable.
+`test:all` gate (64 suites). A green CI is required before a PR is mergeable.
 
 ---
 

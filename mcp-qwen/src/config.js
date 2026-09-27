@@ -582,5 +582,17 @@ export const TOOL_SPILL_BYTES = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TOOL_SPILL_BYTES;
 })();
 
+// E2: bounded salvage extraction pass on deliberation-budget exhaustion.
+// When the reasoning budget is exhausted, the runner fires ONE bounded
+// extraction turn (tools disabled, low reasoning effort) to salvage the
+// model's accumulated partial findings. This short max_tokens (4096) bounds
+// the extraction so it cannot re-trigger the deliberation loop. Overridable
+// via QWEN_SALVAGE_MAX_TOKENS for tests / operators.
+const DEFAULT_SALVAGE_MAX_TOKENS = 4096;
+export const SALVAGE_MAX_TOKENS = (() => {
+  const parsed = parseInt(process.env.QWEN_SALVAGE_MAX_TOKENS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SALVAGE_MAX_TOKENS;
+})();
+
 
 
