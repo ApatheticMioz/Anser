@@ -1,53 +1,54 @@
 /**
- * RepetitionDetector — stateful degenerate-repetition guard for SSE streams.
+ * Stateful degenerate-repetition guard for SSE streams.
  *
- * Extracted from stream_proxy.js so it can be unit-tested in isolation
- * (importing stream_proxy.js directly would start the HTTP listener, which
- * is unsafe inside a test process).
- *
- * Tiered single-character repetition limits:
- *   - code/diff-significant characters (git-diff '+' hunks, code, URLs, JSON,
- *     math) get a HIGH limit of 500 so legitimate long runs in model reports
- *     are never mistaken for a degenerate loop.
- *   - whitespace / standard markdown dividers keep 120.
- *   - everything else stays at the strict 35 (true degeneracy still trips).
- *
- * Block-level (multi-character) repetition detection and any total-stream
- * bound are intentionally left unchanged.
+ * Detects two classes of runaway repetition:
+ *   - Single-character runs, governed by tiered limits:
+ *     CODE_LIMIT (1000) for code/diff-significant characters, DIVIDER_LIMIT
+ *     (250) for whitespace/markdown dividers, and DEFAULT_LIMIT (100) for
+ *     everything else.
+ *   - Multi-character pattern loops (a unit of 4-32 characters repeated
+ *     PATTERN_REPEAT_COUNT times), excluding "pure" runs made entirely of
+ *     code-significant or divider characters (those are covered by the
+ *     single-character tiered limits).
  */
 
-// M3b: the exact marker text the stream proxy appends to a stream it has
-// circuit-broken for runaway repetition (stream_proxy.js breakerChunk). This
-// is the SINGLE SOURCE OF TRUTH for that string: the proxy emits it, and the
-// Anser runner (src/harness/runner.js) detects it in the accumulated final
-// text to classify guard-truncated degenerate finals honestly (retry, then
-// "degenerate_response_truncated") instead of a false "completed".
-//
-// The marker is a template: the breaker interpolates the detected repetition
-// type and pattern (e.g. "character" / "\"a\"" or "pattern" / "the the ").
-// The runner matches on the stable prefix (GUARD_MARKER_PREFIX) so it is
-// robust to the interpolated detail, and strips the full marker (prefix +
-// detail + closing bracket) when measuring the substantive remainder.
+/**
+ * Stable prefix of the stream-proxy guard marker. The stream proxy appends
+ * this marker (with the detected repetition type and pattern interpolated)
+ * to a stream it has circuit-broken for runaway repetition; the Anser runner
+ * (src/harness/runner.js) matches on this prefix to detect guard-truncated
+ * degenerate finals and strips the full marker when measuring the
+ * substantive remainder.
+ * @type {string}
+ */
 export const GUARD_MARKER_PREFIX =
   "[StreamProxy Guard: Runaway repetition loop (";
+
+/**
+ * Template for the full stream-proxy guard marker. The `${type}` and
+ * `${pattern}` placeholders are interpolated by the breaker with the detected
+ * repetition type (e.g. "character" / "pattern") and the repeated unit.
+ * @type {string}
+ */
 export const GUARD_MARKER_TEMPLATE =
   "\n\n[StreamProxy Guard: Runaway repetition loop (${type}: ${pattern}) detected and safely truncated]\n\n";
 
-// Characters that legitimately appear in long consecutive runs inside
-// legitimate model output (git-diff '+' hunks, code, URLs, JSON, math).
+// Characters that appear in long consecutive runs in model output (git-diff
+// '+' hunks, code, URLs, JSON, math).
 const CODE_REPEAT_CHARS = new Set(
   "+./\\<>|:;()[]{}'\"!?,~^&%$@".split("")
 );
 
-// Whitespace / standard markdown divider characters (limit 120).
+// Whitespace / standard markdown divider characters (governed by
+// DIVIDER_LIMIT).
 const DIVIDER_CHARS = new Set(["-", "=", "*", "#", " ", "\t", "\n", "_"]);
 
 // Union of code-significant and divider/whitespace characters. A repeating
-// unit made up ENTIRELY of these is a "pure" run (e.g. a git-diff '+' hunk,
-// a '====' divider, a '////' comment) and is governed by the single-character
-// tiered limits above — the block-level detector must NOT also trip on it.
-// Genuine multi-character phrase loops (e.g. "the the the") contain letters
-// outside this set and are still caught by the block detector.
+// unit made entirely of these is a "pure" run (e.g. a git-diff '+' hunk, a
+// '====' divider, a '////' comment) and is governed by the single-character
+// tiered limits; the block-level detector skips it. Multi-character phrase
+// loops (e.g. "the the the") contain letters outside this set and are caught
+// by the block detector.
 const PURE_RUN_CHARS = new Set([...CODE_REPEAT_CHARS, ...DIVIDER_CHARS]);
 
 const CODE_LIMIT = 1000;
@@ -55,6 +56,12 @@ const DIVIDER_LIMIT = 250;
 const DEFAULT_LIMIT = 100;
 const PATTERN_REPEAT_COUNT = 40;
 
+/**
+ * Stateful detector for runaway repetition in a streamed text stream. Feed
+ * chunks via {@link RepetitionDetector#feed}; it tracks the trailing
+ * single-character run and a rolling window of recent text for
+ * multi-character pattern loops.
+ */
 export class RepetitionDetector {
   constructor() {
     this.lastChar = "";
@@ -62,7 +69,14 @@ export class RepetitionDetector {
     this.rolling = "";
   }
 
-  // Returns { type, pattern, count } if degenerate repetition is detected, else null
+  /**
+   * Feeds a chunk of streamed text into the detector.
+   * @param {string} text - The next chunk of streamed text.
+   * @returns {{type: string, pattern: string, count: number}|null} A
+   *   detection object (`type` is "character" or "pattern", `pattern` is the
+   *   repeated unit, `count` is the run length) when degenerate repetition is
+   *   detected, or null otherwise.
+   */
   feed(text) {
     if (!text || typeof text !== "string") return null;
 
