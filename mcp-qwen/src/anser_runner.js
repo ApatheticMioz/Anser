@@ -96,18 +96,17 @@ export function isSuccessStatus(status) {
 }
 
 /**
- * M5b: pure helper that assembles the ORCHESTRATOR-facing result text.
+ * Assembles the orchestrator-facing result text with advisory metadata.
  *
- * Appends structured advisory banners and recommendation markers:
- *   - Turn budget exhausted (100 turns): warning banner advising critical review
- *     of partial/synthesized deliverable.
- *   - Session >= 80 turns: note banner advising context-depth consolidation and
- *     the machine-readable SessionTurnLimitRecommendation marker.
+ * Appends structured advisory banners when thresholds are reached:
+ *   - Turn budget exhausted: warning banner advising review of partial deliverables.
+ *   - Session turn limit reached: advisory note recommending context consolidation
+ *     and the machine-readable SessionTurnLimitRecommendation marker.
  *
- * @param {string} finalText The runner's final text (the model's deliverable).
- * @param {number|undefined|null} sessionTurns The session-cumulative turn count.
- * @param {string|undefined|null} [status] The final runner status.
- * @returns {string} The augmented result text.
+ * @param {string} finalText The runner's raw deliverable text.
+ * @param {number|undefined|null} sessionTurns Cumulative session turn count.
+ * @param {string|undefined|null} [status] Terminal status of the runner execution.
+ * @returns {string} Formatted result string for client consumption.
  */
 export function buildResultText(finalText, sessionTurns, status) {
   let text = finalText;
@@ -136,15 +135,12 @@ export function buildResultText(finalText, sessionTurns, status) {
   return text;
 }
 
-// FX2: the charset the system itself generates for session ids. The default
-// generator produces `workspace_<md5hex8>_<pid-b36>_<ts-b36>`; the shell
-// executor tags are `qwen_sh_<ts>_<rand>`; clients use `<milestone>_s1`,
-// `task-ui-ovh`, etc. All of these are [A-Za-z0-9._:-]. A session id is
-// interpolated into a single-quoted POSIX shell string (the anchored
-// pgrep sweep in wsl_bridge.js), so any
-// character outside this charset (a single quote, `;`, backtick, space,
-// newline, ...) is a shell-injection vector. We REFUSE such ids loudly
-// (fail-fast) rather than silently sanitizing them.
+/**
+ * Permitted character set for session identifiers: [A-Za-z0-9._:-].
+ * Validates session IDs fail-fast to prevent shell metacharacter injection
+ * during process-tree management and process sweeps.
+ * @type {RegExp}
+ */
 const SESSION_ID_CHARSET = /^[A-Za-z0-9._:-]+$/;
 
 export function resolveSessionId(cwd, requestedSessionId) {
@@ -162,14 +158,7 @@ export function resolveSessionId(cwd, requestedSessionId) {
     return id;
   }
   const hash = crypto.createHash("md5").update(cwd.toLowerCase()).digest("hex").slice(0, 8);
-  // P15: the default session id must be unique per task, not just per cwd.
-  // The old `workspace_<hash8(cwd)>` was shared by EVERY instance and EVERY
-  // task in the same directory, so (a) a cancel sweep of one instance's task
-  // could match and kill ANOTHER instance's live child with the same
-  // id, and (b) two clients in one directory wrote to the same
-  // ~/.qwen/sessions/<id>/events.jsonl (cross-client ledger bleed). The
-  // pid + timestamp suffixes make each default id unique while keeping the
-  // `workspace_` prefix. Explicit client-passed ids are untouched above.
+  // Generates a unique default session identifier combining directory hash, process PID, and timestamp.
   return `workspace_${hash}_${process.pid.toString(36)}_${Date.now().toString(36)}`;
 }
 
@@ -186,27 +175,15 @@ export function startAnserTask({
   skills,
   reasoningEffort,
 }) {
-  // P4i: canonicalize the task cwd ONCE at the spawn boundary, through the OS
-  // symlink/junction resolution layer. This is the single point where the
-  // working directory is persisted to the task entry and handed to every
-  // downstream spawn (AnserRunner, the test command).
-  // If the MCP server process was launched through a junction/symlink cwd,
-  // process.cwd() returns the junction literal; canonicalizing here makes the
-  // entire spawn pipeline operate on the real path, eliminating false
-  // SymlinkEscapeError/PathEscapeError in the child's sandboxed services.
-  // A requested real-path cwd is unaffected (realpath is a no-op on a
-  // non-junction path); a genuinely outside cwd is still caught by the
-  // per-service containment checks downstream.
+  // Canonicalize task working directory through OS symlink and junction resolution
+  // to ensure consistent realpath evaluation across sandboxed services.
   cwd = canonicalizePath(cwd);
   const taskId = `task_${sessionId}_${Date.now()}`;
   const baseTimeoutMs = Math.max(timeoutMs ?? DEFAULT_TIMEOUT_MS, MIN_TIMEOUT_MS);
   const totalTimeoutMs =
     baseTimeoutMs + (extensions && extensions.length ? EXTENSION_BONUS_TIMEOUT_MS : 0);
 
-  // Effective reasoning effort for THIS task: the per-dispatch param when
-  // provided, else the QWEN_REASONING_EFFORT env default (read at dispatch
-  // time). Surfaced on the task record for telemetry; the provider re-resolves
-  // the same value per request (param precedence, env fallback).
+  // Resolve task-level reasoning effort: explicit dispatch parameter takes precedence over environment default.
   const effectiveReasoningEffort = reasoningEffort || getReasoningEffort();
 
   const taskEntry = {
@@ -298,7 +275,7 @@ export function startAnserTask({
       }
       finalTaskPrompt += effectivePrompt;
 
-      // Primary Engine: Anser (microkernel + sandboxed services) - hard-wired, no engine selection.
+      // Execute task within Anser microkernel and sandboxed service harness.
       taskEntry.startedAt = Date.now();
       taskEntry.status = "running";
       saveTaskToDisk(taskEntry);
@@ -330,15 +307,10 @@ export function startAnserTask({
             taskEntry.lastHeartbeatAt = Date.now();
             saveTaskToDisk(taskEntry);
           },
-          // Task-local reasoning-effort override (per-dispatch). Threaded RAW
-          // (may be undefined) to the provider so its existing dynamic
-          // QWEN_REASONING_EFFORT read remains the fallback when the param is
-          // absent — no process.env mutation, no cross-task leakage.
+          // Pass dispatch-scoped reasoning effort to the model provider.
           reasoningEffort,
           signal: abortController.signal,
-          // P8: make extensions[] first-class on the primary engine. The
-          // runner boots the MCP extension bridge before the loop and
-          // disposes it in its finally block (no leaked children).
+          // Initialize stdio MCP extension servers on the execution harness.
           extensions,
           targetInWsl,
           onToken: (tok) => {
@@ -401,24 +373,11 @@ export function startAnserTask({
         taskEntry.finishedAt = Date.now();
         taskEntry.status = runResult.status;
         taskEntry.isError = !isSuccess;
-        // E3: propagate context headroom telemetry from the runner.
+        // Propagate remaining context headroom telemetry to task state.
         taskEntry.lastPromptTokens = runResult.lastPromptTokens ?? null;
         taskEntry.contextHeadroom = runResult.contextHeadroom ?? null;
-        // M5b: surface the 80-turn session-rollover recommendation to the
-        // ORCHESTRATOR in the dispatch result text. The runner's M5a
-        // `session_turn_limit_recommended` event lands in the session event
-        // log, which the orchestrator rarely reads; the result text is what
-        // it does read. When the session's CUMULATIVE turn count (prior
-        // assistant_message events + this run's turnsTaken) reaches
-        // SESSION_TURNS_RECOMMEND, buildResultText appends a structured
-        // advisory line. ADVISORY ONLY: it never alters status/isError and
-        // never cancels the task — the hard MAX_TURNS cap is untouched.
-        //
-        // NOTE: no anser_runner-level event sink exists in this module (no
-        // EventLoggerService / logger), so per the M5b spec we do NOT emit a
-        // `session_turn_limit_recommended` event from this layer and do NOT
-        // invent a new sink — the M5a runner-side event (harness/runner.js)
-        // already records it in the session log.
+
+        // Append session-rollover advisory to result text when cumulative turn thresholds are reached.
         const resultText = buildResultText(runResult.finalText, runResult.sessionTurns, runResult.status);
         taskEntry.result = {
           isError: !isSuccess,
@@ -458,22 +417,7 @@ export function startAnserTask({
         return taskEntry.result;
       } finally {
         clearInterval(heartbeatTimer);
-        // E5: session-end orphan reaping hardening. On EVERY task termination
-        // path (success, error, cancel) run a bounded, idempotent sweep:
-        //   1. Anchored per-session process-tree sweep — kills only processes
-        //      whose cmdline matches THIS session id at an exact boundary
-        //      (pgrep -> /proc cmdline verify -> kill), so a session id that
-        //      is a substring of another session's id is never over-killed.
-        //      This is the same sweep cancelAllTasks uses; running it here
-        //      closes the gap where a task that terminated naturally (or was
-        //      cancelled before the cancel path's own sweep) left WSL children
-        //      behind.
-        //   2. Stale slot-lease cleanup — reclaims only leases whose owner
-        //      pid is dead or whose task is already terminal; a live owner's
-        //      active lease is NEVER touched (LIVE-OWNER INVARIANT).
-        // Bounded & idempotent: both operations are fast, synchronous, and
-        // safe to re-run; any failure is logged to stderr and never thrown
-        // into the runner (cleanup must not mask the task's real result).
+        // Run idempotent post-task cleanup: terminate session process trees and release stale slot leases.
         try {
           killSessionProcessTreeSync(sessionId);
         } catch (err) {
