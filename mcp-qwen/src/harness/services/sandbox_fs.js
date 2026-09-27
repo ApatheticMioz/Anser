@@ -1,11 +1,14 @@
 /**
- * Sandboxed Filesystem Service (Anser Sandboxed Filesystem)
+ * Sandboxed Filesystem Service.
  *
- * Enforces:
- * - Strict .ignore policies (auto-skips .venv, node_modules, .git, __pycache__)
- * - Cross-mount path normalization (Windows D:\ <-> WSL /mnt/d/)
- * - AST file edits and targeted slice reads
- * - Fast indexed searches without DrvFs stalls
+ * Provides sandboxed file operations (read, write, edit, patch, list, search)
+ * confined to a workspace root.
+ *
+ * - Enforces a strict ignore policy (auto-skips .venv, node_modules, .git,
+ *   __pycache__, and other build/vendor directories).
+ * - Normalizes paths across Windows and WSL mounts.
+ * - Performs AST-validated file edits and bounded slice reads.
+ * - Runs indexed searches (git grep) with a safe fallback walk.
  */
 
 import fs from "node:fs";
@@ -19,13 +22,9 @@ import { fileTypeFromBuffer, reasonableDetectionSizeInBytes } from "file-type";
 const execFileAsync = promisify(execFile);
 
 /**
- * F-2 / §2.8 Fail-Fast: raised when `git grep` fails with a FATAL error
- * (any non-zero exit code other than 1) while operating inside a git
- * repository. Exit code 1 means "no matches" (a valid empty result) and is
- * NOT an error. A fatal error (e.g. 128 on a corrupted repository) must fail
- * fast with this explicit error rather than falling through to the manual
- * directory walk, which would read gitignored files (e.g. `.env`) and leak
- * secrets into the model context.
+ * Raised when `git grep` fails with a fatal error (any non-zero exit code
+ * other than 1) inside a git repository. Exit code 1 means "no matches" and
+ * is a valid empty result, not an error.
  *
  * @extends Error
  * @property {number|null} code The git process exit code (e.g. 128).
@@ -41,10 +40,8 @@ export class GitGrepError extends Error {
 }
 
 /**
- * F-5: raised when the `patch` payload to `applyPatch()` exceeds the maximum
- * allowed size (see `MAX_PATCH_SIZE`). The check runs BEFORE any `git`
- * subprocess is spawned, so an oversized patch is rejected cheaply without a
- * child process.
+ * Raised when a `patch` payload to `applyPatch()` exceeds `MAX_PATCH_SIZE`.
+ * The check runs before any `git` subprocess is spawned.
  *
  * @extends Error
  * @property {number} size The actual byte length of the patch payload.
@@ -75,13 +72,12 @@ export class SyntaxValidationError extends Error {
 }
 
 /**
- * F-5 / §2.8: raised when the `git apply` subprocess is killed by the timeout
- * (or otherwise terminated by a signal) rather than failing on patch content.
- * Node's `execFileSync` reports a timeout as `err.code === "ETIMEDOUT"` and
- * `err.signal === "SIGTERM"` (and `err.killed === true` on some platforms), so
- * this error is emitted for any of those signals. It is deliberately distinct
- * from the generic `GitApplyError` so a hang/timeout is distinguishable from a
- * normal "patch does not apply" failure (honest error signal, §2.8).
+ * Raised when the `git apply` subprocess is killed by a timeout or signal
+ * rather than failing on patch content. Node reports a timeout as
+ * `err.code === "ETIMEDOUT"` and `err.signal === "SIGTERM"` (and
+ * `err.killed === true` on some platforms); this error is emitted for any of
+ * those. It is distinct from the generic `GitApplyError` so a hang/timeout is
+ * distinguishable from a normal "patch does not apply" failure.
  *
  * @extends Error
  * @property {string|null} signal The termination signal (e.g. "SIGTERM").
@@ -97,15 +93,10 @@ export class GitApplyTimeoutError extends Error {
 }
 
 /**
- * M2 / 2026-09-13 "poison pill" mitigation: raised by `readFile()` when the
- * target is a binary file (detected by extension denylist or magic bytes).
- *
- * Fail-fast doctrine: a text-only model must NEVER ingest binary content
- * (mojibake) into its context. Rather than silently skipping or passing
- * through truncated/garbled bytes, `readFile` throws this explicit error so
- * the caller (the model) gets a clear observation naming the file, the
- * detected type, and the instruction to extract text via bash tooling
- * (e.g. `pdftotext`, `strings`, `exiftool`) instead.
+ * Raised by `readFile()` when the target is a binary file (detected by
+ * extension denylist or magic bytes). A text-only model must not ingest
+ * binary content; the error names the file, the detected type, and the
+ * instruction to extract text via a format-appropriate tool instead.
  *
  * @extends Error
  * @property {string} file The resolved file path that was rejected.
@@ -124,31 +115,25 @@ export class BinaryFileError extends Error {
 }
 
 /**
- * F-2: returns true for `.env` and `.env.*` files (e.g. `.env.local`,
+ * Returns true for `.env` and `.env.*` files (e.g. `.env.local`,
  * `.env.production`). These are excluded from the fallback directory walk to
- * prevent accidental secret ingestion when `git grep` is unavailable.
+ * prevent secret ingestion when `git grep` is unavailable.
  * @param {string} name
+ * @returns {boolean}
  */
 function isEnvFile(name) {
   return name === ".env" || name.startsWith(".env.");
 }
 
 /**
- * M2 / 2026-09-13 "poison pill" mitigation: a text-only model that ingests a
- * binary file (PDF/PNG/...) into its context receives mojibake and can wedge
- * the orchestrator permanently (a 647KB PDF did exactly this on 2026-09-13).
- *
- * This is the extension denylist fast-path. It is a cheap, synchronous
- * pre-filter that catches the common case by file extension BEFORE any bytes
- * are read. It is NOT the sole gate: `detectBinaryType()` below performs a
- * real magic-byte check (via the `file-type` library) on the first KB of the
- * file, which catches extensionless binaries (e.g. a file whose content
- * begins with `%PDF` but has no `.pdf` extension).
- *
- * The set is intentionally conservative: it lists well-known binary formats
- * that a text model must never ingest. It is a denylist, not an allowlist —
- * an unknown extension is NOT treated as binary here; the magic-byte check
- * is the authoritative gate.
+ * Extension denylist used as a fast-path binary pre-filter. A cheap,
+ * synchronous check that catches common binary formats by extension before
+ * any bytes are read. It is not the sole gate: `detectBinaryType()` performs
+ * an authoritative magic-byte check (via the `file-type` library) on the
+ * first KB of the file, which catches extensionless binaries. The set is a
+ * denylist, not an allowlist — an unknown extension is not treated as
+ * binary here.
+ * @type {Set<string>}
  */
 const BINARY_EXTENSIONS = new Set([
   "pdf",
@@ -184,10 +169,11 @@ const BINARY_EXTENSIONS = new Set([
 ]);
 
 /**
- * M2: returns true when `name`'s extension (case-insensitive) is in the
- * binary denylist. A name with no extension returns false (the magic-byte
- * check is the authoritative gate for those).
+ * Returns true when `name`'s extension (case-insensitive) is in the binary
+ * denylist. A name with no extension returns false (the magic-byte check is
+ * the authoritative gate for those).
  * @param {string} name
+ * @returns {boolean}
  */
 export function isBinaryExtension(name) {
   const dot = name.lastIndexOf(".");
@@ -197,11 +183,11 @@ export function isBinaryExtension(name) {
 }
 
 /**
- * M2: authoritative binary detection via magic bytes, using the `file-type`
- * library (NOT hand-rolled magic-byte sniffing). Reads at most the first
- * `reasonableDetectionSizeInBytes` (4100) bytes of the file and returns the
- * detected `{ ext, mime }` descriptor, or `null` when the bytes do not match
- * any known binary signature (i.e. the file is plausibly text).
+ * Authoritative binary detection via magic bytes, using the `file-type`
+ * library. Reads at most the first `reasonableDetectionSizeInBytes` (4100)
+ * bytes of the file and returns the detected `{ ext, mime }` descriptor, or
+ * `null` when the bytes do not match any known binary signature (i.e. the
+ * file is plausibly text).
  *
  * @param {string} filePath
  * @returns {Promise<{ext:string,mime:string}|null>}
@@ -232,8 +218,8 @@ async function detectBinaryType(filePath) {
 }
 
 /**
- * M2: combined binary gate. Returns a human-readable reason string when the
- * file is binary, or `null` when it is plausibly text.
+ * Combined binary gate. Returns a human-readable reason string when the file
+ * is binary, or `null` when it is plausibly text.
  *
  * Order of checks:
  *   1. Extension denylist fast-path (cheap, synchronous).
@@ -255,7 +241,7 @@ async function classifyBinary(filePath) {
 }
 
 /**
- * F-4 helper: classifies the line-ending style of a string.
+ * Classifies the line-ending style of a string.
  *
  * Returns:
  * - "crlf"  -> contains CRLF and no bare LF
@@ -278,12 +264,13 @@ function lineEndingStyle(text) {
 }
 
 /**
- * F-4 helper: normalizes a string's line endings to a target style.
+ * Normalizes a string's line endings to a target style.
  * - "crlf" -> every line ending becomes CRLF
  * - "lf"   -> every CRLF becomes LF
  * - "mixed" or null -> left unchanged (no single style to normalize to)
  * @param {string} text
  * @param {"crlf"|"lf"|"mixed"|null} style
+ * @returns {string}
  */
 function normalizeLineEndings(text, style) {
   if (style === "crlf") return text.replace(/\r?\n/g, "\r\n");
@@ -306,11 +293,13 @@ export const DEFAULT_IGNORED_DIRS = new Set([
 ]);
 
 /**
- * F-5: maximum byte length of a `patch` payload accepted by `applyPatch()`.
- * Enforced BEFORE spawning `git` (see `PatchTooLargeError`). A 2 MB cap is
- * generous for any legitimate unified diff (a 200k-line / ~3.7 MB patch was
- * observed to apply in <60 ms, so the cap only guards against pathological
- * payloads) while bounding memory and the child-process input pipe.
+ * Maximum byte length of a `patch` payload accepted by `applyPatch()`.
+ * Enforced before spawning `git` (see `PatchTooLargeError`). Bounds memory
+ * and the child-process input pipe for pathological payloads.
+ * - Unit: bytes
+ * - Default: 2097152 (2 MB)
+ * - Override: None
+ * @type {number}
  */
 export const MAX_PATCH_SIZE = 2 * 1024 * 1024; // 2 MB
 
@@ -325,37 +314,37 @@ async function getSharedAstService() {
 
 export class SandboxFsService {
   constructor(options = {}) {
-    // P4i: canonicalize the sandbox root through the OS symlink/junction
-    // resolution layer so that a junction/symlink cwd (e.g. D:\mnt\d -> D:\)
-    // is stored as its real path. Containment checks then compare
-    // realpath(target) against a real root, eliminating false
-    // SymlinkEscapeError/PathEscapeError while still catching real escapes.
+    // Canonicalize the sandbox root through the OS symlink/junction resolution
+    // layer so a junction/symlink cwd is stored as its real path. Containment
+    // checks then compare realpath(target) against a real root, eliminating
+    // false SymlinkEscapeError/PathEscapeError while still catching real
+    // escapes.
     const rawRoot = options.root ? normalizeWorkspacePath(options.root) : process.cwd();
     this.root = canonicalizePath(rawRoot);
     this.ignoredDirs = new Set([...DEFAULT_IGNORED_DIRS, ...(options.ignoredDirs || [])]);
-    // F-5: timeout for the `git apply` subprocess in `applyPatch()`. Defaults
-    // to 15s; overridable (e.g. by tests) to exercise the timeout path.
+    // Timeout for the `git apply` subprocess in `applyPatch()`. Defaults to
+    // 15s; overridable (e.g. by tests) to exercise the timeout path.
     this.gitApplyTimeoutMs =
       typeof options.gitApplyTimeoutMs === "number" && options.gitApplyTimeoutMs > 0
         ? options.gitApplyTimeoutMs
         : 15_000;
     this._getAst = options.getAst || null;
-    // E4: adaptive read-size governor. `null` = ungoverned (the default
-    // 64KB cap applies). When the runner arms the governor (context
-    // high-watermark), it calls setReadGovernor(maxBytes) with a LOWER cap
-    // (16KB). The governor only ever LOWERS the effective read cap — it never
-    // raises it above the caller's max_bytes. This is per-session state: the
-    // SandboxFsService is instantiated fresh per run() (see sandboxFsPlugin),
-    // so the governor cannot leak across tasks.
+    // Adaptive read-size governor. `null` = ungoverned (the default 64KB cap
+    // applies). When the runner arms the governor (context high-watermark), it
+    // calls setReadGovernor(maxBytes) with a lower cap (16KB). The governor
+    // only ever lowers the effective read cap — it never raises it above the
+    // caller's max_bytes. This is per-session state: the SandboxFsService is
+    // instantiated fresh per run() (see sandboxFsPlugin), so the governor
+    // cannot leak across tasks.
     this.readGovernorMaxBytes = null;
   }
 
   /**
-   * E4: arm (or disarm) the adaptive read-size governor for this session.
+   * Arm (or disarm) the adaptive read-size governor for this session.
    *
    * @param {number|null} maxBytes The governed read cap in bytes. When a
    *   positive number, subsequent read_file calls are capped at this size
-   *   (only ever LOWERING the effective cap, never raising it above the
+   *   (only ever lowering the effective cap, never raising it above the
    *   caller's max_bytes). When null/undefined, the governor is disarmed and
    *   the default 64KB cap applies.
    */
@@ -399,13 +388,12 @@ export class SandboxFsService {
     const normalizedTarget = path.normalize(p);
     const normalizedRoot = path.normalize(this.root);
 
-    // P4i: canonicalize BOTH sides of the containment comparison through the
-    // OS symlink/junction resolution layer. This ensures that a junction-form
-    // target (e.g. D:\mnt\d\LLM_Ecosystem\...) is compared against the real
-    // root (D:\LLM_Ecosystem\...) in the same "real" path space, eliminating
-    // false PathEscapeError/SymlinkEscapeError. Real escapes (../outside,
-    // symlink-to-outside) are still caught because their realpath lands
-    // outside the real root.
+    // Canonicalize both sides of the containment comparison through the OS
+    // symlink/junction resolution layer. This ensures a junction-form target
+    // is compared against the real root in the same "real" path space,
+    // eliminating false PathEscapeError/SymlinkEscapeError. Real escapes
+    // (../outside, symlink-to-outside) are still caught because their
+    // realpath lands outside the real root.
     const realTarget = canonicalizePath(normalizedTarget);
     const realRoot = canonicalizePath(normalizedRoot);
     const rel = path.relative(realRoot, realTarget);
@@ -464,13 +452,13 @@ export class SandboxFsService {
       throw new Error(`Path is a directory, not a file: ${filePath}`);
     }
 
-    // M2 / 2026-09-13 "poison pill" mitigation: fail fast on binary files.
-    // A text-only model ingesting a PDF/PNG/etc. as UTF-8 produces mojibake
-    // that can wedge the orchestrator permanently. We detect the binary via
-    // the extension denylist fast-path and/or a magic-byte check (file-type)
-    // on the first KB, and throw an explicit BinaryFileError naming the file,
-    // the detected type, and the instruction to extract text via bash tooling
-    // instead. NO silent skip, NO truncated-content passthrough.
+    // Fail fast on binary files. A text-only model ingesting a PDF/PNG/etc.
+    // as UTF-8 produces mojibake. The binary is detected via the extension
+    // denylist fast-path and/or a magic-byte check (file-type) on the first
+    // KB, and an explicit BinaryFileError is thrown naming the file, the
+    // detected type, and the instruction to extract text via a
+    // format-appropriate tool instead. No silent skip, no truncated-content
+    // passthrough.
     const binaryReason = await classifyBinary(resolved);
     if (binaryReason) {
       const detected = await detectBinaryType(resolved);
@@ -497,14 +485,13 @@ export class SandboxFsService {
       .map((line, idx) => `${startIdx + idx + 1}: ${line}`)
       .join("\n");
 
-    // E4: adaptive read-size governor. When the runner has armed the governor
+    // Adaptive read-size governor. When the runner has armed the governor
     // (context high-watermark), the effective read cap is lowered to the
-    // governed size (16KB default) — but ONLY ever below the caller's
+    // governed size (16KB default) — but only ever below the caller's
     // max_bytes (the governor never raises the cap). A read whose numbered
     // content exceeds the governed cap is truncated to the cap and a
-    // SUFFIX-SCOPED notice is appended to the content (never the prompt
-    // prefix, so KV-cache prefix stability is preserved). The notice is
-    // non-coercive advisory language (policed by prompt_integrity).
+    // suffix-scoped notice is appended to the content (never the prompt
+    // prefix, so KV-cache prefix stability is preserved).
     const governorCap = this.readGovernorMaxBytes;
     const effectiveMaxBytes =
       governorCap != null ? Math.min(max_bytes, governorCap) : max_bytes;
@@ -558,32 +545,31 @@ export class SandboxFsService {
    * - >1 occurrences without replace_all: refuse with count (no write).
    * - >1 occurrences with replace_all: replace all.
    *
-   * F-3: `replacement_content` is validated up front. It MUST be a string.
-   * An explicit empty string `""` is allowed (it deletes the matched region).
+   * `replacement_content` is validated up front. It must be a string. An
+   * explicit empty string `""` is allowed (it deletes the matched region).
    * `undefined`/`null`/non-string values are rejected with an explicit
    * `InvalidReplacementError` so they can never be silently coerced to the
-   * literal string `"undefined"` and written to disk (silent corruption).
+   * literal string `"undefined"` and written to disk.
    *
-   * F-4: Line-ending auto-normalization is LOCALIZED to the matched region,
-   * not a whole-file boolean. The style of the region is inferred from which
-   * form of the target actually matches the file (exact / CRLF / LF). The
+   * Line-ending auto-normalization is localized to the matched region, not a
+   * whole-file boolean. The style of the region is inferred from which form
+   * of the target actually matches the file (exact / CRLF / LF). The
    * replacement is normalized to that local style, so editing one region of a
    * mixed CRLF/LF file preserves that region's endings without cross-
    * pollinating the rest of the file.
    *
-   * F-14 (documented trade-off): a target whose line endings differ from the
-   * file's is auto-normalized to the local style and the edit succeeds
-   * silently (no `LineEndingMismatchError`). This is a deliberate convenience
-   * trade-off over the prior explicit-mismatch signal; callers that want the
-   * old honesty signal can pre-check the file's line endings themselves.
+   * A target whose line endings differ from the file's is auto-normalized to
+   * the local style and the edit succeeds silently (no
+   * `LineEndingMismatchError`). Callers that want an explicit mismatch signal
+   * can pre-check the file's line endings themselves.
    */
   async editFile({ path: filePath, target_content, replacement_content, replace_all = false }) {
     if (!target_content || typeof target_content !== "string" || target_content.length === 0) {
       throw new Error("target_content cannot be empty");
     }
-    // F-3: validate replacement_content BEFORE any I/O. Must be a string;
-    // explicit "" is allowed (deletion). undefined/null/non-string are rejected
-    // so they can never coerce to the literal "undefined" and corrupt the file.
+    // Validate replacement_content before any I/O. Must be a string; explicit
+    // "" is allowed (deletion). undefined/null/non-string are rejected so they
+    // can never coerce to the literal "undefined" and corrupt the file.
     if (typeof replacement_content !== "string") {
       throw new Error(
         `InvalidReplacementError: replacement_content must be a string (got ${
@@ -597,8 +583,8 @@ export class SandboxFsService {
     }
     const original = fs.readFileSync(resolved, "utf8");
 
-    // F-4: determine the LOCAL line-ending style of the matched region by
-    // testing which form of the target actually matches the file.
+    // Determine the local line-ending style of the matched region by testing
+    // which form of the target actually matches the file.
     //   1. exact match            -> the target's own endings are the local style
     //   2. CRLF-normalized match  -> region is CRLF
     //   3. LF-normalized match    -> region is LF
@@ -632,9 +618,9 @@ export class SandboxFsService {
       );
     }
 
-    // F-4: normalize the replacement to the LOCAL style of the matched region.
-    // For a uniform file this is identical to the old whole-file behavior; for
-    // a mixed file it preserves the region's own endings without cross-
+    // Normalize the replacement to the local style of the matched region. For
+    // a uniform file this is identical to a whole-file normalization; for a
+    // mixed file it preserves the region's own endings without cross-
     // pollinating the rest of the file.
     const effectiveReplacement = normalizeLineEndings(replacement_content, localStyle);
 
@@ -711,9 +697,9 @@ export class SandboxFsService {
   }
 
   /**
-   * F-10: pre-validates the file paths referenced by a unified diff patch so
-   * the sandbox boundary is EXPLICIT rather than solely delegated to `git
-   * apply` (whose handling of `../` and absolute paths is version- and
+   * Pre-validates the file paths referenced by a unified diff patch so the
+   * sandbox boundary is explicit rather than solely delegated to `git apply`
+   * (whose handling of `../` and absolute paths is version- and
    * config-dependent).
    *
    * The target paths are extracted from each file section's `--- a/<p>` and
@@ -780,46 +766,44 @@ export class SandboxFsService {
   /**
    * Applies a standard unified diff patch using `git apply`.
    *
-   * F-5 — size cap: the `patch` payload is measured in bytes and rejected with
-   * an explicit `PatchTooLargeError` BEFORE any `git` subprocess is spawned if
-   * it exceeds `MAX_PATCH_SIZE` (2 MB). This bounds memory and the child
-   * process input pipe for pathological payloads.
+   * Size cap: the `patch` payload is measured in bytes and rejected with an
+   * explicit `PatchTooLargeError` before any `git` subprocess is spawned if it
+   * exceeds `MAX_PATCH_SIZE` (2 MB). This bounds memory and the child-process
+   * input pipe for pathological payloads.
    *
-   * F-5 / §2.8 — distinct timeout signal: if the `git apply` subprocess is
-   * killed by the timeout (or otherwise terminated by a signal), a distinct
+   * Distinct timeout signal: if the `git apply` subprocess is killed by the
+   * timeout (or otherwise terminated by a signal), a distinct
    * `GitApplyTimeoutError` is thrown instead of the generic `GitApplyError`,
    * so a hang/timeout is distinguishable from a normal "patch does not apply"
    * failure. Node reports a timeout as `err.code === "ETIMEDOUT"` and
    * `err.signal === "SIGTERM"` (and `err.killed === true` on some platforms);
    * all three are checked.
    *
-   * F-6 — faithful whitespace: `--whitespace=fix` is intentionally NOT used.
-   * That flag silently REWRITES whitespace in the applied content (e.g. it
-   * strips trailing spaces and emits "line applied after fixing whitespace
-   * errors"), so the on-disk result could differ from the literal patch. The
-   * default `git apply` behavior writes the patch bytes faithfully (it only
-   * warns about whitespace, it does not modify it), which is the honest,
-   * non-rewriting behavior this tool should have.
+   * Faithful whitespace: `--whitespace=fix` is not used. That flag silently
+   * rewrites whitespace in the applied content (e.g. it strips trailing spaces
+   * and emits "line applied after fixing whitespace errors"), so the on-disk
+   * result could differ from the literal patch. The default `git apply`
+   * behavior writes the patch bytes faithfully (it only warns about
+   * whitespace, it does not modify it).
    *
-   * F-6 / F-11 — line-ending behavior is CONTEXT-DEPENDENT and is documented
-   * here rather than silently assumed:
+   * Line-ending behavior is context-dependent:
    *   (a) In a git repository whose `.gitattributes` pins
    *       `* text=auto eol=lf` (as this workspace does), `git apply`
    *       normalizes the applied content to LF on write, so a CRLF file is
    *       converted to LF. This is a property of the repo's `.gitattributes`,
    *       not of this method.
-   *   (b) In a NON-git directory, `git apply` still works (it does not require
+   *   (b) In a non-git directory, `git apply` still works (it does not require
    *       a repository) but no `.gitattributes` normalization applies, so the
    *       patch bytes are written verbatim (line endings preserved as given).
    *
-   * F-10 — the base directory (`dirPath`) is validated against the sandbox
-   * root by `resolvePath()`, and every file path inside the patch is
-   * EXPLICITLY pre-validated by `_validatePatchPaths()` before `git` is
-   * spawned (rejecting `../` traversal, absolute paths, and null bytes). This
-   * makes the boundary deterministic rather than relying on `git apply`'s
-   * version/config-specific handling; `git apply` additionally refuses to
-   * write through symlinks that escape the working tree. The adversarial
-   * regression tests in `tests/apply_patch.test.js` pin this boundary.
+   * The base directory (`dirPath`) is validated against the sandbox root by
+   * `resolvePath()`, and every file path inside the patch is explicitly
+   * pre-validated by `_validatePatchPaths()` before `git` is spawned (rejecting
+   * `../` traversal, absolute paths, and null bytes). This makes the boundary
+   * deterministic rather than relying on `git apply`'s version/config-specific
+   * handling; `git apply` additionally refuses to write through symlinks that
+   * escape the working tree. The adversarial regression tests in
+   * `tests/apply_patch.test.js` pin this boundary.
    *
    * @param {object} args
    * @param {string} args.patch Standard unified diff patch content.
@@ -831,7 +815,7 @@ export class SandboxFsService {
       throw new Error("patch cannot be empty");
     }
 
-    // F-5: enforce the size cap BEFORE spawning git.
+    // Enforce the size cap before spawning git.
     const patchBytes = Buffer.byteLength(patch, "utf8");
     if (patchBytes > MAX_PATCH_SIZE) {
       throw new PatchTooLargeError(
@@ -843,13 +827,13 @@ export class SandboxFsService {
 
     const resolved = this.resolvePath(dirPath);
 
-    // F-10: explicitly validate every file path in the patch against the
-    // sandbox root BEFORE invoking git, so the boundary does not depend on
-    // git's version/config-specific handling of `../` and absolute paths.
+    // Explicitly validate every file path in the patch against the sandbox
+    // root before invoking git, so the boundary does not depend on git's
+    // version/config-specific handling of `../` and absolute paths.
     this._validatePatchPaths(patch, resolved);
 
     try {
-      // F-6: NO --whitespace=fix — write the patch bytes faithfully.
+      // No --whitespace=fix — write the patch bytes faithfully.
       execFileSync("git", ["apply", "--unidiff-zero", "-"], {
         cwd: resolved,
         input: patch,
@@ -859,7 +843,7 @@ export class SandboxFsService {
       });
       return { success: true, message: "Patch applied cleanly" };
     } catch (err) {
-      // F-5 / §2.8: a timeout / signal kill is a distinct, honest signal.
+      // A timeout / signal kill is a distinct signal.
       const isTimeout =
         err &&
         (err.killed === true || err.code === "ETIMEDOUT" || err.signal === "SIGTERM");
@@ -878,12 +862,12 @@ export class SandboxFsService {
   }
 
   /**
-   * F-2 discriminator: determines whether `dirPath` is inside a git
-   * repository, so that a FATAL `git grep` error can be distinguished from a
-   * legitimate "not a git repository" situation.
+   * Determines whether `dirPath` is inside a git repository, so that a fatal
+   * `git grep` error can be distinguished from a legitimate "not a git
+   * repository" situation.
    *
    * `git rev-parse --is-inside-work-tree` exits 0 for a valid repository but
-   * exits 128 for BOTH a non-git directory AND a corrupted repository (e.g. a
+   * exits 128 for both a non-git directory and a corrupted repository (e.g. a
    * bad `.git/HEAD`). The two cases must be told apart because a corrupted
    * repository must fail fast (its `.git` is present) while a non-git
    * directory is a legitimate fallback scenario. The reliable discriminator
@@ -922,23 +906,7 @@ export class SandboxFsService {
   }
 
   /**
-   * Fast indexed search using git grep (respecting .gitignore) or a safe
-   * fallback file search.
-   *
-   * F-1: the query is matched as a LITERAL string (`-F` / `--fixed-strings`),
-   * aligning the implementation with the documented "Literal string to
-   * search for" contract.
-   *
-   * F-2: a FATAL `git grep` error (any non-zero exit code other than 1)
-   * inside a git repository fails fast with a `GitGrepError` instead of
-   * falling through to the manual walk. Exit code 1 ("no matches") is a
-   * valid empty result. In a non-git directory the manual walk is used, but
-   * it explicitly skips `.env` / `.env.*` files to prevent secret ingestion.
-   *
-   * F-12: `max_results` caps the TOTAL number of matches returned,
-   * consistently across both the git-grep and  /**
-   * Formats and truncates a single grep match line to prevent token explosion from
-   * giant embedded assets, minified bundles, or inline Base64 data (F-14).
+   * Formats and truncates a single grep match line to bound output size.
    *
    * Query-centered windowing: if the match query occurs late in a long line, centers
    * a preview window around the match so the matched token is not truncated away.
@@ -986,23 +954,30 @@ export class SandboxFsService {
    * Fast indexed search using git grep (respecting .gitignore) or a safe
    * fallback file search.
    *
-   * F-1: the query is matched as a LITERAL string (`-F` / `--fixed-strings`),
+   * The query is matched as a literal string (`-F` / `--fixed-strings`),
    * aligning the implementation with the documented "Literal string to
    * search for" contract.
    *
-   * F-2: a FATAL `git grep` error (any non-zero exit code other than 1)
-   * inside a git repository fails fast with a `GitGrepError` instead of
-   * falling through to the manual walk. Exit code 1 ("no matches") is a
-   * valid empty result. In a non-git directory the manual walk is used, but
-   * it explicitly skips `.env` / `.env.*` files to prevent secret ingestion.
+   * A fatal `git grep` error (any non-zero exit code other than 1) inside a
+   * git repository fails fast with a `GitGrepError` instead of falling
+   * through to the manual walk. Exit code 1 ("no matches") is a valid empty
+   * result. In a non-git directory the manual walk is used, but it
+   * explicitly skips `.env` / `.env.*` files to prevent secret ingestion.
    *
-   * F-12: `max_results` caps the TOTAL number of matches returned,
-   * consistently across both the git-grep and fallback paths.
+   * `max_results` caps the total number of matches returned, consistently
+   * across both the git-grep and fallback paths.
    *
-   * F-14: Line length and aggregate payload are strictly bounded:
+   * Line length and aggregate payload are strictly bounded:
    *  - Each match line exceeding 300 chars is query-centered and truncated.
    *  - Total match payload is capped at 32 KB across all matches.
    *  - Both `path` and `dirPath` are accepted and passed as git pathspecs.
+   *
+   * @param {object} args
+   * @param {string} args.query Literal string to search for.
+   * @param {string} [args.path] Root search directory or target file path.
+   * @param {string} [args.dirPath] Alias for path.
+   * @param {number} [args.max_results=50] Maximum number of matches returned.
+   * @returns {Promise<{query: string, count: number, matches: string[], skipped?: string[], truncated: boolean}>}
    */
   async searchCode({ query, path: targetPath, dirPath, max_results = 50 }) {
     const rawTarget = targetPath || dirPath || ".";
@@ -1078,13 +1053,12 @@ export class SandboxFsService {
       }
     }
 
-    // Legitimate fallback: not a git repository. Search files avoiding
-    // ignored directories AND `.env` / `.env.*` files (F-2 secret-leak
-    // prevention). The total match count is capped at `max_results` (F-12).
+    // Fallback: not a git repository. Search files avoiding ignored
+    // directories and `.env` / `.env.*` files (secret-leak prevention). The
+    // total match count is capped at `max_results`.
     //
-    // M2 / 2026-09-13 "poison pill" mitigation: binary files are SKIPPED
-    // honestly (reported in `skipped` as "skipped-binary") rather than read
-    // as UTF-8 and ingested as mojibake.
+    // Binary files are skipped (reported in `skipped` as "skipped-binary")
+    // rather than read as UTF-8.
     const matches = [];
     const skipped = [];
     let totalBytes = 0;
@@ -1107,7 +1081,7 @@ export class SandboxFsService {
       for (const f of files) {
         if (matches.length >= cap || hitPayloadCap) break;
         if (this.ignoredDirs.has(f.name)) continue;
-        if (isEnvFile(f.name)) continue; // F-2: never ingest .env / .env.*
+        if (isEnvFile(f.name)) continue; // never ingest .env / .env.*
         const full = path.join(cur, f.name);
         if (f.isDirectory()) {
           await walkSearch(full);
