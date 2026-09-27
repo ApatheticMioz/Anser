@@ -82,20 +82,15 @@ export function isTaskOrphaned(diskTask) {
   const now = Date.now();
   const lastActive = diskTask.lastHeartbeatAt || diskTask.startedAt || diskTask.createdAt;
 
-  // LIVE-OWNER & FRESH-HEARTBEAT INVARIANT:
-  // A task with a fresh heartbeat (within the staleness window) is NEVER an orphan!
-  // Active workers make tool calls and write heartbeats to disk.
-  const staleThreshold = ORPHAN_REAP_STALE_MS;
-  if (lastActive && now - lastActive <= staleThreshold) {
-    return false;
-  }
-
-  // If the owner process is still alive across platforms, it is not an orphan
+  // LIVE-OWNER INVARIANT:
+  // If the owner process is still alive across platforms, it is not an orphan.
+  // Active workers make tool calls, perform deep deliberation, or run long commands.
   if (diskTask.ownerPid && pidAlive(diskTask.ownerPid, diskTask.ownerPlatform)) {
     return false;
   }
 
-  // Heartbeat is stale beyond threshold AND owner process is not alive
+  // Owner process is dead or unrecorded: check if heartbeat is stale beyond threshold.
+  const staleThreshold = ORPHAN_REAP_STALE_MS;
   if (lastActive && now - lastActive > staleThreshold) {
     return true;
   }

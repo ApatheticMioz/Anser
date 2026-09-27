@@ -110,6 +110,17 @@ function setupProcessLifecycleHandlers() {
     cleanup("stdin_end");
     process.exit(0);
   });
+  process.stdout.on("error", (err) => {
+    if (err && (err.code === "EPIPE" || err.code === "ERR_STREAM_DESTROYED")) {
+      cleanup("stdout_epipe");
+      process.exit(0);
+    }
+  });
+  process.stderr.on("error", (err) => {
+    if (err && (err.code === "EPIPE" || err.code === "ERR_STREAM_DESTROYED")) {
+      process.exit(0);
+    }
+  });
   process.on("beforeExit", () => {
     cleanup("beforeExit");
   });

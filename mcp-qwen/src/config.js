@@ -243,11 +243,11 @@ export const TASK_RETENTION_MS = (() => {
 /**
  * Heartbeat staleness threshold for reaping orphaned tasks whose owner process is dead.
  * - Unit: milliseconds
- * - Default: 600000 (10 minutes)
+ * - Default: 30000 (30 seconds)
  * - Override: QWEN_ORPHAN_REAP_STALE_MS
  * @type {number}
  */
-const DEFAULT_ORPHAN_REAP_STALE_MS = 600_000; // 10m
+const DEFAULT_ORPHAN_REAP_STALE_MS = 30_000;
 export const ORPHAN_REAP_STALE_MS = (() => {
   const parsed = parseInt(process.env.QWEN_ORPHAN_REAP_STALE_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ORPHAN_REAP_STALE_MS;
