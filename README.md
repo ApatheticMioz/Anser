@@ -174,7 +174,7 @@ npm ci
 # Run the fast offline test gate (9 critical suites)
 npm run test
 
-# Run the authoritative test gate (62 suites; GPU live suites skip honestly if offline)
+# Run the authoritative test gate (66 suites; GPU live suites skip honestly if offline)
 npm run test:all
 ```
 
@@ -236,7 +236,7 @@ Every pull request is validated across **Node 22 & 24 on Ubuntu and Windows**:
 
 ```bash
 npm run test --prefix mcp-qwen          # 9 critical suites
-npm run test:all --prefix mcp-qwen      # 62 suites total (full CI gate)
+npm run test:all --prefix mcp-qwen      # 66 suites total (full CI gate)
 npm run test:telemetry --prefix mcp-qwen # Telemetry & pricing arithmetic verification
 ```
 
@@ -266,7 +266,7 @@ Anser/
         core/               # Kernel plugin registry & event system
         services/           # Sandboxed FS, AST, Shell, Web research services
         evo/                # Evolutionary optimizer, lineage DAG & rollback
-    tests/                  # 62 automated test suites
+    tests/                  # 66 automated test suites
   benchmarks/               # Historical session telemetry & empirical dumps
 ```
 

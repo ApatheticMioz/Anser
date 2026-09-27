@@ -45,7 +45,7 @@ cd mcp-qwen
 # Fast offline gate - 9 critical suites. Run this FIRST.
 npm test
 
-# Full gate - 65 suites (superset of `test`). The authoritative pass/fail.
+# Full gate - 66 suites (superset of `test`). The authoritative pass/fail.
 npm run test:all
 
 # GPU-less / CI: force the 4 live suites to skip honestly.
@@ -110,7 +110,7 @@ mcp-qwen/  (Node.js MCP server + Anser microkernel)
     evo/              # evo_operator, lineage_dag, evaluator,
                       #   trace_repair, watchdog
   stream_proxy.js     # :18022 universal SSE streaming proxy
-  tests/              # 65 suites
+  tests/              # 66 suites
         |
         v
 vLLM engine (WSL2 / Linux, :18020)  ->  Qwen3.8-27B @ 245K
@@ -168,7 +168,7 @@ Before requesting review, confirm:
 - One logical concern per PR. Large changes should be split.
 - A security-critical change (sandbox, semaphore, wedge detector) requires a
   security review before merge.
-- The 63-suite gate + green CI are the merge gate; a red gate blocks merge.
+- The 66-suite gate + green CI are the merge gate; a red gate blocks merge.
 
 ---
 
