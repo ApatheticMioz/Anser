@@ -85,7 +85,7 @@ const MUTATING_TOOLS = new Set([
 ]);
 const BASH_TOOLS = new Set(["bash"]);
 
-// M6b: exponential backoff between empty-stream retries. Before each retry the
+            // Exponential backoff before retry attempt.
 // runner sleeps base * 2^(retryNumber-1) ms, capped at capMs. With the defaults
 // (base 2000ms, cap 30000ms) this is exactly "2^retryNumber seconds capped at
 // 30s": retry 1 waits 2s, retry 2 waits 4s, retry 3 waits 8s, retry 4 waits
@@ -145,20 +145,9 @@ export const REASONING_CONTINUATION_DIRECTIVE =
   "If you are facing an ambiguous requirement or an impasse, state what you have determined so far and request guidance from the supervisor.";
 
 /**
- * E2: non-coercive salvage directive injected on the single bounded extraction
- * turn that fires when the reasoning budget is exhausted (F6.3 data-loss
- * salvage). The model's deliberation has hit the ceiling and the session is
- * about to terminate with the honest `reasoning_budget_exhausted` status.
- * Rather than discarding whatever partial findings / tables / conclusions the
- * model accumulated in its thinking, we give it ONE short, tool-less, low-effort
- * turn to record that accumulated work to a scratch file so the orchestrator
- * can recover it.
- *
- * NON-COERCIVE (policed by prompt_integrity): it does NOT command the model to
- * "conclude immediately" or "emit a forced action" (the F4-class coercion that
- * causes hallucinations). It simply asks the model to write down what it has
- * already determined, and to state what remains incomplete. The path is
- * substituted in at call time (see `salvageReasoningBudget`).
+ * Non-coercive salvage directive injected when the reasoning budget is exhausted.
+ * Requests that the model persist accumulated findings and incomplete items
+ * to a designated scratch file before session termination.
  */
 export const SALVAGE_DIRECTIVE =
   "Your deliberation has reached the token ceiling and this session is about to conclude. " +
@@ -167,13 +156,8 @@ export const SALVAGE_DIRECTIVE =
   "This is a best-effort salvage of your partial work — if you have nothing concrete to record, simply say so.";
 
 /**
- * M4: advisory injected when the model has run more than PROBE_BUDGET
- * consecutive non-mutating bash calls (issue #11 recs 1+2; F4/F12/F14).
- *
- * This is ADVISORY ONLY — it is neither an error nor a cancellation. It is
- * pushed as a user-role message into the conversation (the same in-band
- * pattern as CONTINUATION_DIRECTIVE) so the model sees it on the next turn.
- * It reminds the model to use native tools and conclude dispatches efficiently.
+ * Advisory message injected when consecutive non-mutating bash executions
+ * exceed the configured probe budget threshold.
  */
 export const PROBE_BUDGET_ADVISORY =
   "[Probe-Budget Advisory] You have run several consecutive shell (bash) calls " +
@@ -182,16 +166,8 @@ export const PROBE_BUDGET_ADVISORY =
   "then run the stated verification command ONCE. For read-only or exploration tasks, synthesize your findings and emit your final response now.";
 
 /**
- * M5a: advisory injected (ONCE per run) when the session's cumulative turn
- * count crosses SESSION_TURNS_RECOMMEND (issue #11 rec 3). The session's
- * total turns span tasks (prior assistant_message events + this run's
- * turnsTaken); past the recommended rollover boundary the context is deep
- * enough that a fresh session is cheaper than continuing. This is ADVISORY
- * ONLY — it is pushed as a single user-role message into the conversation
- * (the same in-band pattern as PROBE_BUDGET_ADVISORY / CONTINUATION_DIRECTIVE)
- * telling the model to complete the current task and roll to a fresh session
- * on the next dispatch. It never cancels or errors the session, and the hard
- * MAX_TURNS cap (anser_runner) is untouched.
+ * Advisory message injected when cumulative session turns reach the recommended
+ * rollover threshold, advising session consolidation.
  */
 export const SESSION_ROLLOVER_ADVISORY =
   "[Session-Rollover Advisory] This session has crossed the recommended " +
@@ -200,29 +176,18 @@ export const SESSION_ROLLOVER_ADVISORY =
   "clean, low-cost context instead of re-prefilling this deep one.";
 
 /**
- * E1: FS-as-context tool-output spillover.
+ * Spills oversized tool execution results to scratch storage.
  *
- * When a tool result exceeds `thresholdBytes`, the FULL payload is written to
- * `<scratchDir>/tool_out_<id>.txt` (via the sandboxed FS service, so the write
- * stays inside the workspace root) and the in-band observation is replaced with
- * a pointer block: a head preview, a tail preview, the absolute scratch path,
- * the original byte count, and a re-read hint. This is SUFFIX-SCOPED — it only
- * bounds the tool *result* message, never the prompt prefix — so KV-cache
- * prefix stability is preserved.
- *
- * Fail-fast (zero-masking): if the scratch write throws, the error is surfaced
- * as the tool observation (`isError`-style notice) rather than silently
- * truncating the payload. A failed spill must be loud, not a quiet 32KB cut.
+ * When a tool output exceeds thresholdBytes, persists the full payload to disk
+ * under the workspace scratch directory and replaces the in-band observation
+ * with preview metadata and a file pointer.
  *
  * @param {object} params
- * @param {string} params.output The full tool output string.
- * @param {number} params.thresholdBytes Spill threshold (TOOL_SPILL_BYTES).
- * @param {string} params.id A stable identifier for the spill file (tool call id).
- * @param {string} params.scratchDir Relative scratch dir under the sandbox root
- *   (e.g. ".scratch").
- * @param {object} [params.fsService] The sandboxed FS service (ctx.get("fs")).
- *   When absent the spill is skipped (returns the original output unchanged) —
- *   this keeps the helper safe to call in contexts without a mounted FS.
+ * @param {string} params.output Full tool output string.
+ * @param {number} params.thresholdBytes Output size threshold before triggering spill.
+ * @param {string} params.id Unique tool invocation identifier.
+ * @param {string} params.scratchDir Relative scratchpad directory path.
+ * @param {object} [params.fsService] Sandboxed filesystem service instance.
  * @returns {Promise<{output: string, spilled: boolean, path?: string, bytes?: number}>}
  */
 export async function spillToolOutput({
@@ -275,9 +240,7 @@ export async function spillToolOutput({
 
 export class AnserRunner {
   constructor(options = {}) {
-    // P4i: canonicalize the default cwd through the OS symlink/junction layer
-    // so a junction/symlink cwd is stored as its real path before it is
-    // handed to any sandboxed service.
+    // Canonicalize working directory through OS symlink/junction layer.
     this.defaultCwd = canonicalizePath(options.cwd ? normalizeWorkspacePath(options.cwd) : process.cwd());
     this.defaultMaxTurns = options.maxTurns || BASE_TURN_BUDGET;
     // Optional injection seams (used by offline tests to substitute a mock
@@ -287,26 +250,16 @@ export class AnserRunner {
   }
 
   /**
-   * E2: bounded salvage extraction pass on deliberation-budget exhaustion (F6.3).
-   *
-   * When the reasoning budget is exhausted, the model has accumulated partial
-   * findings in its thinking that would otherwise be discarded. This method
-   * fires ONE bounded extraction turn (tools disabled, low reasoning effort,
-   * short max_tokens) to capture those findings as plain text, then writes the
-   * text to `<workspace>/.scratch/salvage_<sessionId>.md`.
-   *
-   * Best-effort: any failure (throw, empty response, missing FS service, write
-   * error) is logged as `salvage_failed` / `salvage_empty` and the method
-   * returns `{ salvaged: false }`. The caller proceeds to the honest
-   * `reasoning_budget_exhausted` break regardless — the salvage never masks the
-   * exhaustion status (zero-masking invariant).
+   * Executes a bounded extraction pass to salvage partial deliberation output.
+   * Invoked upon reasoning budget exhaustion to record intermediate findings
+   * to workspace scratch storage.
    *
    * @param {object} params
-   * @param {object} params.llm The LLM provider (ctx.get("llm")).
-   * @param {object} params.logger The event logger (ctx.get("logger")).
-   * @param {object} [params.fsService] The sandboxed FS service (ctx.get("fs")).
-   * @param {string} params.sessionId The session ID.
-   * @param {AbortSignal} [params.signal] Cancellation signal.
+   * @param {object} params.llm LLM provider instance.
+   * @param {object} params.logger Event logger instance.
+   * @param {object} [params.fsService] Sandboxed filesystem service.
+   * @param {string} params.sessionId Session identifier.
+   * @param {AbortSignal} [params.signal] Cancellation abort signal.
    * @returns {Promise<{ salvaged: boolean, path?: string, error?: string }>}
    */
   async salvageReasoningBudget({ llm, logger, fsService, sessionId, signal }) {
@@ -435,9 +388,7 @@ export class AnserRunner {
       windowSize: LOOP_DETECTION_WINDOW,
       threshold: LOOP_DETECTION_REPETITIONS,
     });
-    // P4i: canonicalize the per-run cwd through the OS symlink/junction layer
-    // so every plugin mounted below (sandbox fs, shell, Evo, AST) receives a
-    // real path, not a junction literal.
+    // Canonicalize working directory through OS symlink/junction layer.
     const effectiveCwd = cwd ? canonicalizePath(normalizeWorkspacePath(cwd)) : this.defaultCwd;
 
     // Initialize the Anser microkernel context
@@ -469,11 +420,7 @@ export class AnserRunner {
       ctx.plugin(evoPlugin, { workspaceRoot: effectiveCwd });
     }
 
-    // P8: boot the generic MCP extension bridge BEFORE the runner loop so the
-    // remote tools are registered on the Anser Context and visible to the
-    // model on the very first turn. The bridge never throws (bad specs /
-    // failed handshakes are logged and skipped). It is disposed in the
-    // finally block below so no bridge child is ever leaked on failure/cancel.
+    // Initialize stdio MCP extension bridge before runner execution.
     let mcpBridge = null;
     if (Array.isArray(extensions) && extensions.length > 0) {
       mcpBridge = new McpBridge({
@@ -496,10 +443,7 @@ export class AnserRunner {
       }
     }
 
-    // P9: keyword auto-inject matching skills from the packaged skills/
-    // library into the user prompt BEFORE it enters the message list.
-    // If skills were already injected in a prior turn of this session, do not
-    // re-inject duplicate skill bodies, preserving KV-cache prefix stability.
+    // Match and inject applicable workflow skills before entering message list.
     let effectivePrompt = prompt;
     let matchedSkillNames = [];
     if (!hasPriorUserMessages || priorSkills.size === 0) {
@@ -547,21 +491,10 @@ export class AnserRunner {
     let continuationsInjected = 0;
     let consecutiveReasoningContinuations = 0;
     let emptyStreamRetries = 0;
-    // M4: consecutive non-mutating bash calls (probe streak). Reset by any
-    // mutating tool call; incremented by each bash/exec_command call; neutral
-    // for every other tool. When it exceeds PROBE_BUDGET an advisory is
-    // injected and the counter re-arms (resets to 0) for the next run of N.
+    // Track consecutive non-mutating command invocations.
     let probeStreak = 0;
 
-    // M5a: session-cumulative turn count (issue #11 rec 3). The session's
-    // total turns SPAN tasks: the prior assistant_message events (from
-    // logger.readAll() — the same source getConversationHistory() reads) plus
-    // this run's turnsTaken. The run loop checks the cumulative count each
-    // turn and latches a one-shot flag per tier so each event fires at most
-    // once per run (mirroring the probeStreak advisory pattern).
-    // Fail-fast (Anser doctrine): the logger contract REQUIRES readAll().
-    // A logger without it is a contract violation and must throw loudly —
-    // no silent fallback to 0.
+    // Track session-cumulative turn counts across tasks.
     let sessionTurns = logger
       .readAll()
       .filter((e) => e.type === "assistant_message").length;
@@ -573,21 +506,7 @@ export class AnserRunner {
     let contextEmergencySynthesisEmitted = false;
     let lastPromptTokens = 0;
 
-    // --- M7 (P2, F1/F2): dispatch prompt-budget telemetry ------------------
-    // The audit's failure cluster (27/45 dispatches over budget; monolithic
-    // mega-prompt failures) correlates with dispatch prompts over ~1,500 chars.
-    // The runner is the only component with the session event sink (anser_runner
-    // has none — established M5b), so it is the right place to surface this.
-    // When the finalTaskPrompt (the `prompt` that arrives as run({prompt}))
-    // exceeds PROMPT_BUDGET_CHARS, emit ONE advisory `prompt_over_budget`
-    // event (fields: promptChars, budget) into the session event ledger.
-    //
-    // ADVISORY TELEMETRY ONLY — it never alters flow: it does not cancel,
-    // error, truncate, or re-prompt. The prompt is passed to the model
-    // verbatim; the event merely makes the over-budget condition observable in
-    // the same sink that carries session_warning / context_depth_warning /
-    // probe_budget_warning. Emitted ONCE per run() (before the turn loop), so
-    // it cannot re-fire on subsequent turns.
+    // Emit prompt_over_budget advisory event when prompt exceeds PROMPT_BUDGET_CHARS.
     if (prompt.length > PROMPT_BUDGET_CHARS) {
       logger.append({
         type: "prompt_over_budget",
@@ -643,11 +562,7 @@ export class AnserRunner {
 
         turnsTaken++;
 
-        // --- M5a: session-cumulative turn thresholds (issue #11 rec 3) -----
-        // The session's total turns span tasks (prior assistant_message events
-        // + this run's turnsTaken). Each tier latches once per run (one-shot),
-        // mirroring the probeStreak advisory pattern: advisory-only, never
-        // cancel or error the session, and the hard MAX_TURNS cap is untouched.
+        // Emit session warning telemetry when cumulative turn thresholds are reached.
         sessionTurns = sessionTurns + 1;
         if (!sessionWarnLatched && sessionTurns >= SESSION_TURNS_WARN) {
           sessionWarnLatched = true;
@@ -701,31 +616,14 @@ export class AnserRunner {
           },
         });
 
-        // M6b: hoist the re-prefill size (promptChars) and the effective
-        // empty-stream retry budget ONCE per turn, above both retry branches,
-        // so the P2b/P2d empty-stream path and the M3b degenerate-final path
-        // share the same number. promptChars is the same measure the death
-        // context records (JSON.stringify(messages).length). The budget is
-        // depth-aware: a DEEP-context prompt (>= EMPTY_STREAM_RETRY_DEPTH_CHARS)
-        // gets the longer DEEP budget (a 100k+ token re-prefill has a much
-        // longer recovery latency, so a flat budget of 2 exhausts before a
-        // transient cluster clears); a shallow prompt keeps the base budget.
+        // Hoist re-prefill size and depth-aware empty-stream retry budget.
         const promptChars = JSON.stringify(messages).length;
         const emptyStreamRetryBudget =
           promptChars >= EMPTY_STREAM_RETRY_DEPTH_CHARS
             ? EMPTY_STREAM_RETRIES_DEEP
             : EMPTY_STREAM_RETRIES;
 
-        // --- Empty-generation guard (P2b) -----------------------------------
-        // An aborted / zero-byte stream yields NO content, NO tool calls, and
-        // NO real finish_reason frame. The provider default-fills that missing
-        // finish_reason as "stop", so the raw signal of "no real finish_reason"
-        // is finishReason being undefined / null / "" (NOT the string "stop").
-        // Treating such a turn as a clean completion is what made a full
-        // ~7k-token generation look like a silent zero-byte "stop" to the
-        // client. Instead: do NOT record it as an assistant turn, do NOT set
-        // finalText, and retry the turn up to the empty-stream retry budget.
-        // A legitimate "stop" turn (with content) is unaffected.
+        // Guard against empty generation streams with missing finish reason.
         const isEmptyGeneration =
           (!turnResult.content || turnResult.content.trim() === "") &&
           (!turnResult.toolCalls || turnResult.toolCalls.length === 0) &&
@@ -733,31 +631,14 @@ export class AnserRunner {
             turnResult.finishReason === null ||
             turnResult.finishReason === "");
 
-        // --- Empty-STOP guard (P2d) -----------------------------------------
-        // A turn that ends with finish_reason "stop" yet produced NO content
-        // (empty / whitespace) and NO tool calls is pathological: the model
-        // ended its turn having said nothing (the classic signature of a
-        // reasoning-only turn that burned the whole max_tokens budget on
-        // thinking and then "stopped" with zero output). This is distinct from
-        // the P2b case (no real finish_reason) and from the P2 length
-        // continuation (finish_reason "length"). Route it through the SAME
-        // emptyStreamRetries retry path as P2b: do NOT record it as an
-        // assistant turn, do NOT set finalText, and retry up to the budget.
-        // NOTE: turns with tool calls are never "empty" (a tool call is real
-        // output). Turns with hadReasoning + empty content + finish "length"
-        // are handled by the existing continuation path below (unchanged).
+        // Guard against empty stop turns (zero content and zero tool calls with stop finish reason).
         const isEmptyStop =
           turnResult.finishReason === "stop" &&
           (!turnResult.content || turnResult.content.trim() === "") &&
           (!turnResult.toolCalls || turnResult.toolCalls.length === 0);
 
         if (isEmptyGeneration || isEmptyStop) {
-          // P7b forensics context: record WHERE in the task the death happened
-          // and WHAT the engine claimed to be doing. promptChars (hoisted above,
-          // shared with the M3b degenerate path) approximates the re-prefill size
-          // (large prompts = minutes of cold TTFT); reasoningTokens on the dead
-          // turn exposes invisible thinking loops (the P7b root cause burned
-          // 49152 reasoning tokens before dying).
+          // Record task execution coordinates and metrics at point of stream termination.
           const deathContext = {
             turnIndex: turnsTaken,
             promptChars,
@@ -766,15 +647,13 @@ export class AnserRunner {
           };
           if (emptyStreamRetries < emptyStreamRetryBudget) {
             emptyStreamRetries++;
-            // M6b: exponential backoff before the next (expensive, deep)
-            // re-prefill so a transient empty-stream cluster has time to clear.
+            // Exponential backoff before retry attempt.
             const backoffMs = emptyStreamRetryBackoffMs(emptyStreamRetries);
             logger.append({
               type: "empty_stream_retry",
               retryNumber: emptyStreamRetries,
               maxRetries: emptyStreamRetryBudget,
-              // "empty_generation" = P2b (no real finish_reason);
-              // "empty_stop" = P2d (finish "stop" with zero content + zero tool calls).
+              // Reason: empty generation stream.
               reason: isEmptyStop ? "empty_stop" : "empty_generation",
               backoffMs,
               ...deathContext,
@@ -797,30 +676,7 @@ export class AnserRunner {
           break;
         }
 
-        // --- Degenerate-final guard (M3b) -----------------------------------
-        // The stream proxy circuit-breaks a runaway repetition loop by
-        // appending a GUARD_MARKER sentinel and ending the stream with
-        // finish_reason "stop". The provider accumulates that marker into the
-        // turn's content, so a turn whose ENTIRE message is just the marker
-        // (or a tiny sliver of text plus the marker) lands here as a "stop"
-        // turn WITH content — and the old code reported a false "completed"
-        // (the M3a defect: 7 false-success sessions, e.g. task_mitig-m3a-s3
-        // with 0 tool calls and a marker-only result).
-        //
-        // We strip the marker and measure the substantive remainder:
-        //   - remainder < DEGENERATE_FINAL_SUBSTANTIVE_CHARS AND no tool calls
-        //     this turn AND the session is still short (turnsTaken <=
-        //     DEGENERATE_FINAL_MAX_TURNS)  -> DEGENERATE: retry via the
-        //     empty-stream path (reason "degenerate_final"); on budget
-        //     exhaustion report the honest status "degenerate_response_truncated"
-        //     with the original partial+marker preserved for honesty.
-        //   - remainder >= DEGENERATE_FINAL_SUBSTANTIVE_CHARS -> NOT degenerate:
-        //     fall through to normal recording + break (a real, if truncated,
-        //     deliverable; the marker stays visible in the result).
-        //
-        // Placed BEFORE the assistant_message recording (like the P2b/P2d
-        // empty guards) so a degenerate turn is never recorded as an assistant
-        // message and the retry is clean.
+        // Degenerate-final guard: catch sentinel-truncated repetition outputs lacking substantive content.
         const guardMarkerIdx =
           typeof turnResult.content === "string"
             ? turnResult.content.indexOf(GUARD_MARKER_PREFIX)
@@ -845,7 +701,7 @@ export class AnserRunner {
           ) {
             const deathContext = {
               turnIndex: turnsTaken,
-              // M6b: shared with the P2b/P2d path (hoisted above both branches).
+              // Context size hoisted above retry branches.
               promptChars,
               metrics: turnResult.metrics ?? null,
               reasoningTokens: turnResult.reasoningTokens ?? 0,
@@ -853,16 +709,13 @@ export class AnserRunner {
             };
             if (emptyStreamRetries < emptyStreamRetryBudget) {
               emptyStreamRetries++;
-              // M6b: exponential backoff before the next (expensive, deep)
-              // re-prefill so a transient empty-stream cluster has time to clear.
+            // Exponential backoff before retry attempt.
               const backoffMs = emptyStreamRetryBackoffMs(emptyStreamRetries);
               logger.append({
                 type: "empty_stream_retry",
                 retryNumber: emptyStreamRetries,
                 maxRetries: emptyStreamRetryBudget,
-                // "degenerate_final" = M3b (guard-truncated final with a
-                // substantive remainder below the threshold, no tool calls,
-                // short session).
+                // Reason: degenerate sentinel-truncated final.
                 reason: "degenerate_final",
                 backoffMs,
                 ...deathContext,
@@ -885,15 +738,7 @@ export class AnserRunner {
           }
         }
 
-        // --- M5a: context-depth warning (issue #11 rec 3) ------------------
-        // When the re-prefill size (promptTokens) reaches the threshold, emit a
-        // one-shot context_depth_warning. Placed post-streamChat (via
-        // turnResult.metrics.promptTokens) so it fires on every real turn
-        // regardless of how the provider surfaces metrics. ESCALATION: if the
-        // M4 probeStreak counter is active at that moment, the event gains
-        // probeStreakActive:true — a signal sum for the anti-rabbit-hole system
-        // (a deep context AND a live probe streak = the model is stuck in a
-        // long, deep, non-mutating loop).
+        // Emit context-depth advisory telemetry when prompt token accumulation reaches warning threshold.
         if (
           !contextDepthLatched &&
           typeof turnResult.metrics?.promptTokens === "number" &&
@@ -1225,17 +1070,7 @@ export class AnserRunner {
             });
           } catch {}
 
-          // --- M4: probe-budget watchdog (issue #11 recs 1+2) ---------------
-          // Count CONSECUTIVE non-mutating bash calls. A bash/exec_command call
-          // increments the streak; a file-mutating tool call (write/edit/patch/
-          // ast_replace/evo mutation) resets it (the model is in mutation mode,
-          // not probe mode); every other tool (read_file, list_dir, search_code,
-          // ast_search, evo_evaluate, evo_status) is neutral — it neither
-          // increments nor resets. When the streak exceeds PROBE_BUDGET, inject
-          // an ADVISORY (not an error, not a cancellation) and re-arm the
-          // counter for the next run of N. This is the harness-enforced form of
-          // the single-pass mutation directive (F4/F12/F14: 30+ consecutive
-          // inline-python measurement bash calls on open-ended layout targets).
+          // Track consecutive non-mutating command executions and inject advisory when threshold is exceeded.
           const toolName = tc.function.name;
           if (MUTATING_TOOLS.has(toolName)) {
             loopDetector.recordMutation();
@@ -1343,11 +1178,7 @@ export class AnserRunner {
         sampleLiveVllmMetrics();
       } catch {}
 
-      // P8: tear down the MCP extension bridge (kill every bridge child via
-      // the process-tree helper + unregister the bridged tools) BEFORE the
-      // kernel context is disposed, so the reversible tool disposers still
-      // have a live context to unbind from. Never leaks children on
-      // failure/cancel/timeout.
+      // Terminate MCP extension bridge and clean up child processes and registered tools.
       if (mcpBridge) {
         try {
           mcpBridge.dispose();
@@ -1361,20 +1192,13 @@ export class AnserRunner {
     return {
       finalText,
       turnsTaken,
-      // M5b: the session-CUMULATIVE turn count (prior assistant_message events
-      // + this run's turnsTaken). Exposed so the dispatch layer (anser_runner)
-      // can surface the 80-turn rollover recommendation to the ORCHESTRATOR in
-      // the result text — today it only lands in session events, which the
-      // orchestrator rarely reads. Advisory data only; never alters status.
+      // Cumulative turn count across session lifetime.
       sessionTurns,
       status,
       durationMs: Date.now() - t0,
       totalCompletionTokens,
       sessionId,
-      // E3: context headroom telemetry. lastPromptTokens is the most recent
-      // prompt-token count observed (0 when no metrics yet). contextHeadroom
-      // is the remaining tokens under the 245,760 ceiling (clamped ≥ 0), or
-      // null when no measurement is available yet.
+      // Prompt token count and remaining context headroom under nominal ceiling.
       lastPromptTokens: lastPromptTokens > 0 ? lastPromptTokens : null,
       contextHeadroom:
         lastPromptTokens > 0
