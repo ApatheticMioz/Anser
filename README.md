@@ -5,10 +5,10 @@
 [![CI](https://img.shields.io/badge/CI-Passing%20(Ubuntu%20%7C%20Windows)-success?logo=githubactions&logoColor=white)](#testing--verification)
 [![Node](https://img.shields.io/badge/Node-22%20%7C%2024-3C873A?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-[![Test Gate: 58/58](https://img.shields.io/badge/Test%20Gate-58%2F58%20Suites%20Green-success.svg)](#testing--verification)
+[![Test Gate: 62/62](https://img.shields.io/badge/Test%20Gate-62%2F62%20Suites%20Green-success.svg)](#testing--verification)
 [![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#model-serving--speculative-decoding)
 [![Engine](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#model-serving--speculative-decoding)
-[![Security](https://img.shields.io/badge/Security-137%2F137%20Vectors%20Contained-success.svg)](#zero-trust-sandboxed-file-operations)
+[![Security](https://img.shields.io/badge/Security-90%2F90%20Vectors%20Contained-success.svg)](#zero-trust-sandboxed-file-operations)
 
 > **Anser** enables a high-reasoning cloud orchestrator (the *Lead Architect* — Claude Code or Google Antigravity) to drive a locally-served **Qwen3.8-27B** running on a single consumer 24 GB GPU (vLLM + DFlash2 + KVarN) at **$0 token cost**.
 > 
@@ -20,16 +20,15 @@
 
 1. [The Paradigm: Cloud Brain + Local Hands](#the-paradigm-cloud-brain--local-hands)
 2. [Benchmark & Economic Grounding](#benchmark--economic-grounding)
-3. [Case Study: The 453-Session Marathon ($2,000+ Saved on a Single GPU)](#case-study-the-453-session-marathon)
-4. [System Architecture](#system-architecture)
-5. [Core Capabilities](#core-capabilities)
-6. [Quickstart (3 Steps)](#quickstart-3-steps)
-7. [Model Serving, Speculative Decoding & Quantization](#model-serving--speculative-decoding)
-8. [Zero-Trust Sandboxed File Operations](#zero-trust-sandboxed-file-operations)
-9. [Testing & Verification](#testing--verification)
-10. [Repository Structure](#repository-structure)
-11. [Contributing](#contributing)
-12. [License & Commercial Dual-Licensing](#license--commercial-dual-licensing)
+3. [System Architecture](#system-architecture)
+4. [Core Capabilities](#core-capabilities)
+5. [Quickstart (3 Steps)](#quickstart-3-steps)
+6. [Model Serving, Speculative Decoding & Quantization](#model-serving--speculative-decoding)
+7. [Zero-Trust Sandboxed File Operations](#zero-trust-sandboxed-file-operations)
+8. [Testing & Verification](#testing--verification)
+9. [Repository Structure](#repository-structure)
+10. [Contributing](#contributing)
+11. [License & Commercial Dual-Licensing](#license--commercial-dual-licensing)
 
 ---
 
@@ -98,36 +97,11 @@ However, in continuous agentic pair-programming—where 80%+ of prompt tokens ar
 | **API Cost: Completion Output** | **$0.00 / million tokens** | $10.00 / million tokens | $20.00 / million tokens | $50.00 / million tokens | $4.40 / million tokens |
 | **Context Window Ceiling** | **245,760 tokens** (Universal 245K) | 500,000 tokens | 1,000,000 tokens | 1,000,000–1,050,000 tokens | 200,000 tokens |
 | **Tool Execution Model** | In-process microkernel (Node.js heap) | Remote network API / MCP | Remote network API / MCP | Remote network API / MCP | Remote network API / MCP |
-| **Cost of 453-Session Marathon**<br>*(962.3M prompt + 10.4M comp)* | **$0.00** | **$2,028.25 USD** | **$4,056.52 USD** | **$10,141.28 USD** | **$1,392.81 USD** |
 | **Data Privacy & Exfiltration** | **Zero bytes leave your machine** | Third-party data centers | Third-party data centers | Third-party data centers | Third-party data centers |
 
 ---
 
-## Case Study: The 453-Session Marathon
-
-Anser is battle-tested. The metrics below reflect **exact, ground-truth telemetry** captured across an intensive 3-week continuous development marathon on a single consumer workstation equipped with an **NVIDIA GeForce RTX 3090 (24 GB VRAM)**:
-
-| Production Telemetry Axis | Measured Ground Truth | Operational Significance |
-|---|---|---|
-| **Completion Tokens Generated** | **10,372,422 tokens** (10.37M) | Production code, AST transforms, unified diffs |
-| **Deliberative Reasoning Tokens** | **14,916,578 tokens** (14.92M) | Full test-time compute chain-of-thought (`xhigh`) |
-| **Total Prompt Prefill Absorbed** | **962,266,455 tokens** (962.3M) | 268.1M exact measured + 694.1M estimated |
-| **Total Model Turns** | **10,918 turns** | Multi-turn agentic pair-programming cycles |
-| **Production Sessions Indexed** | **453 sessions** | Persistent multi-week development lifecycle |
-| **Completed Complex Tasks** | **118 completed** (35 failed, 4 cancelled) | Real-world feature implementations & refactors |
-| **Total Tool Invocations** | **13,749 calls** | `bash` (7,840), `read_file` (2,626), `edit_file` (1,646) |
-| **Tool Execution Error Rate** | **1.87%** (257 errors / 13,749 calls) | 98.13% first-pass tool execution reliability |
-| **Prefix Cache Hit Rate** | **68.2% sustained** | Sub-second prompt re-prefill via deterministic history |
-| **Peak GPU KV Cache Usage** | **99.4% allocation** | VRAM pinned safely below OOM threshold |
-| **DFlash2 Speculative Decoding** | **4.59 tokens/step** mean acceptance | Draft acceptance rate of 44.8% (up to 8.0 tok/step) |
-| **Active Generation Speed** | **44.54 t/s avg** (Peak: **159.10 t/s**) | Instantaneous speculative decoding burst throughput |
-| **Active Prompt Throughput** | **1,376.75 t/s avg** (Peak: **12,044 t/s**) | Fast context digestion via vLLM flash-attention |
-| **Financial Savings vs Claude Sonnet 5** | **$2,028.25 USD** saved | At Sonnet 5 rates ($2.00/M prompt, $10.00/M completion) |
-| **Financial Savings vs Claude Opus 5.5** | **$4,056.52 USD** saved | At Opus 5.5 rates ($4.00/M prompt, $20.00/M completion) |
-| **Financial Savings vs GPT-6 Astra / Claude Fable 5.1** | **$10,141.28 USD** saved | At frontier flagship rates ($10.00/M prompt, $50.00/M completion) |
-| **Financial Savings vs GLM-5.3** | **$1,392.81 USD** saved | At cloud value rates ($1.40/M prompt, $4.40/M completion) |
-| **Local Inference Token Cost** | **$0.00** | **A $1,000 GPU paid for itself in less than a month.** |
-
+> Historical production telemetry (the 453-session marathon) is archived in [`docs/archive/marathon-case-study-2026-09.md`](docs/archive/marathon-case-study-2026-09.md).
 
 ---
 
@@ -195,12 +169,12 @@ cd Anser/mcp-qwen
 npm ci
 ```
 
-### 2. Verify the 58-Suite Test Gate
+### 2. Verify the 62-Suite Test Gate
 ```bash
-# Run the fast offline test gate (54 offline suites + protocol sync)
+# Run the fast offline test gate (9 critical suites)
 npm run test
 
-# Run the authoritative test gate (58 suites; GPU live suites skip honestly if offline)
+# Run the authoritative test gate (62 suites; GPU live suites skip honestly if offline)
 npm run test:all
 ```
 
@@ -252,7 +226,7 @@ Anser implements a **5-layer defense-in-depth boundary** ensuring neither the co
   [Safe Workspace Disk Mutation]
 ```
 
-Verified by a **137-vector security suite** (`tests/security.test.js`: 123 attack vectors blocked, 14 legitimate allow vectors).
+Verified by a **90-vector security suite** (`tests/security.test.js`: attack vectors blocked, legitimate allow vectors permitted).
 
 ---
 
@@ -261,8 +235,8 @@ Verified by a **137-vector security suite** (`tests/security.test.js`: 123 attac
 Every pull request is validated across **Node 22 & 24 on Ubuntu and Windows**:
 
 ```bash
-npm run test --prefix mcp-qwen          # 54 offline suites
-npm run test:all --prefix mcp-qwen      # 58 suites total (full CI gate)
+npm run test --prefix mcp-qwen          # 9 critical suites
+npm run test:all --prefix mcp-qwen      # 62 suites total (full CI gate)
 npm run test:telemetry --prefix mcp-qwen # Telemetry & pricing arithmetic verification
 ```
 
@@ -274,9 +248,9 @@ All files strictly enforce the Universal LF invariant (`* text=auto eol=lf`).
 
 ```
 Anser/
-  README.md                 # Production architecture, case study, and quickstart
+  README.md                 # Production architecture, benchmarks, and quickstart
   CHANGELOG.md              # Project release history & generational changelog
-  AGENTS.md                 # Machine-readable operating contract (2026 AAIF standard)
+  AGENTS.md                 # Machine-readable operating contract
   CONTRIBUTING.md           # Contributor workflow and PR guidelines
   SECURITY.md               # Private vulnerability reporting policy
   LICENSE                   # GNU AGPLv3
@@ -292,7 +266,7 @@ Anser/
         core/               # Kernel plugin registry & event system
         services/           # Sandboxed FS, AST, Shell, Web research services
         evo/                # Evolutionary optimizer, lineage DAG & rollback
-    tests/                  # 58 automated test suites
+    tests/                  # 62 automated test suites
   benchmarks/               # Historical session telemetry & empirical dumps
 ```
 
