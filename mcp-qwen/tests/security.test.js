@@ -1,5 +1,6 @@
 /**
- * 90-Vector Deep Sandbox Containment & Blast-Radius Security Verification
+ * 137-Vector Deep Sandbox Containment & Blast-Radius Security Verification
+ * (123 attack vectors blocked + 14 allow vectors permitted)
  *
  * Proves that neither Qwen nor any harness tool can escape the workspace root
  * or touch C:\, D:\ (root), or other system directories via FS, AST, Evo, or Shell.
@@ -17,7 +18,7 @@ import {
 import { EvoOperator } from "../src/harness/evo/evo_operator.js";
 
 async function verifySecurity() {
-  console.log("=== Running 90-Vector Sandbox Boundary & Anti-Nuke Security Verification ===");
+  console.log("=== Running 137-Vector Sandbox Boundary & Anti-Nuke Security Verification ===");
   const workspaceRoot = process.cwd(); // d:\LLM_Ecosystem
   console.log(`Locked Sandbox Root: ${workspaceRoot}`);
 
