@@ -4,141 +4,261 @@ import path from "node:path";
 import { winHomeWsl } from "./wsl_env.js";
 import { IS_WINDOWS } from "./env.js";
 
-// IS_WINDOWS is the single source of truth for platform detection, now owned
-// by the leaf env.js. Re-exported here so the 14 existing consumers that
-// import it from config.js are unaffected.
+/**
+ * Platform detection flag for Windows environments.
+ * Re-exported from leaf env.js for backward compatibility.
+ * @type {boolean}
+ */
 export { IS_WINDOWS };
 
+/**
+ * Port for the vLLM OpenAI-compatible server.
+ * - Unit: port number
+ * - Default: 18020
+ * - Override: VLLM_PORT
+ * @type {number}
+ */
 export const VLLM_PORT = parseInt(process.env.VLLM_PORT || "18020", 10);
+
+/**
+ * Port for the zero-turn status and long-poll wait HTTP server.
+ * - Unit: port number
+ * - Default: 18021
+ * - Override: STATUS_PORT
+ * @type {number}
+ */
 export const STATUS_PORT = parseInt(process.env.STATUS_PORT || "18021", 10);
+
+/**
+ * Port for the local SSE stream sanitizer proxy.
+ * - Unit: port number
+ * - Default: 18022
+ * - Override: STREAM_PROXY_PORT
+ * @type {number}
+ */
 export const STREAM_PROXY_PORT = parseInt(process.env.STREAM_PROXY_PORT || "18022", 10);
 
+/**
+ * Base URL for vLLM API completions.
+ * @type {string}
+ */
 export const BASE_URL = `http://localhost:${VLLM_PORT}/v1`;
+
+/**
+ * Nominal maximum context length for the Qwen model architecture.
+ * - Unit: tokens
+ * - Value: 245760
+ * @type {number}
+ */
 export const MAX_LEN_HUGE = 245760;
-// 2026-09-12: 180s -> 480s. Cold boot with MAX_SEQS=2 (multi-stream CUDA graph
-// capture restored) observed >180s in production: model load 15s + torch.compile
-// 45s + profiling/warmup 138s + DFlash-head compile/capture. The old deadline
-// was tuned for the 1-seat boot that eliminated those graphs.
+/**
+ * Maximum time (ms) to wait for the vLLM engine to become ready after a cold boot.
+ * Covers model load, torch.compile, profiling/warmup, and CUDA graph capture.
+ * Default: 480000 ms (8 minutes).
+ * @type {number}
+ */
 export const BOOT_TIMEOUT_MS = 480_000;
 export const BOOT_POLL_MS = 3000;
 
-// Output budget: default max_tokens for a single generation turn. Raised from
-// 16384 to 49152 so that server-side reasoning (thinking) tokens no longer
-// consume the entire budget before any content / tool calls are emitted.
-// Overridable per-dispatch via QWEN_MAX_TOKENS (the 245K context window easily
-// fits ~100k prompt + 49k output).
+/**
+ * Default max_tokens for a single generation turn. Sized so that server-side
+ * reasoning (thinking) tokens do not consume the entire budget before any
+ * content or tool calls are emitted. The 245K context window easily fits
+ * ~100k prompt + 49k output.
+ *
+ * - Unit: tokens
+ * - Default: 49152
+ * - Override: QWEN_MAX_TOKENS
+ *
+ * @type {number}
+ */
 const DEFAULT_MAX_TOKENS = 49152;
 export const MAX_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_MAX_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_TOKENS;
 })();
 
-// Reasoning-effort passthrough: read dynamically (at call time) so callers and
-// tests can toggle it per-dispatch. Defaults to "xhigh" per SOTA reasoning
-// test-time compute depth findings. Can be overridden via QWEN_REASONING_EFFORT.
+/**
+ * Retrieves the current default reasoning effort for generation dispatches.
+ * - Override: QWEN_REASONING_EFFORT
+ * - Default: "medium"
+ * @returns {"xhigh"|"medium"|"low"}
+ */
 export function getReasoningEffort() {
   const v = process.env.QWEN_REASONING_EFFORT;
   return v ? v : "medium";
 }
 
-// Valid reasoning-effort tiers the engine's chat template accepts. Verified
-// against the LIVE Qwen3.8-27B chat_template.jinja (both AutoRound variants):
-// the template raises an exception for any value outside this set, and the
-// live vLLM engine returns 400 for "off"/"high" (200 for xhigh/medium/low).
-// The documented family behavior ("off/low/medium/xhigh") is NOT what this
-// engine implements — "off" is rejected. Single source of truth for the
-// qwen_coworker `reasoning_effort` schema and the provider's fallback.
+/**
+ * Supported reasoning-effort tiers accepted by the engine's chat template.
+ * Canonical enum for tool schemas and dispatch validation.
+ * @type {readonly string[]}
+ */
 export const REASONING_EFFORT_TIERS = ["xhigh", "medium", "low"];
 
+/**
+ * Synchronous race window before yielding to asynchronous zero-turn HTTP wait.
+ * - Unit: milliseconds
+ * - Default: 15000 (15 seconds)
+ * - Override: QWEN_RACE_MS
+ * @type {number}
+ */
 const DEFAULT_RACE_MS = 15_000;
 export const RACE_MS = process.env.QWEN_RACE_MS
   ? parseInt(process.env.QWEN_RACE_MS, 10)
   : DEFAULT_RACE_MS;
 
-export const DEFAULT_TIMEOUT_MS = 14_400_000; // 4 hours
+/**
+ * Default maximum execution timeout for an Anser background task.
+ * - Unit: milliseconds
+ * - Default: 14400000 (4 hours)
+ * @type {number}
+ */
+export const DEFAULT_TIMEOUT_MS = 14_400_000;
+
+/**
+ * Enforced lower bound for task timeout configuration.
+ * - Unit: milliseconds
+ * - Default: 600000 (10 minutes)
+ * - Override: QWEN_MIN_TIMEOUT_MS
+ * @type {number}
+ */
 const DEFAULT_MIN_TIMEOUT_MS = 600_000;
 export const MIN_TIMEOUT_MS = (() => {
   const parsed = parseInt(process.env.QWEN_MIN_TIMEOUT_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MIN_TIMEOUT_MS;
 })();
 
+/**
+ * Inactivity watchdog timeout for stream stalls or unhandled process locks.
+ * - Unit: milliseconds
+ * - Default: 1800000 (30 minutes)
+ * - Override: QWEN_INACTIVITY_TIMEOUT_MS
+ * @type {number}
+ */
 export const INACTIVITY_TIMEOUT_MS = (() => {
   const parsed = parseInt(process.env.QWEN_INACTIVITY_TIMEOUT_MS, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1_800_000; // 30 min
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1_800_000;
 })();
 
+/**
+ * Timeout allowed before the initial streaming token is emitted by the engine.
+ * - Unit: milliseconds
+ * - Default: 240000 (4 minutes)
+ * - Override: QWEN_FIRST_TOKEN_TIMEOUT_MS
+ * @type {number}
+ */
 export const FIRST_TOKEN_TIMEOUT_MS = (() => {
   const parsed = parseInt(process.env.QWEN_FIRST_TOKEN_TIMEOUT_MS, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 240_000; // 4 min
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 240_000;
 })();
 
-// P7b: streaming idle tolerance for a single generation turn. This is the
-// first-byte AND inter-chunk idle watchdog on the provider's SSE read loop.
-// A legitimate first token can take many minutes on a cold 200K prefill
-// (prefix-cache miss) or behind a queued request on a MAX_SEQS=1 engine, so
-// the default is 15 minutes (900000ms) — well above any realistic TTFT — and
-// is overridable via QWEN_STREAM_IDLE_TIMEOUT_MS. This is a DIFFERENT axis
-// from max_tokens (generation-length cap); it only bounds how long the stream
-// may go SILENT before we declare the connection dead.
+/**
+ * Streaming idle timeout (ms) for a single generation turn. Acts as both the
+ * first-byte and inter-chunk idle watchdog on the provider's SSE read loop.
+ * A legitimate first token can take many minutes on a cold 200K prefill
+ * (prefix-cache miss) or behind a queued request on a MAX_SEQS=1 engine, so
+ * the default is well above any realistic TTFT. This is a different axis from
+ * max_tokens (generation-length cap); it only bounds how long the stream may
+ * go silent before the connection is declared dead.
+ *
+ * - Unit: milliseconds
+ * - Default: 1200000 ms (20 minutes)
+ * - Override: QWEN_STREAM_IDLE_TIMEOUT_MS
+ *
+ * @type {number}
+ */
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 1_200_000; // 20 min
 export const STREAM_IDLE_TIMEOUT_MS = (() => {
   const parsed = parseInt(process.env.QWEN_STREAM_IDLE_TIMEOUT_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_TIMEOUT_MS;
 })();
 
-// M6a (P1, F6/N3): depth-aware idle timeout. The SHALLOW tier above (1200s) is
-// correct for normal turns, but a DEEP-context prompt (estimated prompt tokens
-// >= STREAM_IDLE_DEPTH_TOKENS) legitimately spends >20 min in a single healthy
-// thinking turn before any content is emitted. When the prompt is deep, the
-// provider arms this longer DEEP window (2400s / 40 min) instead so a healthy
-// long-thinking turn is not killed; the SHALLOW tier still bounds normal turns.
-// Both are overridable via env for tests / operators.
+/**
+ * Depth-aware streaming idle timeout (ms). Applied when the estimated prompt
+ * token count exceeds {@link STREAM_IDLE_DEPTH_TOKENS}. A deep-context prompt
+ * can legitimately spend >20 min in a single healthy thinking turn before any
+ * content is emitted; this longer window prevents a healthy long-thinking turn
+ * from being killed. The shallow tier ({@link STREAM_IDLE_TIMEOUT_MS}) still
+ * bounds normal turns.
+ *
+ * - Unit: milliseconds
+ * - Default: 2400000 ms (40 minutes)
+ * - Override: QWEN_STREAM_IDLE_TIMEOUT_DEEP_MS
+ *
+ * @type {number}
+ */
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS_DEEP = 2_400_000; // 40 min
 export const STREAM_IDLE_TIMEOUT_MS_DEEP = (() => {
   const parsed = parseInt(process.env.QWEN_STREAM_IDLE_TIMEOUT_DEEP_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_TIMEOUT_MS_DEEP;
 })();
 
-// M6a: prompt-token depth threshold. A turn whose estimated prompt tokens reach
-// this value is treated as "deep" and gets the DEEP idle tier. Default 35k
-// ensures any multi-turn research or audit session receives the generous 40m window.
-// Overridable via QWEN_STREAM_IDLE_DEPTH_TOKENS.
+/**
+ * Prompt-token depth threshold. A turn whose estimated prompt tokens reach this
+ * value is treated as "deep" and receives the DEEP idle timeout tier
+ * ({@link STREAM_IDLE_TIMEOUT_MS_DEEP}) instead of the shallow tier.
+ *
+ * - Unit: tokens
+ * - Default: 35000
+ * - Override: QWEN_STREAM_IDLE_DEPTH_TOKENS
+ *
+ * @type {number}
+ */
 const DEFAULT_STREAM_IDLE_DEPTH_TOKENS = 35_000;
 export const STREAM_IDLE_DEPTH_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_STREAM_IDLE_DEPTH_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STREAM_IDLE_DEPTH_TOKENS;
 })();
 
-// P7b: per-turn ceiling on reasoning (thinking) tokens, enforced CLIENT-side
-// by the provider's SSE read loop. Ground truth (P7b forensics): a reasoning
-// loop burned a single uninterrupted ~18-minute generation to the full 49152
-// max_tokens ceiling (engine /metrics: one Running request, spec-decode
-// acceptance pinned at the 8.0 maximum = literal repetition). The stream-proxy
-// circuit breaker now catches LITERAL loops (it was blind to delta.reasoning
-// — field-name mismatch, fixed same pass), but a SEMANTIC loop (re-phrasing
-// without exact repetition) is only boundable by a token budget. When the
-// ceiling is hit the provider ends the turn with finish_reason "length" +
-// hadReasoning, so the runner's P2d reasoning-cutoff continuation directive
-// lands ("stop deliberating, emit edits with tools now") and the agent
-// CONTINUES instead of hogging the engine. Never suppresses thinking in
-// prompts — bounds it mechanically and hands the turn back.
+/**
+ * Per-turn ceiling on reasoning (thinking) tokens, enforced client-side by the
+ * provider's SSE read loop. The stream-proxy circuit breaker catches literal
+ * repetition loops, but a semantic loop (re-phrasing without exact repetition)
+ * is only boundable by a token budget. When the ceiling is hit the provider
+ * ends the turn with finish_reason "length" + hadReasoning, so the runner's
+ * reasoning-cutoff continuation directive lands and the agent continues
+ * instead of hogging the engine. Never suppresses thinking in prompts — bounds
+ * it mechanically and hands the turn back.
+ *
+ * - Unit: tokens
+ * - Default: 32768
+ * - Override: QWEN_MAX_REASONING_TOKENS
+ *
+ * @type {number}
+ */
 const DEFAULT_MAX_REASONING_TOKENS = 32_768;
 export const MAX_REASONING_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_MAX_REASONING_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_REASONING_TOKENS;
 })();
 
-export const EXTENSION_BONUS_TIMEOUT_MS = 600_000; // 10 min
-// Invariant: retention must always outlive the longest legal task
-// (DEFAULT_TIMEOUT_MS), or it can unlink a LIVE task's JSON mid-run.
-// The floor is DEFAULT_TIMEOUT_MS + 30 min (the 30-min margin covers the
-// inactivity watchdog's grace window past the hard timeout).
-export const TASK_RETENTION_FLOOR_MS = DEFAULT_TIMEOUT_MS + 1_800_000; // 4h + 30min
-// Default retention: 7 days — long enough that audit telemetry survives a full
-// work week. Overridable via QWEN_TASK_RETENTION_MS; any configured value
-// below the floor is clamped up to the floor (the invariant above must never
-// be violated, even by an operator misconfiguration).
-const DEFAULT_TASK_RETENTION_MS = 604_800_000; // 7 days
+/**
+ * Additional execution time granted per supervisor lease extension.
+ * - Unit: milliseconds
+ * - Default: 600000 (10 minutes)
+ * @type {number}
+ */
+export const EXTENSION_BONUS_TIMEOUT_MS = 600_000;
+
+/**
+ * Minimum allowable task retention period (ms). Enforces that task JSON files
+ * outlive the maximum legal execution timeout plus inactivity watchdog margin.
+ * - Unit: milliseconds
+ * - Default: 16200000 (4h 30m)
+ * @type {number}
+ */
+export const TASK_RETENTION_FLOOR_MS = DEFAULT_TIMEOUT_MS + 1_800_000;
+
+/**
+ * Task artifact retention period on disk before automated pruning. Clamped to
+ * {@link TASK_RETENTION_FLOOR_MS} to prevent premature deletion of active tasks.
+ * - Unit: milliseconds
+ * - Default: 604800000 (7 days)
+ * - Override: QWEN_TASK_RETENTION_MS
+ * @type {number}
+ */
+const DEFAULT_TASK_RETENTION_MS = 604_800_000;
 export const TASK_RETENTION_MS = (() => {
   const parsed = parseInt(process.env.QWEN_TASK_RETENTION_MS, 10);
   const requested =
@@ -146,31 +266,71 @@ export const TASK_RETENTION_MS = (() => {
   return Math.max(requested, TASK_RETENTION_FLOOR_MS);
 })();
 
-// M9 (P2, N2): mid-session orphan-reaper heartbeat-staleness window. The
-// boot-only orphan sweep (markTaskOrphanedOnDisk) only runs at process start,
-// so a task whose owner process dies MID-SESSION (e.g. task_anomaly-probe-s1:
-// status:"running", dead ownerPid, no terminal event) stays "running" forever
-// and misleads every later probe. The liveness reaper (reapOrphans) reaps a
-// not-done task only when BOTH its heartbeat is older than this window AND its
-// owner pid is dead. Default 10m (600_000ms) protects against long reasoning turns,
-// web fetches, or heavy compiler runs. Overridable via QWEN_ORPHAN_REAP_STALE_MS.
+/**
+ * Mid-session orphan-reaper heartbeat-staleness window (ms). The boot-only
+ * orphan sweep runs only at process start, so a task whose owner process dies
+ * mid-session (status "running", dead owner pid, no terminal event) would
+ * otherwise stay "running" forever and mislead later probes. The liveness
+ * reaper reaps a not-done task only when BOTH its heartbeat is older than this
+ * window AND its owner pid is dead. The default protects against long
+ * reasoning turns, web fetches, or heavy compiler runs.
+ *
+ * - Unit: milliseconds
+ * - Default: 600000 ms (10 minutes)
+ * - Override: QWEN_ORPHAN_REAP_STALE_MS
+ *
+ * @type {number}
+ */
 const DEFAULT_ORPHAN_REAP_STALE_MS = 600_000; // 10m
 export const ORPHAN_REAP_STALE_MS = (() => {
   const parsed = parseInt(process.env.QWEN_ORPHAN_REAP_STALE_MS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ORPHAN_REAP_STALE_MS;
 })();
 
-// 2026-09-12: default raised 1 -> 2. 2026-09-25: reverted to 1 (single-user pair programming;
-// eliminates multi-stream prefill queueing and reclaims ~800MB non-KV VRAM headroom). Keep 1:1 with
-// scripts/wsl/start_huge.sh. QWEN_MAX_CONCURRENT still overrides.
+/**
+ * Maximum number of concurrent tasks the runner will execute in parallel.
+ * Default is 1 (single-user pair programming); this eliminates multi-stream
+ * prefill queueing and reclaims non-KV VRAM headroom. Keep in sync with
+ * scripts/wsl/start_huge.sh.
+ *
+ * - Unit: count
+ * - Default: 1
+ * - Override: QWEN_MAX_CONCURRENT
+ *
+ * @type {number}
+ */
 export const MAX_CONCURRENT_TASKS = process.env.QWEN_MAX_CONCURRENT
   ? Math.max(1, parseInt(process.env.QWEN_MAX_CONCURRENT, 10))
   : 1;
 
+/**
+ * Heartbeat refresh interval for active task slot leases.
+ * - Unit: milliseconds
+ * - Default: 15000 (15 seconds)
+ * @type {number}
+ */
 export const SLOT_HEARTBEAT_MS = 15_000;
+
+/**
+ * Inactivity duration before an unrefreshed slot lease is declared wedged.
+ * - Unit: milliseconds
+ * - Default: 300000 (5 minutes)
+ * @type {number}
+ */
 export const SLOT_WEDGED_MS = 300_000;
+
+/**
+ * Polling cadence when waiting to acquire an exclusive slot lease.
+ * - Unit: milliseconds
+ * - Default: 1000 (1 second)
+ * @type {number}
+ */
 export const SLOT_POLL_MS = 1_000;
 
+/**
+ * Identifies whether execution is occurring within an automated test suite.
+ * @type {boolean}
+ */
 export const IS_TEST_ENV = Boolean(
   process.env.NODE_ENV === "test" ||
   process.env.TEST_OFFLINE === "1" ||
@@ -182,11 +342,14 @@ if (IS_TEST_ENV && process.env.NODE_ENV !== "test") {
   process.env.NODE_ENV = "test";
 }
 
+/**
+ * Root directory for task state, slot leases, and session ledgers.
+ * In test environments, allocates an isolated temporary scratchpad.
+ * In production environments, resolves to ~/.qwen or WSL host equivalent.
+ * - Override: QWEN_STATE_DIR
+ * @type {string}
+ */
 export const QWEN_STATE_DIR = process.env.QWEN_STATE_DIR || (() => {
-  // CRITICAL TEST ISOLATION INVARIANT:
-  // When running in ANY test environment, QWEN_STATE_DIR MUST NEVER default to production ~/.qwen!
-  // It automatically allocates an isolated temporary scratchpad so tests can NEVER touch,
-  // read, cancel, or reap real user tasks or processes.
   if (IS_TEST_ENV) {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen_test_state_"));
     process.env.QWEN_STATE_DIR = testDir;
@@ -298,139 +461,269 @@ const CONTEXT7_API_KEY = _initSearchConfig.context7_api_key;
 const SEARXNG_URL = _initSearchConfig.searxng_url;
 
 
-// Wedge detection & Auto-Heal (Preserves GPU headroom against core deadlocks)
+/**
+ * Inactivity threshold for engine telemetry before declaring an engine wedge.
+ * - Unit: seconds
+ * - Default: 120
+ * - Override: QWEN_WEDGE_SILENCE_S
+ * @type {number}
+ */
 export const WEDGE_STATS_SILENCE_S = process.env.QWEN_WEDGE_SILENCE_S
   ? parseInt(process.env.QWEN_WEDGE_SILENCE_S, 10)
   : 120;
-export const AUTO_HEAL = process.env.QWEN_AUTO_HEAL !== "0";
-export const HEAL_LOCK_FILE = path.join(TASK_DIR, ".engine_heal.lock");
-export const HEAL_LOCK_TTL_MS = 5 * 60_000;
-export const ENGINE_BOOT_LOCK_FILE = path.join(TASK_DIR, ".engine_boot.lock");
-export const ENGINE_BOOT_LOCK_TTL_MS = BOOT_TIMEOUT_MS;
-export const ENGINE_LOG_PATH = process.env.QWEN_LOG_PATH || "/tmp/mcp_launch_huge.log";
-export const WEDGE_COUNTER_FILE = path.join(TASK_DIR, ".wedge_counter.json");
-export const PROXY_MAX_BODY_BYTES = 50 * 1024 * 1024; // 50MB
 
-// DANGEROUS OVERRIDE FLAG: by default, any test execution, offline verification,
-// or non-production environment is STRICTLY FORBIDDEN from interrupting, probing,
-// killing, rebooting, or issuing completion requests to the live vLLM engine.
-// Live hardware operations are blocked by default unless ALLOW_ENGINE_INTERRUPT is
-// explicitly set to "1".
+/**
+ * Flag enabling automated restart and recovery of a wedged inference engine.
+ * - Default: true
+ * - Override: QWEN_AUTO_HEAL ("0" disables)
+ * @type {boolean}
+ */
+export const AUTO_HEAL = process.env.QWEN_AUTO_HEAL !== "0";
+
+/**
+ * Lockfile path for engine auto-heal serialization.
+ * @type {string}
+ */
+export const HEAL_LOCK_FILE = path.join(TASK_DIR, ".engine_heal.lock");
+
+/**
+ * Time-to-live for engine heal lock acquisition.
+ * - Unit: milliseconds
+ * - Default: 300000 (5 minutes)
+ * @type {number}
+ */
+export const HEAL_LOCK_TTL_MS = 5 * 60_000;
+
+/**
+ * Lockfile path for exclusive engine boot coordination across processes.
+ * @type {string}
+ */
+export const ENGINE_BOOT_LOCK_FILE = path.join(TASK_DIR, ".engine_boot.lock");
+
+/**
+ * Time-to-live for engine boot lock acquisition.
+ * - Unit: milliseconds
+ * - Default: 480000 (8 minutes)
+ * @type {number}
+ */
+export const ENGINE_BOOT_LOCK_TTL_MS = BOOT_TIMEOUT_MS;
+
+/**
+ * Destination path for background engine startup logs.
+ * - Default: "/tmp/mcp_launch_huge.log"
+ * - Override: QWEN_LOG_PATH
+ * @type {string}
+ */
+export const ENGINE_LOG_PATH = process.env.QWEN_LOG_PATH || "/tmp/mcp_launch_huge.log";
+
+/**
+ * Counter ledger tracking cumulative engine wedge and restart events.
+ * @type {string}
+ */
+export const WEDGE_COUNTER_FILE = path.join(TASK_DIR, ".wedge_counter.json");
+
+/**
+ * Maximum allowable payload size accepted by the stream proxy.
+ * - Unit: bytes
+ * - Value: 52428800 (50 MB)
+ * @type {number}
+ */
+export const PROXY_MAX_BODY_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Guard flag permitting tests or management commands to interrupt, probe, or reboot
+ * the live vLLM inference engine. Disabled by default to protect running workloads.
+ * - Default: false
+ * - Override: ALLOW_ENGINE_INTERRUPT ("1" enables)
+ * @type {boolean}
+ */
 export const ALLOW_ENGINE_INTERRUPT = process.env.ALLOW_ENGINE_INTERRUPT === "1";
 
-// Execution engine: the native Anser runner is hard-wired; there is no engine selection.
-
-// Execution & Turn limits:
-// Base turn budget defaults to 80 (where advisory review begins).
-// Elastic horizon allows extending up to MAX_ELASTIC_TURNS (default 200)
-// as long as physical telemetry (KV cache < 85%, spec acceptance >= 2.5)
-// and action hash entropy confirm forward non-stagnant progress.
+/**
+ * Base turn ceiling before requiring supervisor lease extension or cooperative landing.
+ * - Unit: count
+ * - Default: 80
+ * - Override: QWEN_BASE_TURN_BUDGET
+ * @type {number}
+ */
 const DEFAULT_BASE_TURN_BUDGET = 80;
 export const BASE_TURN_BUDGET = (() => {
   const parsed = parseInt(process.env.QWEN_BASE_TURN_BUDGET, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BASE_TURN_BUDGET;
 })();
 
+/**
+ * Maximum elastic turn ceiling reachable through supervisor lease extensions.
+ * - Unit: count
+ * - Default: 200
+ * - Override: QWEN_MAX_ELASTIC_TURNS
+ * @type {number}
+ */
 const DEFAULT_MAX_ELASTIC_TURNS = 200;
 export const MAX_ELASTIC_TURNS = (() => {
   const parsed = parseInt(process.env.QWEN_MAX_ELASTIC_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_ELASTIC_TURNS;
 })();
 
-// Physical telemetry gating thresholds
+/**
+ * Maximum allowable GPU KV cache utilization percentage before disallowing lease extension.
+ * - Unit: percentage (0-100)
+ * - Default: 85.0
+ * - Override: QWEN_KV_CACHE_HEADROOM_CEILING
+ * @type {number}
+ */
 const DEFAULT_KV_CACHE_HEADROOM_CEILING = 85.0;
 export const KV_CACHE_HEADROOM_CEILING = (() => {
   const parsed = parseFloat(process.env.QWEN_KV_CACHE_HEADROOM_CEILING);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_KV_CACHE_HEADROOM_CEILING;
 })();
 
+/**
+ * Minimum average speculative decoding acceptance length required for lease extension.
+ * - Unit: tokens per draft step
+ * - Default: 2.5
+ * - Override: QWEN_SPEC_ACCEPTANCE_FLOOR
+ * @type {number}
+ */
 const DEFAULT_SPEC_ACCEPTANCE_FLOOR = 2.5;
 export const SPEC_ACCEPTANCE_FLOOR = (() => {
   const parsed = parseFloat(process.env.QWEN_SPEC_ACCEPTANCE_FLOOR);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SPEC_ACCEPTANCE_FLOOR;
 })();
 
-// Action-hash loop detection thresholds
+/**
+ * Sliding window size for action-hash stagnation and loop detection.
+ * - Unit: count
+ * - Default: 6
+ * - Override: QWEN_LOOP_DETECTION_WINDOW
+ * @type {number}
+ */
 export const DEFAULT_LOOP_DETECTION_WINDOW = 6;
 export const LOOP_DETECTION_WINDOW = (() => {
   const parsed = parseInt(process.env.QWEN_LOOP_DETECTION_WINDOW, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_LOOP_DETECTION_WINDOW;
 })();
 
+/**
+ * Threshold of repeated identical non-mutating actions within the detection window
+ * required to trigger loop detection circuit-breaking.
+ * - Unit: count
+ * - Default: 3
+ * - Override: QWEN_LOOP_DETECTION_REPETITIONS
+ * @type {number}
+ */
 export const DEFAULT_LOOP_DETECTION_REPETITIONS = 3;
 export const LOOP_DETECTION_REPETITIONS = (() => {
   const parsed = parseInt(process.env.QWEN_LOOP_DETECTION_REPETITIONS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_LOOP_DETECTION_REPETITIONS;
 })();
 
-// Supervisor log preview length in status / wait telemetry (150-300 chars)
+/**
+ * Character length of recent activity summaries returned in status and wait telemetry endpoints.
+ * - Unit: characters
+ * - Default: 300
+ * - Override: QWEN_SUPERVISOR_PREVIEW_CHARS
+ * @type {number}
+ */
 const DEFAULT_SUPERVISOR_PREVIEW_CHARS = 300;
 export const SUPERVISOR_PREVIEW_CHARS = (() => {
   const parsed = parseInt(process.env.QWEN_SUPERVISOR_PREVIEW_CHARS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SUPERVISOR_PREVIEW_CHARS;
 })();
 
+/**
+ * Optional hard upper bound on session turn count; null allows unbounded orchestrator steering.
+ * - Unit: count
+ * - Default: null
+ * - Override: QWEN_MAX_TURNS
+ * @type {number|null}
+ */
 export const MAX_TURNS = process.env.QWEN_MAX_TURNS
   ? parseInt(process.env.QWEN_MAX_TURNS, 10)
-  : null; // null = unbounded, let orchestrator govern
+  : null;
 
-
-// Continuation budget: max times we re-prompt the model after a
-// finish_reason: "length" (token-ceiling) cutoff before giving up.
+/**
+ * Maximum re-prompt attempts following a token-ceiling (finish_reason: "length") cutoff.
+ * - Unit: count
+ * - Default: 8
+ * - Override: QWEN_MAX_CONTINUATION_TURNS
+ * @type {number}
+ */
 const DEFAULT_MAX_CONTINUATION_TURNS = 8;
 export const MAX_CONTINUATION_TURNS = (() => {
   const parsed = parseInt(process.env.QWEN_MAX_CONTINUATION_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CONTINUATION_TURNS;
 })();
 
-// Empty-stream retry budget: max times we re-issue a turn when the engine
-// returns an EMPTY generation (no content, no tool calls, and no real
-// finish_reason — the signature of an aborted/zero-byte stream that the
-// provider default-fills as "stop"). After this many empty turns we report
-// the honest status "engine_empty_response" instead of a false "completed".
+/**
+ * Maximum retry attempts when the inference engine returns an empty generation stream.
+ * - Unit: count
+ * - Default: 2
+ * - Override: QWEN_EMPTY_STREAM_RETRIES
+ * @type {number}
+ */
 const DEFAULT_EMPTY_STREAM_RETRIES = 2;
 export const EMPTY_STREAM_RETRIES = (() => {
   const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRIES, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRIES;
 })();
 
-// M6b (P1, completes M6): depth-aware empty-stream retry budget. The flat
-// EMPTY_STREAM_RETRIES above (default 2) is correct for normal turns, but a
-// DEEP-context prompt (estimated prompt chars >= EMPTY_STREAM_RETRY_DEPTH_CHARS)
-// has a much longer recovery latency on retry: re-prefilling 100k+ tokens takes
-// minutes, so a transient empty-stream cluster (the audit §5.2 signature: 36
-// empty streams, 3 unrecovered, ALL during extended deliberation at high
-// context) exhausts the flat budget of 2 before it clears. When the prompt is
-// deep, the runner arms this longer DEEP budget instead so a transient cluster
-// has room to clear; the base budget still bounds normal (shallow) turns. Both
-// are overridable via env for tests / operators.
+/**
+ * Depth-aware empty-stream retry budget. The flat {@link EMPTY_STREAM_RETRIES}
+ * (default 2) is correct for normal turns, but a deep-context prompt
+ * (estimated prompt chars >= {@link EMPTY_STREAM_RETRY_DEPTH_CHARS}) has a much
+ * longer recovery latency on retry: re-prefilling 100k+ tokens takes minutes,
+ * so a transient empty-stream cluster can exhaust the flat budget before it
+ * clears. When the prompt is deep, the runner arms this longer DEEP budget
+ * instead so a transient cluster has room to clear; the base budget still
+ * bounds normal (shallow) turns.
+ *
+ * - Unit: count
+ * - Default: 4
+ * - Override: QWEN_EMPTY_STREAM_RETRIES_DEEP
+ *
+ * @type {number}
+ */
 const DEFAULT_EMPTY_STREAM_RETRIES_DEEP = 4;
 export const EMPTY_STREAM_RETRIES_DEEP = (() => {
   const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRIES_DEEP, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRIES_DEEP;
 })();
 
-// M6b: prompt-CHARS depth threshold for the empty-stream retry budget. A turn
-// whose re-prefill size (JSON.stringify(messages).length, the same measure the
-// runner already records as deathContext.promptChars) reaches this value is
-// treated as "deep" and gets the DEEP retry budget. Default 525000 chars
-// (~150k tokens at ~3.5 chars/token) matches the observed death signature
-// (all three unrecovered empty streams were >100k ctx). Overridable via
-// QWEN_EMPTY_STREAM_RETRY_DEPTH_CHARS.
+/**
+ * Prompt-character depth threshold for the empty-stream retry budget. A turn
+ * whose re-prefill size (JSON.stringify(messages).length, the same measure the
+ * runner already records as deathContext.promptChars) reaches this value is
+ * treated as "deep" and receives the DEEP retry budget
+ * ({@link EMPTY_STREAM_RETRIES_DEEP}).
+ *
+ * - Unit: characters
+ * - Default: 525000 (~150k tokens at ~3.5 chars/token)
+ * - Override: QWEN_EMPTY_STREAM_RETRY_DEPTH_CHARS
+ *
+ * @type {number}
+ */
 const DEFAULT_EMPTY_STREAM_RETRY_DEPTH_CHARS = 525_000;
 export const EMPTY_STREAM_RETRY_DEPTH_CHARS = (() => {
   const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRY_DEPTH_CHARS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRY_DEPTH_CHARS;
 })();
 
-// M6b: exponential backoff between empty-stream retries. Before each retry the
-// runner sleeps base * 2^(retryNumber-1) ms, capped at capMs. With the defaults
-// (base 2000ms, cap 30000ms) this is exactly "2^retryNumber seconds capped at
-// 30s": retry 1 waits 2s, retry 2 waits 4s, retry 3 waits 8s, retry 4 waits
-// 16s, retry 5+ waits 30s (capped). The backoff gives a transient empty-stream
-// cluster time to clear before the next (expensive, deep) re-prefill. Both are
-// overridable via env so tests can shrink the sleep to milliseconds (the
-// recorded backoffMs still reflects the configured value).
+/**
+ * Base delay (ms) for exponential backoff between empty-stream retries. Before
+ * each retry the runner sleeps base * 2^(retryNumber-1) ms, capped at
+ * {@link EMPTY_STREAM_RETRY_BACKOFF_CAP_MS}. With the defaults (base 2000ms,
+ * cap 30000ms) this is "2^retryNumber seconds capped at 30s": retry 1 waits
+ * 2s, retry 2 waits 4s, retry 3 waits 8s, retry 4 waits 16s, retry 5+ waits
+ * 30s (capped). The backoff gives a transient empty-stream cluster time to
+ * clear before the next (expensive, deep) re-prefill.
+ *
+ * - Unit: milliseconds
+ * - Default: 2000
+ * - Override: QWEN_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS
+ *
+ * @type {number}
+ */
 const DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS = 2000;
 export const EMPTY_STREAM_RETRY_BACKOFF_BASE_MS = (() => {
   const parsed = parseInt(process.env.QWEN_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS, 10);
@@ -443,167 +736,242 @@ export const EMPTY_STREAM_RETRY_BACKOFF_CAP_MS = (() => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_CAP_MS;
 })();
 
-// M7 (P2, F1/F2): dispatch prompt-budget telemetry. The audit's failure
-// cluster (27/45 dispatches over budget; monolithic mega-prompt failures)
-// correlates with dispatch prompts over ~1,500 chars. The runner is the only
-// component with the session event sink (anser_runner has none — established
-// M5b), so it is the right place to surface this. When the finalTaskPrompt
-// (the `prompt` that arrives as run({prompt})) exceeds this budget the runner
-// emits ONE advisory `prompt_over_budget` event (fields: promptChars, budget)
-// at the start of run(). This is ADVISORY TELEMETRY ONLY — it never alters
-// flow, never cancels or errors the session, and never truncates the prompt.
-// It exists so the over-budget failure cluster is observable in the session
-// event ledger (the same sink that carries session_warning /
-// context_depth_warning / probe_budget_warning). Default 1500 chars matches
-// the audit's observed over-budget threshold. Overridable via
-// QWEN_PROMPT_BUDGET_CHARS for tests / operators.
+/**
+ * Dispatch prompt-budget telemetry threshold (chars). When the final task
+ * prompt (the `prompt` that arrives as run({prompt})) exceeds this budget, the
+ * runner emits one advisory `prompt_over_budget` event (fields: promptChars,
+ * budget) at the start of run(). This is advisory telemetry only — it never
+ * alters flow, never cancels or errors the session, and never truncates the
+ * prompt. It exists so the over-budget failure cluster is observable in the
+ * session event ledger (the same sink that carries session_warning /
+ * context_depth_warning / probe_budget_warning).
+ *
+ * - Unit: characters
+ * - Default: 1500
+ * - Override: QWEN_PROMPT_BUDGET_CHARS
+ *
+ * @type {number}
+ */
 export const DEFAULT_PROMPT_BUDGET_CHARS = 1500;
 export const PROMPT_BUDGET_CHARS = (() => {
   const parsed = parseInt(process.env.QWEN_PROMPT_BUDGET_CHARS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROMPT_BUDGET_CHARS;
 })();
 
-// M3b: degenerate-final guard. When the stream proxy circuit-breaks a runaway
-// repetition loop it appends a GUARD_MARKER sentinel and ends the stream with
-// finish_reason "stop". The provider accumulates that marker into the turn's
-// content, so a turn whose ENTIRE message is just the marker (or a tiny
-// sliver of text plus the marker) lands in the runner as a "stop" turn with
-// content — and the old code reported a false "completed" (the M3a defect:
-// 7 false-success sessions, e.g. task_mitig-m3a-s3 with 0 tool calls and a
-// marker-only result).
-//
-// The runner now strips the marker and measures the substantive remainder:
-//   - remainder < DEGENERATE_FINAL_SUBSTANTIVE_CHARS AND no tool calls this
-//     turn AND the session is still short (turnsTaken <=
-//     DEGENERATE_FINAL_MAX_TURNS)  -> DEGENERATE: retry via the empty-stream
-//     path (reason "degenerate_final"); on budget exhaustion report the honest
-//     status "degenerate_response_truncated" (isError) with the original
-//     partial+marker preserved for honesty.
-//   - remainder >= DEGENERATE_FINAL_SUBSTANTIVE_CHARS -> keep "completed"
-//     (the marker stays visible in the result; the deliverable is real).
-//
-// 200 chars is well below any legitimate final answer but far above the
-// marker's own length (~110 chars), so a marker-only or near-marker final is
-// always caught while a real (even short) answer is never misclassified.
+/**
+ * Degenerate-final guard threshold (chars). When the stream proxy
+ * circuit-breaks a runaway repetition loop it appends a GUARD_MARKER sentinel
+ * and ends the stream with finish_reason "stop". The provider accumulates that
+ * marker into the turn's content, so a turn whose entire message is just the
+ * marker (or a tiny sliver of text plus the marker) lands in the runner as a
+ * "stop" turn with content.
+ *
+ * The runner strips the marker and measures the substantive remainder:
+ *   - remainder < this threshold AND no tool calls this turn AND the session
+ *     is still short (turnsTaken <= DEGENERATE_FINAL_MAX_TURNS)
+ *       -> DEGENERATE: retry via the empty-stream path (reason
+ *          "degenerate_final"); on budget exhaustion report the honest status
+ *          "degenerate_response_truncated" (isError) with the original
+ *          partial+marker preserved for honesty.
+ *   - remainder >= this threshold -> keep "completed" (the marker stays
+ *     visible in the result; the deliverable is real).
+ *
+ * The default (200) is well below any legitimate final answer but far above
+ * the marker's own length (~110 chars), so a marker-only or near-marker final
+ * is always caught while a real (even short) answer is never misclassified.
+ *
+ * - Unit: characters
+ * - Default: 200
+ * - Override: QWEN_DEGENERATE_FINAL_SUBSTANTIVE_CHARS
+ *
+ * @type {number}
+ */
 const DEFAULT_DEGENERATE_FINAL_SUBSTANTIVE_CHARS = 200;
 export const DEGENERATE_FINAL_SUBSTANTIVE_CHARS = (() => {
   const parsed = parseInt(process.env.QWEN_DEGENERATE_FINAL_SUBSTANTIVE_CHARS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DEGENERATE_FINAL_SUBSTANTIVE_CHARS;
 })();
 
-// A degenerate final is only "short" if the session has not already run many
-// turns. A long session that ends with a marker-truncated final has clearly
-// done real work (many tool calls / turns) and is NOT degenerate — it is a
-// normal (if truncated) completion. Default 3 keeps the guard scoped to the
-// early-dead-session signature (the M3a repro died on turn 1).
+/**
+ * Maximum turn count for a session to be considered "short" by the
+ * degenerate-final guard. A degenerate final is only classified as such if
+ * the session has not already run many turns. A long session that ends with a
+ * marker-truncated final has clearly done real work (many tool calls / turns)
+ * and is NOT degenerate — it is a normal (if truncated) completion. The
+ * default (3) keeps the guard scoped to the early-dead-session signature.
+ *
+ * - Unit: count
+ * - Default: 3
+ * - Override: QWEN_DEGENERATE_FINAL_MAX_TURNS
+ *
+ * @type {number}
+ */
 const DEFAULT_DEGENERATE_FINAL_MAX_TURNS = 3;
 export const DEGENERATE_FINAL_MAX_TURNS = (() => {
   const parsed = parseInt(process.env.QWEN_DEGENERATE_FINAL_MAX_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DEGENERATE_FINAL_MAX_TURNS;
 })();
 
-// M4: probe-budget watchdog (issue #11 recs 1+2; F4/F12/F14). On open-ended
-// layout targets the model ran 30+ consecutive inline-python measurement bash
-// calls (~90 min) instead of making the edit. The runner now counts
-// CONSECUTIVE non-mutating bash calls (bash/exec_command with no file-mutating
-// tool call in between); when the count exceeds this budget it injects an
-// ADVISORY (not an error, not a cancellation) reminding the model that
-// mutation dispatches are single-pass, and re-arms the counter for the next
-// run of N. Default 4 (the warning fires on the 5th consecutive non-mutating
-// bash call). Overridable via QWEN_PROBE_BUDGET.
+/**
+ * Probe-budget watchdog threshold (count). The runner counts consecutive
+ * non-mutating bash calls (bash/exec_command with no file-mutating tool call
+ * in between); when the count exceeds this budget it injects an advisory (not
+ * an error, not a cancellation) reminding the model that mutation dispatches
+ * are single-pass, and re-arms the counter for the next run of N. The default
+ * (4) means the warning fires on the 5th consecutive non-mutating bash call.
+ *
+ * - Unit: count
+ * - Default: 4
+ * - Override: QWEN_PROBE_BUDGET
+ *
+ * @type {number}
+ */
 const DEFAULT_PROBE_BUDGET = 4;
 export const PROBE_BUDGET = (() => {
   const parsed = parseInt(process.env.QWEN_PROBE_BUDGET, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_BUDGET;
 })();
 
-// M5a: session-cumulative turn thresholds (issue #11 rec 3). The session's
-// total turn count spans tasks: the prior assistant_message events (from
-// logger.readAll(), the same source getConversationHistory() reads) plus this
-// run's turnsTaken. The runner's run loop checks the cumulative count each
-// turn. At SESSION_TURNS_WARN it emits a one-shot `session_warning` event; at
-// SESSION_TURNS_RECOMMEND it emits a one-shot `session_turn_limit_recommended`
-// event AND pushes a single in-band user-role advisory telling the model to
-// complete the task and roll to a fresh session next dispatch. These are
-// ADVISORY ONLY — they never cancel or error the session, and the hard
-// MAX_TURNS cap (anser_runner) is untouched. Overridable via
-// QWEN_SESSION_WARN_TURNS / QWEN_SESSION_RECOMMEND_TURNS.
+/**
+ * Session-cumulative turn warning threshold (count). The session's total turn
+ * count spans tasks: the prior assistant_message events (from
+ * logger.readAll(), the same source getConversationHistory() reads) plus this
+ * run's turnsTaken. The runner's run loop checks the cumulative count each
+ * turn. At this threshold it emits a one-shot `session_warning` event.
+ *
+ * - Unit: count
+ * - Default: 60
+ * - Override: QWEN_SESSION_WARN_TURNS
+ *
+ * @type {number}
+ */
 const DEFAULT_SESSION_TURNS_WARN = 60;
 export const SESSION_TURNS_WARN = (() => {
   const parsed = parseInt(process.env.QWEN_SESSION_WARN_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SESSION_TURNS_WARN;
 })();
 
+/**
+ * Session-cumulative turn recommendation threshold (count). At this threshold
+ * the runner emits a one-shot `session_turn_limit_recommended` event AND pushes
+ * a single in-band user-role advisory telling the model to complete the task
+ * and roll to a fresh session next dispatch. Advisory only — never cancels or
+ * errors the session; the hard MAX_TURNS cap (anser_runner) is untouched.
+ *
+ * - Unit: count
+ * - Default: 80
+ * - Override: QWEN_SESSION_RECOMMEND_TURNS
+ *
+ * @type {number}
+ */
 const DEFAULT_SESSION_TURNS_RECOMMEND = 80;
 export const SESSION_TURNS_RECOMMEND = (() => {
   const parsed = parseInt(process.env.QWEN_SESSION_RECOMMEND_TURNS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SESSION_TURNS_RECOMMEND;
 })();
 
-// M5a: context-depth warning threshold (issue #11 rec 3). When a turn's
-// promptTokens (the re-prefill size) reaches this value the runner emits a
-// one-shot `context_depth_warning` event. If the M4 probeStreak counter is
-// active at that moment the event gains `probeStreakActive: true` — a signal
-// sum for the anti-rabbit-hole system (a deep context AND a live probe streak
-// means the model is stuck in a long, deep, non-mutating loop). Overridable
-// via QWEN_CONTEXT_WARN_TOKENS.
+/**
+ * Context-depth warning threshold (tokens). When a turn's promptTokens (the
+ * re-prefill size) reaches this value the runner emits a one-shot
+ * `context_depth_warning` event. If the probe-streak counter is active at that
+ * moment the event gains `probeStreakActive: true` — a signal for the
+ * anti-rabbit-hole system (a deep context AND a live probe streak means the
+ * model is stuck in a long, deep, non-mutating loop).
+ *
+ * - Unit: tokens
+ * - Default: 65536
+ * - Override: QWEN_CONTEXT_WARN_TOKENS
+ *
+ * @type {number}
+ */
 const DEFAULT_CONTEXT_WARN_TOKENS = 65536;
 export const CONTEXT_WARN_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_CONTEXT_WARN_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_WARN_TOKENS;
 })();
 
-// Context high-watermark threshold (default 180,000 tokens out of 245,760 nominal context ceiling).
-// When promptTokens reaches this watermark, the runner emits a one-shot advisory recommending
-// session rollover on the next turn, preventing unhandled context exhaustion crashes.
-const DEFAULT_CONTEXT_HIGH_WATERMARK_TOKENS = 180000;
+/**
+ * High-watermark context threshold for proactive session rollover recommendations.
+ * Emits an advisory recommendation when prompt tokens exceed this threshold.
+ * - Unit: tokens
+ * - Default: 180000
+ * - Override: QWEN_CONTEXT_HIGH_WATERMARK_TOKENS
+ * @type {number}
+ */
+const DEFAULT_CONTEXT_HIGH_WATERMARK_TOKENS = 180_000;
 export const CONTEXT_HIGH_WATERMARK_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_CONTEXT_HIGH_WATERMARK_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_HIGH_WATERMARK_TOKENS;
 })();
 
-const DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS = 215000;
+/**
+ * Hard emergency ceiling for context tokens before halting further accumulation.
+ * - Unit: tokens
+ * - Default: 215000
+ * - Override: QWEN_CONTEXT_EMERGENCY_CEILING_TOKENS
+ * @type {number}
+ */
+const DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS = 215_000;
 export const CONTEXT_EMERGENCY_CEILING_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_CONTEXT_EMERGENCY_CEILING_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS;
 })();
 
-// E4: adaptive read-size governor. When the context high-watermark (180k
-// tokens) fires, the runner arms this governor on the session's sandboxed FS
-// service. Subsequent read_file calls are then capped at this size (16KB,
-// down from the 64KB default) instead of pulling a whole file into an
-// already-pressured context (the F6.1 runaway whole-file read). The governor
-// only LOWERS the cap — it never raises it above the caller's max_bytes. A
-// read that exceeds the governed cap is truncated to the cap and a
-// suffix-scoped notice is appended (KV-prefix-stable: the notice is part of
-// the tool *result*, never the prompt prefix). Overridable via
-// QWEN_READ_GOVERNOR_MAX_BYTES for tests / operators.
+/**
+ * Adaptive read-size governor cap (bytes). When the context high-watermark
+ * fires, the runner arms this governor on the session's sandboxed FS service.
+ * Subsequent read_file calls are then capped at this size (16KB, down from the
+ * 64KB default) instead of pulling a whole file into an already-pressured
+ * context. The governor only LOWERS the cap — it never raises it above the
+ * caller's max_bytes. A read that exceeds the governed cap is truncated to the
+ * cap and a suffix-scoped notice is appended (KV-prefix-stable: the notice is
+ * part of the tool *result*, never the prompt prefix).
+ *
+ * - Unit: bytes
+ * - Default: 16384 (16 KB)
+ * - Override: QWEN_READ_GOVERNOR_MAX_BYTES
+ *
+ * @type {number}
+ */
 const DEFAULT_READ_GOVERNOR_MAX_BYTES = 16 * 1024;
 export const READ_GOVERNOR_MAX_BYTES = (() => {
   const parsed = parseInt(process.env.QWEN_READ_GOVERNOR_MAX_BYTES, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_READ_GOVERNOR_MAX_BYTES;
 })();
 
-// E1: FS-as-context tool-output spillover threshold (bytes). When a tool
-// result exceeds this size, the FULL payload is written to
-// <workspace>/.scratch/tool_out_<id>.txt and the in-band observation is
-// replaced with a pointer block (head + tail preview + re-read hint) instead
-// of being hard-truncated. This fixes the F6.1 context-ceiling blowout: a
-// single large read/bash result no longer either blows the 245K context or
-// amputates the payload past a 32KB cut. Overridable via QWEN_TOOL_SPILL_BYTES
-// for unit-testability (the canary sets it small to trigger the spill).
+/**
+ * Tool-output spillover threshold (bytes). When a tool result exceeds this
+ * size, the full payload is written to <workspace>/.scratch/tool_out_<id>.txt
+ * and the in-band observation is replaced with a pointer block (head + tail
+ * preview + re-read hint) instead of being hard-truncated. This prevents a
+ * single large read/bash result from either blowing the context ceiling or
+ * amputating the payload past a hard cut.
+ *
+ * - Unit: bytes
+ * - Default: 8192
+ * - Override: QWEN_TOOL_SPILL_BYTES
+ *
+ * @type {number}
+ */
 const DEFAULT_TOOL_SPILL_BYTES = 8192;
 export const TOOL_SPILL_BYTES = (() => {
   const parsed = parseInt(process.env.QWEN_TOOL_SPILL_BYTES, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TOOL_SPILL_BYTES;
 })();
 
-// E2: bounded salvage extraction pass on deliberation-budget exhaustion.
-// When the reasoning budget is exhausted, the runner fires ONE bounded
-// extraction turn (tools disabled, low reasoning effort) to salvage the
-// model's accumulated partial findings. This short max_tokens (4096) bounds
-// the extraction so it cannot re-trigger the deliberation loop. Overridable
-// via QWEN_SALVAGE_MAX_TOKENS for tests / operators.
+/**
+ * Bounded salvage extraction max_tokens (tokens). When the reasoning budget is
+ * exhausted, the runner fires one bounded extraction turn (tools disabled, low
+ * reasoning effort) to salvage the model's accumulated partial findings. This
+ * short max_tokens bounds the extraction so it cannot re-trigger the
+ * deliberation loop.
+ *
+ * - Unit: tokens
+ * - Default: 4096
+ * - Override: QWEN_SALVAGE_MAX_TOKENS
+ *
+ * @type {number}
+ */
 const DEFAULT_SALVAGE_MAX_TOKENS = 4096;
 export const SALVAGE_MAX_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_SALVAGE_MAX_TOKENS, 10);
