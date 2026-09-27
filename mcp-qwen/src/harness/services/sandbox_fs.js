@@ -862,20 +862,15 @@ export class SandboxFsService {
   }
 
   /**
-   * Determines whether `dirPath` is inside a git repository, so that a fatal
-   * `git grep` error can be distinguished from a legitimate "not a git
-   * repository" situation.
+   * Determines whether dirPath is inside a git repository, distinguishing a
+   * non-git directory from a corrupted git repository.
    *
-   * `git rev-parse --is-inside-work-tree` exits 0 for a valid repository but
-   * exits 128 for both a non-git directory and a corrupted repository (e.g. a
-   * bad `.git/HEAD`). The two cases must be told apart because a corrupted
-   * repository must fail fast (its `.git` is present) while a non-git
-   * directory is a legitimate fallback scenario. The reliable discriminator
-   * is the presence of a `.git` entry at the directory or any ancestor: a
-   * real or corrupted repository has one, a non-git directory does not.
+   * Verifies the presence of a .git entry in dirPath or ancestor directories
+   * to ensure corrupted repositories fail fast while non-git directories fall
+   * back to filesystem search.
    *
-   * @param {string} dirPath
-   * @returns {Promise<boolean>}
+   * @param {string} dirPath - Directory path to inspect.
+   * @returns {Promise<boolean>} True if inside a git repository.
    */
   async _isInsideGitRepo(dirPath) {
     try {

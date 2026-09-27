@@ -371,8 +371,7 @@ export class WebService {
 
     if (lastError && chain.length === 1) throw lastError;
 
-    // C1: all providers in the auto chain failed — surface the error,
-    // never mask it as a legitimate empty result.
+    // Surface error if all providers in the auto chain failed.
     if (!anySucceeded && lastError) {
       return {
         isError: true,

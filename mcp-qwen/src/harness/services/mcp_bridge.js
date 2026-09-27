@@ -178,11 +178,8 @@ export function disposeAllBridges() {
 }
 
 /**
- * P10 test seam (read-only): pids of every live bridge child across all
- * currently-registered bridges. Lets the cancel-path test observe the
- * runner's internal bridge child (which it cannot reach directly) to prove
- * that an abort lands in the runner's finally block and disposes the bridge.
- * @returns {number[]}
+ * Retrieves the process IDs of all live bridge child processes across registered bridges.
+ * @returns {number[]} Array of child process IDs.
  */
 export function getLiveBridgePids() {
   const pids = [];

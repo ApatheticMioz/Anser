@@ -22,7 +22,7 @@ import { skillsDir, splitFrontmatter, parseFrontmatter } from "../../skills.js";
 
 export class EvoOperator {
   constructor(options = {}) {
-    // P4i: canonicalize the Evo workspace root through the OS symlink/junction
+    // Canonicalize the Evo workspace root through the OS symlink/junction
     // resolution layer so a junction/symlink cwd is stored as its real path.
     // assertWithinWorkspace then compares realpath against a real root,
     // eliminating false containment errors while still catching real escapes.
@@ -30,8 +30,8 @@ export class EvoOperator {
     this.shell = options.shell;
     this.snapshotsDir = path.join(this.workspaceRoot, ".evo", "snapshots");
 
-    // FX4 (D4): share the per-workspace singleton DAG with EvoLineageEngine so
-    // both writers merge into one graph instead of clobbering each other.
+    // Share the per-workspace singleton DAG with EvoLineageEngine so both
+    // writers merge into one graph.
     this.dag = LineageDag.forWorkspace(this.workspaceRoot);
     this.evaluator = new ClosedLoopEvaluator({ shell: this.shell });
     this.watchdog = new EvoWatchdog(options.watchdogOptions || {});
@@ -56,11 +56,11 @@ export class EvoOperator {
     const normTarget = path.normalize(p);
     const normRoot = path.normalize(this.workspaceRoot);
 
-    // P4i: canonicalize BOTH sides of the containment comparison through the
-    // OS symlink/junction resolution layer so a junction-form target is
-    // compared against the real root in the same "real" path space. Real
-    // escapes (../outside, symlink-to-outside) still resolve outside the
-    // real root and are caught.
+    // Canonicalize both sides of the containment comparison through the OS
+    // symlink/junction resolution layer so a junction-form target is compared
+    // against the real root in the same "real" path space. Real escapes
+    // (../outside, symlink-to-outside) still resolve outside the real root
+    // and are caught.
     const realTarget = canonicalizePath(normTarget);
     const realRoot = canonicalizePath(normRoot);
     const rel = path.relative(realRoot, realTarget);
@@ -369,7 +369,7 @@ export class EvoOperator {
       throw new Error("No candidate specified to revert");
     }
 
-    // A3 Fix: Validate candidate in DAG before touching any files!
+    // Validate the candidate in the DAG before touching any files.
     const node = this.dag.nodes.get(id);
     if (!node) {
       throw new Error(`Candidate '${id}' does not exist in lineage DAG`);
@@ -387,7 +387,7 @@ export class EvoOperator {
         const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
         for (const item of manifest) {
           if (!item.existed) {
-            // A1 Fix: Newly created file that did not exist before mutation -> delete it cleanly!
+            // Newly created file that did not exist before mutation: delete it.
             if (fs.existsSync(item.fullPath)) {
               try {
                 if (item.isSkill) {

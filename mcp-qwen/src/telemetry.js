@@ -25,7 +25,7 @@ export function calculateCostSaved(promptTokens, completionTokens, promptRate = 
   return Number((promptCost + compCost).toFixed(2));
 }
 
-// Authoritative historical baseline aggregated across all 453 lifetime sessions since 2026-09-05
+/** Baseline aggregated statistics across historical sessions. */
 export const DEFAULT_STATS = {
   total_completion_tokens: 10_372_422,
   total_reasoning_tokens: 14_916_578,

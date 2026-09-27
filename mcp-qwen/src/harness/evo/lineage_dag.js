@@ -1,35 +1,29 @@
 /**
- * Lineage DAG Service (Evo Candidate Graph)
+ * Lineage DAG Service (Evo Candidate Graph).
  *
- * Tracks the tree of evolutionary variations, mutation hypotheses,
- * test outcomes, and fitness scores in `.evo/lineage.json`.
+ * Tracks the tree of evolutionary variations, mutation hypotheses, test
+ * outcomes, and fitness scores in `.evo/lineage.json`.
  *
- * FX4 (D4): LineageDag is a per-workspace SINGLETON. Two subsystems
- * (EvoLineageEngine and EvoOperator) previously each constructed their own
- * instance against the same `.evo/lineage.json`, each holding a private
- * in-memory copy; the second writer's blind persist() clobbered the first
- * writer's nodes (last-writer-wins data loss). `forWorkspace(root)` now
- * returns one shared instance per canonical workspace root, and persist()
- * is a read-modify-write merge (re-read on-disk, union by node id, atomic
- * tmp+rename) so concurrent writers' nodes all survive.
- *
- * FX4 (D15): the file's `version` field is now GATED on load. A file carrying
- * an unknown or future version throws LineageVersionError (naming both
- * versions) instead of being silently parsed.
- *
- * FX4 (D1): the legacy `candidates` migration maps statuses honestly —
- * neutral/unknown map to "neutral", never a fabricated "rejected".
+ * - `LineageDag` is a per-workspace singleton: `forWorkspace(root)` returns one
+ *   shared instance per canonical workspace root, and `persist()` is a
+ *   read-modify-write merge (re-read on-disk, union by node id, atomic
+ *   tmp+rename) so concurrent writers' nodes all survive.
+ * - The file's `version` field is gated on load: a file carrying an unknown or
+ *   future version throws `LineageVersionError` (naming both versions) instead
+ *   of being parsed.
+ * - The legacy `candidates` array is migrated to nodes; unknown/missing
+ *   statuses map to "neutral".
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import { canonicalizePath } from "../../wsl_bridge.js";
 
-// D15: the lineage file format version this build writes and understands.
+// The lineage file format version this build writes and understands.
 export const LINEAGE_VERSION = "2026.1";
-// Every version this build can safely parse. A file carrying any OTHER
-// version (unknown or future) is refused on load — we never attempt to parse
-// a format we do not understand (fail-fast, no silent migration).
+// Every version this build can safely parse. A file carrying any other
+// version (unknown or future) is refused on load (fail-fast, no silent
+// migration).
 export const KNOWN_LINEAGE_VERSIONS = new Set([LINEAGE_VERSION]);
 
 /**
@@ -51,9 +45,8 @@ export class LineageVersionError extends Error {
 }
 
 /**
- * D1: honest mapping of a (possibly legacy) status string to the canonical
- * lowercase status. Never fabricates a failure: neutral/unknown map to
- * "neutral", not "rejected".
+ * Maps a (possibly legacy) status string to the canonical lowercase status.
+ * Unknown/missing statuses map to "neutral".
  */
 function mapLegacyStatus(status) {
   const s = typeof status === "string" ? status.trim().toLowerCase() : "";
@@ -61,20 +54,20 @@ function mapLegacyStatus(status) {
   if (s === "rejected") return "rejected";
   if (s === "pending") return "pending";
   if (s === "neutral") return "neutral";
-  // Unknown / missing / legacy "NEUTRAL" / anything else: honest neutral.
+  // Unknown / missing / legacy "NEUTRAL" / anything else: neutral.
   return "neutral";
 }
 
 /**
- * The "last-modified" time of a node, used for per-node last-writer-wins in
- * the read-modify-write merge. ISO-8601 timestamps sort lexicographically, so
- * a plain string comparison is a correct recency comparison.
+ * The "last-modified" time of a node, used for per-node recency in the
+ * read-modify-write merge. ISO-8601 timestamps sort lexicographically, so a
+ * plain string comparison is a correct recency comparison.
  */
 function nodeTime(n) {
   return (n && (n.updatedAt || n.timestamp)) || "";
 }
 
-// FX4 (D4): one LineageDag instance per canonical workspace root, per process.
+// One LineageDag instance per canonical workspace root, per process.
 const _instances = new Map();
 
 export class LineageDag {
@@ -97,9 +90,9 @@ export class LineageDag {
   }
 
   constructor(options = {}) {
-    // P4i: canonicalize the workspace root through the OS symlink/junction
-    // layer so the .evo/ directory (lineage.json, snapshots) is anchored to
-    // the real path even when the process was launched through a junction.
+    // Canonicalize the workspace root through the OS symlink/junction layer
+    // so the .evo/ directory (lineage.json, snapshots) is anchored to the real
+    // path even when the process was launched through a junction.
     this.workspaceRoot = canonicalizePath(options.workspaceRoot || process.cwd());
     this.evoDir = path.join(this.workspaceRoot, ".evo");
     this.dagFile = path.join(this.evoDir, "lineage.json");
@@ -117,7 +110,7 @@ export class LineageDag {
   }
 
   /**
-   * Reads and parses the on-disk lineage file, applying the D15 version gate.
+   * Reads and parses the on-disk lineage file, applying the version gate.
    *
    * @returns {object|null} parsed data, or null when the file is absent or a
    *   transient lock (EBUSY/EPERM) makes it unreadable this tick.
@@ -138,7 +131,7 @@ export class LineageDag {
       throw err;
     }
     const data = JSON.parse(raw); // throws on corrupt JSON (caller quarantines)
-    // D15: version gate — refuse unknown/future formats before parsing nodes.
+    // Version gate — refuse unknown/future formats before parsing nodes.
     // A file with no version field is treated as the oldest known version.
     const fileVersion = data && typeof data.version === "string" ? data.version : null;
     if (fileVersion !== null && !KNOWN_LINEAGE_VERSIONS.has(fileVersion)) {
@@ -153,7 +146,7 @@ export class LineageDag {
     try {
       data = this._readDisk();
     } catch (err) {
-      if (err instanceof LineageVersionError) throw err; // D15: fail-fast, never quarantine a version mismatch
+      if (err instanceof LineageVersionError) throw err; // fail-fast, never quarantine a version mismatch
       // Corrupt file: quarantine rather than silently overwriting it.
       const corruptBackup = path.join(this.evoDir, `lineage.json.corrupt-${Date.now()}`);
       console.error(`[LineageDag] Corrupt lineage.json detected. Quarantining to ${corruptBackup}:`, err.message);
@@ -184,7 +177,7 @@ export class LineageDag {
 
   /**
    * Merges on-disk state into the in-memory graph (union by node id,
-   * per-node last-writer-wins by updatedAt/timestamp). Shared by _load()
+   * per-node recency by updatedAt/timestamp). Shared by _load()
    * (initial/reload) and persist() (read-modify-write) so a reload or a
    * concurrent writer's nodes are never lost.
    */
@@ -198,7 +191,7 @@ export class LineageDag {
       }
     } else if (Array.isArray(data.candidates)) {
       // Backward compatibility migration: import legacy flat candidates.
-      // D1: map legacy statuses honestly — never fabricate a failure.
+      // Unknown/missing statuses map to "neutral".
       for (const c of data.candidates) {
         const id = c.candidateId;
         const mapped = {
@@ -218,9 +211,8 @@ export class LineageDag {
         if (!existing || nodeTime(mapped) > nodeTime(existing)) {
           this.nodes.set(id, mapped);
         }
-        // Legacy files carry no currentHeadId field; preserve the historical
-        // migration semantics — the accepted candidate becomes head. Gated on
-        // the honest mapped status, never on a fabricated one.
+        // Legacy files carry no currentHeadId field; the accepted candidate
+        // becomes head.
         if (mapped.metrics.status === "accepted") {
           this.currentHeadId = id;
         }
@@ -241,11 +233,10 @@ export class LineageDag {
   }
 
   /**
-   * FX4 (D4): read-modify-write. Re-read the on-disk file and MERGE its nodes
-   * into the in-memory graph (union by node id; per-node last-writer-wins by
-   * updatedAt) BEFORE writing, so a concurrent writer's nodes survive instead
-   * of being clobbered. The write itself is atomic (tmp + rename), the same
-   * idiom task_registry.saveTaskToDisk uses.
+   * Read-modify-write. Re-reads the on-disk file and merges its nodes into the
+   * in-memory graph (union by node id; per-node recency by updatedAt) before
+   * writing, so a concurrent writer's nodes survive. The write is atomic
+   * (tmp + rename), the same idiom task_registry.saveTaskToDisk uses.
    */
   persist() {
     this._ensureEvoDir();
@@ -254,7 +245,7 @@ export class LineageDag {
     try {
       disk = this._readDisk();
     } catch (err) {
-      if (err instanceof LineageVersionError) throw err; // D15: fail-fast
+      if (err instanceof LineageVersionError) throw err; // fail-fast
       // Transient lock / corrupt: proceed from memory (do not lose our nodes).
     }
     if (disk) this._applyDisk(disk);
