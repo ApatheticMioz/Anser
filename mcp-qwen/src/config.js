@@ -52,24 +52,26 @@ export const BASE_URL = `http://localhost:${VLLM_PORT}/v1`;
  */
 export const MAX_LEN_HUGE = 245760;
 /**
- * Maximum time (ms) to wait for the vLLM engine to become ready after a cold boot.
- * Covers model load, torch.compile, profiling/warmup, and CUDA graph capture.
- * Default: 480000 ms (8 minutes).
+ * Maximum duration to wait for the vLLM engine to become healthy after boot.
+ * - Unit: milliseconds
+ * - Default: 480000 (8 minutes)
  * @type {number}
  */
 export const BOOT_TIMEOUT_MS = 480_000;
+
+/**
+ * Polling cadence when checking vLLM health during startup.
+ * - Unit: milliseconds
+ * - Default: 3000 (3 seconds)
+ * @type {number}
+ */
 export const BOOT_POLL_MS = 3000;
 
 /**
- * Default max_tokens for a single generation turn. Sized so that server-side
- * reasoning (thinking) tokens do not consume the entire budget before any
- * content or tool calls are emitted. The 245K context window easily fits
- * ~100k prompt + 49k output.
- *
+ * Maximum completion tokens allowed for a single generation turn.
  * - Unit: tokens
  * - Default: 49152
  * - Override: QWEN_MAX_TOKENS
- *
  * @type {number}
  */
 const DEFAULT_MAX_TOKENS = 49152;
@@ -154,18 +156,10 @@ export const FIRST_TOKEN_TIMEOUT_MS = (() => {
 })();
 
 /**
- * Streaming idle timeout (ms) for a single generation turn. Acts as both the
- * first-byte and inter-chunk idle watchdog on the provider's SSE read loop.
- * A legitimate first token can take many minutes on a cold 200K prefill
- * (prefix-cache miss) or behind a queued request on a MAX_SEQS=1 engine, so
- * the default is well above any realistic TTFT. This is a different axis from
- * max_tokens (generation-length cap); it only bounds how long the stream may
- * go silent before the connection is declared dead.
- *
+ * Maximum allowed idle duration between consecutive stream chunks before aborting.
  * - Unit: milliseconds
- * - Default: 1200000 ms (20 minutes)
+ * - Default: 1200000 (20 minutes)
  * - Override: QWEN_STREAM_IDLE_TIMEOUT_MS
- *
  * @type {number}
  */
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 1_200_000; // 20 min
@@ -175,17 +169,10 @@ export const STREAM_IDLE_TIMEOUT_MS = (() => {
 })();
 
 /**
- * Depth-aware streaming idle timeout (ms). Applied when the estimated prompt
- * token count exceeds {@link STREAM_IDLE_DEPTH_TOKENS}. A deep-context prompt
- * can legitimately spend >20 min in a single healthy thinking turn before any
- * content is emitted; this longer window prevents a healthy long-thinking turn
- * from being killed. The shallow tier ({@link STREAM_IDLE_TIMEOUT_MS}) still
- * bounds normal turns.
- *
+ * Streaming idle timeout applied when prompt tokens exceed STREAM_IDLE_DEPTH_TOKENS.
  * - Unit: milliseconds
- * - Default: 2400000 ms (40 minutes)
+ * - Default: 2400000 (40 minutes)
  * - Override: QWEN_STREAM_IDLE_TIMEOUT_DEEP_MS
- *
  * @type {number}
  */
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS_DEEP = 2_400_000; // 40 min
@@ -195,14 +182,10 @@ export const STREAM_IDLE_TIMEOUT_MS_DEEP = (() => {
 })();
 
 /**
- * Prompt-token depth threshold. A turn whose estimated prompt tokens reach this
- * value is treated as "deep" and receives the DEEP idle timeout tier
- * ({@link STREAM_IDLE_TIMEOUT_MS_DEEP}) instead of the shallow tier.
- *
+ * Prompt token depth threshold that activates STREAM_IDLE_TIMEOUT_MS_DEEP.
  * - Unit: tokens
  * - Default: 35000
  * - Override: QWEN_STREAM_IDLE_DEPTH_TOKENS
- *
  * @type {number}
  */
 const DEFAULT_STREAM_IDLE_DEPTH_TOKENS = 35_000;
@@ -212,19 +195,10 @@ export const STREAM_IDLE_DEPTH_TOKENS = (() => {
 })();
 
 /**
- * Per-turn ceiling on reasoning (thinking) tokens, enforced client-side by the
- * provider's SSE read loop. The stream-proxy circuit breaker catches literal
- * repetition loops, but a semantic loop (re-phrasing without exact repetition)
- * is only boundable by a token budget. When the ceiling is hit the provider
- * ends the turn with finish_reason "length" + hadReasoning, so the runner's
- * reasoning-cutoff continuation directive lands and the agent continues
- * instead of hogging the engine. Never suppresses thinking in prompts — bounds
- * it mechanically and hands the turn back.
- *
+ * Maximum reasoning tokens allowed per generation turn before terminating thinking.
  * - Unit: tokens
  * - Default: 32768
  * - Override: QWEN_MAX_REASONING_TOKENS
- *
  * @type {number}
  */
 const DEFAULT_MAX_REASONING_TOKENS = 32_768;
@@ -267,18 +241,10 @@ export const TASK_RETENTION_MS = (() => {
 })();
 
 /**
- * Mid-session orphan-reaper heartbeat-staleness window (ms). The boot-only
- * orphan sweep runs only at process start, so a task whose owner process dies
- * mid-session (status "running", dead owner pid, no terminal event) would
- * otherwise stay "running" forever and mislead later probes. The liveness
- * reaper reaps a not-done task only when BOTH its heartbeat is older than this
- * window AND its owner pid is dead. The default protects against long
- * reasoning turns, web fetches, or heavy compiler runs.
- *
+ * Heartbeat staleness threshold for reaping orphaned tasks whose owner process is dead.
  * - Unit: milliseconds
- * - Default: 600000 ms (10 minutes)
+ * - Default: 600000 (10 minutes)
  * - Override: QWEN_ORPHAN_REAP_STALE_MS
- *
  * @type {number}
  */
 const DEFAULT_ORPHAN_REAP_STALE_MS = 600_000; // 10m
@@ -288,15 +254,10 @@ export const ORPHAN_REAP_STALE_MS = (() => {
 })();
 
 /**
- * Maximum number of concurrent tasks the runner will execute in parallel.
- * Default is 1 (single-user pair programming); this eliminates multi-stream
- * prefill queueing and reclaims non-KV VRAM headroom. Keep in sync with
- * scripts/wsl/start_huge.sh.
- *
+ * Maximum number of concurrent tasks executed in parallel.
  * - Unit: count
  * - Default: 1
  * - Override: QWEN_MAX_CONCURRENT
- *
  * @type {number}
  */
 export const MAX_CONCURRENT_TASKS = process.env.QWEN_MAX_CONCURRENT
@@ -669,19 +630,10 @@ export const EMPTY_STREAM_RETRIES = (() => {
 })();
 
 /**
- * Depth-aware empty-stream retry budget. The flat {@link EMPTY_STREAM_RETRIES}
- * (default 2) is correct for normal turns, but a deep-context prompt
- * (estimated prompt chars >= {@link EMPTY_STREAM_RETRY_DEPTH_CHARS}) has a much
- * longer recovery latency on retry: re-prefilling 100k+ tokens takes minutes,
- * so a transient empty-stream cluster can exhaust the flat budget before it
- * clears. When the prompt is deep, the runner arms this longer DEEP budget
- * instead so a transient cluster has room to clear; the base budget still
- * bounds normal (shallow) turns.
- *
+ * Retry attempts for empty generation streams when prompt characters exceed EMPTY_STREAM_RETRY_DEPTH_CHARS.
  * - Unit: count
  * - Default: 4
  * - Override: QWEN_EMPTY_STREAM_RETRIES_DEEP
- *
  * @type {number}
  */
 const DEFAULT_EMPTY_STREAM_RETRIES_DEEP = 4;
@@ -691,16 +643,10 @@ export const EMPTY_STREAM_RETRIES_DEEP = (() => {
 })();
 
 /**
- * Prompt-character depth threshold for the empty-stream retry budget. A turn
- * whose re-prefill size (JSON.stringify(messages).length, the same measure the
- * runner already records as deathContext.promptChars) reaches this value is
- * treated as "deep" and receives the DEEP retry budget
- * ({@link EMPTY_STREAM_RETRIES_DEEP}).
- *
+ * Prompt character threshold that activates EMPTY_STREAM_RETRIES_DEEP.
  * - Unit: characters
- * - Default: 525000 (~150k tokens at ~3.5 chars/token)
+ * - Default: 525000 (~150k tokens)
  * - Override: QWEN_EMPTY_STREAM_RETRY_DEPTH_CHARS
- *
  * @type {number}
  */
 const DEFAULT_EMPTY_STREAM_RETRY_DEPTH_CHARS = 525_000;
@@ -710,18 +656,10 @@ export const EMPTY_STREAM_RETRY_DEPTH_CHARS = (() => {
 })();
 
 /**
- * Base delay (ms) for exponential backoff between empty-stream retries. Before
- * each retry the runner sleeps base * 2^(retryNumber-1) ms, capped at
- * {@link EMPTY_STREAM_RETRY_BACKOFF_CAP_MS}. With the defaults (base 2000ms,
- * cap 30000ms) this is "2^retryNumber seconds capped at 30s": retry 1 waits
- * 2s, retry 2 waits 4s, retry 3 waits 8s, retry 4 waits 16s, retry 5+ waits
- * 30s (capped). The backoff gives a transient empty-stream cluster time to
- * clear before the next (expensive, deep) re-prefill.
- *
+ * Base delay for exponential backoff between empty-stream retries.
  * - Unit: milliseconds
  * - Default: 2000
  * - Override: QWEN_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS
- *
  * @type {number}
  */
 const DEFAULT_EMPTY_STREAM_RETRY_BACKOFF_BASE_MS = 2000;
@@ -737,19 +675,10 @@ export const EMPTY_STREAM_RETRY_BACKOFF_CAP_MS = (() => {
 })();
 
 /**
- * Dispatch prompt-budget telemetry threshold (chars). When the final task
- * prompt (the `prompt` that arrives as run({prompt})) exceeds this budget, the
- * runner emits one advisory `prompt_over_budget` event (fields: promptChars,
- * budget) at the start of run(). This is advisory telemetry only — it never
- * alters flow, never cancels or errors the session, and never truncates the
- * prompt. It exists so the over-budget failure cluster is observable in the
- * session event ledger (the same sink that carries session_warning /
- * context_depth_warning / probe_budget_warning).
- *
+ * Task prompt character threshold that emits advisory prompt_over_budget telemetry.
  * - Unit: characters
  * - Default: 1500
  * - Override: QWEN_PROMPT_BUDGET_CHARS
- *
  * @type {number}
  */
 export const DEFAULT_PROMPT_BUDGET_CHARS = 1500;
@@ -759,31 +688,10 @@ export const PROMPT_BUDGET_CHARS = (() => {
 })();
 
 /**
- * Degenerate-final guard threshold (chars). When the stream proxy
- * circuit-breaks a runaway repetition loop it appends a GUARD_MARKER sentinel
- * and ends the stream with finish_reason "stop". The provider accumulates that
- * marker into the turn's content, so a turn whose entire message is just the
- * marker (or a tiny sliver of text plus the marker) lands in the runner as a
- * "stop" turn with content.
- *
- * The runner strips the marker and measures the substantive remainder:
- *   - remainder < this threshold AND no tool calls this turn AND the session
- *     is still short (turnsTaken <= DEGENERATE_FINAL_MAX_TURNS)
- *       -> DEGENERATE: retry via the empty-stream path (reason
- *          "degenerate_final"); on budget exhaustion report the honest status
- *          "degenerate_response_truncated" (isError) with the original
- *          partial+marker preserved for honesty.
- *   - remainder >= this threshold -> keep "completed" (the marker stays
- *     visible in the result; the deliverable is real).
- *
- * The default (200) is well below any legitimate final answer but far above
- * the marker's own length (~110 chars), so a marker-only or near-marker final
- * is always caught while a real (even short) answer is never misclassified.
- *
+ * Substantive text length required after stripping guard markers to avoid classification as degenerate.
  * - Unit: characters
  * - Default: 200
  * - Override: QWEN_DEGENERATE_FINAL_SUBSTANTIVE_CHARS
- *
  * @type {number}
  */
 const DEFAULT_DEGENERATE_FINAL_SUBSTANTIVE_CHARS = 200;
@@ -793,17 +701,10 @@ export const DEGENERATE_FINAL_SUBSTANTIVE_CHARS = (() => {
 })();
 
 /**
- * Maximum turn count for a session to be considered "short" by the
- * degenerate-final guard. A degenerate final is only classified as such if
- * the session has not already run many turns. A long session that ends with a
- * marker-truncated final has clearly done real work (many tool calls / turns)
- * and is NOT degenerate — it is a normal (if truncated) completion. The
- * default (3) keeps the guard scoped to the early-dead-session signature.
- *
+ * Maximum turn count within which a truncated final response is evaluated for degeneracy.
  * - Unit: count
  * - Default: 3
  * - Override: QWEN_DEGENERATE_FINAL_MAX_TURNS
- *
  * @type {number}
  */
 const DEFAULT_DEGENERATE_FINAL_MAX_TURNS = 3;
@@ -813,17 +714,10 @@ export const DEGENERATE_FINAL_MAX_TURNS = (() => {
 })();
 
 /**
- * Probe-budget watchdog threshold (count). The runner counts consecutive
- * non-mutating bash calls (bash/exec_command with no file-mutating tool call
- * in between); when the count exceeds this budget it injects an advisory (not
- * an error, not a cancellation) reminding the model that mutation dispatches
- * are single-pass, and re-arms the counter for the next run of N. The default
- * (4) means the warning fires on the 5th consecutive non-mutating bash call.
- *
+ * Consecutive non-mutating shell execution threshold before emitting an advisory warning.
  * - Unit: count
  * - Default: 4
  * - Override: QWEN_PROBE_BUDGET
- *
  * @type {number}
  */
 const DEFAULT_PROBE_BUDGET = 4;
@@ -833,16 +727,10 @@ export const PROBE_BUDGET = (() => {
 })();
 
 /**
- * Session-cumulative turn warning threshold (count). The session's total turn
- * count spans tasks: the prior assistant_message events (from
- * logger.readAll(), the same source getConversationHistory() reads) plus this
- * run's turnsTaken. The runner's run loop checks the cumulative count each
- * turn. At this threshold it emits a one-shot `session_warning` event.
- *
+ * Cumulative turn threshold for emitting an advisory session_warning event.
  * - Unit: count
  * - Default: 60
  * - Override: QWEN_SESSION_WARN_TURNS
- *
  * @type {number}
  */
 const DEFAULT_SESSION_TURNS_WARN = 60;
@@ -852,16 +740,10 @@ export const SESSION_TURNS_WARN = (() => {
 })();
 
 /**
- * Session-cumulative turn recommendation threshold (count). At this threshold
- * the runner emits a one-shot `session_turn_limit_recommended` event AND pushes
- * a single in-band user-role advisory telling the model to complete the task
- * and roll to a fresh session next dispatch. Advisory only — never cancels or
- * errors the session; the hard MAX_TURNS cap (anser_runner) is untouched.
- *
+ * Cumulative turn threshold for emitting a session_turn_limit_recommended advisory event.
  * - Unit: count
  * - Default: 80
  * - Override: QWEN_SESSION_RECOMMEND_TURNS
- *
  * @type {number}
  */
 const DEFAULT_SESSION_TURNS_RECOMMEND = 80;
@@ -871,17 +753,10 @@ export const SESSION_TURNS_RECOMMEND = (() => {
 })();
 
 /**
- * Context-depth warning threshold (tokens). When a turn's promptTokens (the
- * re-prefill size) reaches this value the runner emits a one-shot
- * `context_depth_warning` event. If the probe-streak counter is active at that
- * moment the event gains `probeStreakActive: true` — a signal for the
- * anti-rabbit-hole system (a deep context AND a live probe streak means the
- * model is stuck in a long, deep, non-mutating loop).
- *
+ * Re-prefill prompt token threshold for emitting a context_depth_warning event.
  * - Unit: tokens
  * - Default: 65536
  * - Override: QWEN_CONTEXT_WARN_TOKENS
- *
  * @type {number}
  */
 const DEFAULT_CONTEXT_WARN_TOKENS = 65536;
@@ -918,19 +793,10 @@ export const CONTEXT_EMERGENCY_CEILING_TOKENS = (() => {
 })();
 
 /**
- * Adaptive read-size governor cap (bytes). When the context high-watermark
- * fires, the runner arms this governor on the session's sandboxed FS service.
- * Subsequent read_file calls are then capped at this size (16KB, down from the
- * 64KB default) instead of pulling a whole file into an already-pressured
- * context. The governor only LOWERS the cap — it never raises it above the
- * caller's max_bytes. A read that exceeds the governed cap is truncated to the
- * cap and a suffix-scoped notice is appended (KV-prefix-stable: the notice is
- * part of the tool *result*, never the prompt prefix).
- *
+ * Maximum file read size enforced when context high-watermark is active.
  * - Unit: bytes
  * - Default: 16384 (16 KB)
  * - Override: QWEN_READ_GOVERNOR_MAX_BYTES
- *
  * @type {number}
  */
 const DEFAULT_READ_GOVERNOR_MAX_BYTES = 16 * 1024;
@@ -940,17 +806,10 @@ export const READ_GOVERNOR_MAX_BYTES = (() => {
 })();
 
 /**
- * Tool-output spillover threshold (bytes). When a tool result exceeds this
- * size, the full payload is written to <workspace>/.scratch/tool_out_<id>.txt
- * and the in-band observation is replaced with a pointer block (head + tail
- * preview + re-read hint) instead of being hard-truncated. This prevents a
- * single large read/bash result from either blowing the context ceiling or
- * amputating the payload past a hard cut.
- *
+ * Tool result size threshold above which payload is spilled to disk.
  * - Unit: bytes
- * - Default: 8192
+ * - Default: 8192 (8 KB)
  * - Override: QWEN_TOOL_SPILL_BYTES
- *
  * @type {number}
  */
 const DEFAULT_TOOL_SPILL_BYTES = 8192;
@@ -960,16 +819,10 @@ export const TOOL_SPILL_BYTES = (() => {
 })();
 
 /**
- * Bounded salvage extraction max_tokens (tokens). When the reasoning budget is
- * exhausted, the runner fires one bounded extraction turn (tools disabled, low
- * reasoning effort) to salvage the model's accumulated partial findings. This
- * short max_tokens bounds the extraction so it cannot re-trigger the
- * deliberation loop.
- *
+ * Generation token limit for bounded findings extraction on deliberation budget exhaustion.
  * - Unit: tokens
  * - Default: 4096
  * - Override: QWEN_SALVAGE_MAX_TOKENS
- *
  * @type {number}
  */
 const DEFAULT_SALVAGE_MAX_TOKENS = 4096;

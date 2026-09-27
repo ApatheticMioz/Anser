@@ -166,19 +166,58 @@ mcp-qwen/
 — never external CLI subprocesses (in-process = sub-millisecond).
 
 ### 3.5 Documentation & JSDoc Standards (Present-State Truth)
-- **Zero Storytelling / No Historical Changelogs**: Comments and docstrings must document the current software architecture, behavior, and invariants as-is in present-state truth.
+- **Zero Storytelling / No Historical Changelogs / No Defensive Lore**: Comments and docstrings must document the current software architecture, behavior, and invariants strictly as-is in present-state truth.
 - **Strictly Forbidden Commentary Patterns**:
   - Chronological narratives: "Raised from X to Y", "Reverted from A to B", "Historically", "Formerly", "The old code used to...".
   - Calendar dates or version snapshots: "2026-09-12:", "v1.2:".
   - Milestone or ticket tags: "M6a:", "P15:", "FX2:", "Issue #51:", "PR #13:", "gotcha 9".
   - Lab notes or exploratory diaries: "Measured on our RTX 3090...", "A/B tested with 6 trials...".
-- **Canonical SWE JSDoc Specification**:
-  All exported functions, constants, and classes must use structured JSDoc specifying:
-  - Technical summary of purpose, behavior, and operational constraints.
-  - `- Unit:` (milliseconds, seconds, tokens, characters, bytes, count, ratio, path).
-  - `- Default:` (default value).
-  - `- Override:` (environment variable name or "None").
-  - Type annotations: `@type`, `@param`, `@returns`.
+  - Defensive justifications or conversational essays: "Sized so that server-side reasoning...", "A legitimate first token can take many minutes...", "With the defaults this is 2^retryNumber seconds...", "Prevents X from being killed...", "Never suppresses thinking in prompts — bounds it mechanically...".
+- **Canonical SWE Documentation Pattern**:
+  All exported functions, constants, classes, and types must use concise, objective, present-tense JSDoc.
+  
+  **Pattern for Constants:**
+  ```javascript
+  /**
+   * Technical summary of what this constant controls (1-2 sentences).
+   * - Unit: <milliseconds | seconds | tokens | characters | bytes | count | ratio | path>
+   * - Default: <value>
+   * - Override: <ENV_VAR> (or "None")
+   * @type {<type>}
+   */
+  ```
+
+  **Pattern for Functions:**
+  ```javascript
+  /**
+   * Technical summary of function behavior and operational invariants.
+   * @param {<type>} <name> - Parameter description.
+   * @returns {<type>} Return value description.
+   * @throws {<ErrorType>} Exceptional conditions.
+   */
+  ```
+
+  **Anti-Pattern (Contaminated):**
+  ```javascript
+  // BAD: Explaining background reasons, hypothetical failures, or historical tuning
+  /**
+   * Streaming idle timeout (ms) for a single generation turn. Acts as both the
+   * first-byte and inter-chunk idle watchdog on the provider's SSE read loop.
+   * A legitimate first token can take many minutes on a cold 200K prefill...
+   */
+  ```
+
+  **Canonical SWE Pattern (Clean):**
+  ```javascript
+  // GOOD: Factual, concise, technical definition of what it is and what it does
+  /**
+   * Maximum allowed idle duration between consecutive stream chunks before timing out.
+   * - Unit: milliseconds
+   * - Default: 1200000 (20 minutes)
+   * - Override: QWEN_STREAM_IDLE_TIMEOUT_MS
+   * @type {number}
+   */
+  ```
 
 ---
 
