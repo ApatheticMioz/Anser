@@ -30,7 +30,7 @@ import { killProcessTree, killProcessTreeSync } from "../../wsl_bridge.js";
 const require = createRequire(import.meta.url);
 let PKG_VERSION = "0.0.0";
 try {
-  PKG_VERSION = require("../../package.json").version || "0.0.0";
+  PKG_VERSION = require("../../../package.json").version || "0.0.0";
 } catch {}
 
 // ---------------------------------------------------------------------------

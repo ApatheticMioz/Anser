@@ -11,6 +11,7 @@
  */
 
 import path from "node:path";
+import { createRequire } from "node:module";
 import { Context } from "./core/kernel.js";
 import { sandboxFsPlugin } from "./services/sandbox_fs.js";
 import { shellExecutorPlugin } from "./services/shell_executor.js";
@@ -50,6 +51,11 @@ import {
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
 import { recordTurnTelemetry, recordToolExecution, sampleLiveVllmMetrics } from "../telemetry.js";
+
+// Single source of truth for the harness version: read from package.json
+// (same createRequire idiom as index.js and mcp_bridge.js).
+const require = createRequire(import.meta.url);
+const PKG_VERSION = require("../../package.json").version;
 
 // M4: probe-budget watchdog (issue #11 recs 1+2; F4/F12/F14). On open-ended
 // layout targets the model ran 30+ consecutive inline-python measurement bash
@@ -310,7 +316,7 @@ export class AnserRunner {
     logger.append({
       type: "session_start",
       harness: "Anser",
-      version: "2026.1",
+      version: PKG_VERSION,
       cwd: effectiveCwd,
       prompt,
       // Effective reasoning-effort tier for this session (task-local param when

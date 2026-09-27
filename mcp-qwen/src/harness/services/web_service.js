@@ -13,9 +13,15 @@ import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
 import { search, SafeSearchType } from "duck-duck-scrape";
 import { getSearchConfig } from "../../config.js";
+import { createRequire } from "node:module";
+
+// Single source of truth for the harness version: read from package.json
+// (same createRequire idiom as index.js and mcp_bridge.js).
+const require = createRequire(import.meta.url);
+const PKG_VERSION = require("../../../package.json").version;
 
 const DEFAULT_USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Anser/2026.1";
+  `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Anser/${PKG_VERSION}`;
 
 const DEFAULT_MAX_FETCH_CHARS = 24_000;
 const MAX_FETCH_CHARS = (() => {
