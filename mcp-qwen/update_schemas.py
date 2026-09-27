@@ -146,7 +146,13 @@ tools = {
                 'action': {'type': 'string', 'enum': ['status', 'cancel', 'cancel_all', 'list', 'kill', 'stats', 'extend_lease'], 'description': 'Action to perform on background tasks (status, cancel, list, stats, or extend_lease to grant additional execution turns)'},
                 'task_id': {'type': 'string', 'description': 'Task ID (required for \'status\' and \'extend_lease\', optional for \'cancel\'/\'cancel_all\'/\'kill\' to cancel all tasks)'},
                 'turns': {'type': 'integer', 'exclusiveMinimum': 0, 'maximum': 9007199254740991, 'description': 'Additional turns to grant for \'extend_lease\' (default 25)'},
-                'reason': {'type': 'string', 'description': 'Optional reason for supervisor lease extension'}
+                'reason': {'type': 'string', 'description': 'Optional reason for supervisor lease extension'},
+                'since': {'type': 'string', 'description': 'Optional ISO-8601 start timestamp for time-sliced stats (e.g. \'2026-09-28T00:00:00Z\')'},
+                'until': {'type': 'string', 'description': 'Optional ISO-8601 end timestamp for time-sliced stats'},
+                'window': {'type': 'string', 'enum': ['1h', '24h', 'today', 'yesterday', 'all'], 'description': 'Optional relative time window for time-sliced stats'},
+                'date': {'type': 'string', 'description': 'Optional calendar date for time-sliced stats (YYYY-MM-DD)'},
+                'hour': {'type': 'integer', 'minimum': 0, 'maximum': 23, 'description': 'Optional hour of the day (0-23) for time-sliced stats'},
+                'minute': {'type': 'integer', 'minimum': 0, 'maximum': 59, 'description': 'Optional minute of the hour (0-59) for time-sliced stats'}
             },
             'required': ['action']
         }

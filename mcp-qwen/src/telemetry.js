@@ -40,6 +40,9 @@ export const DEFAULT_STATS = {
   avg_ttft_ms: 13206.3,
   avg_prefill_ms: 13206.3,
   avg_generation_ms: 1850.0,
+  avg_decode_tps: 48.2,
+  avg_prefill_tps: 1850.0,
+  avg_tpot_ms: 20.7,
   reasoning_effort: {
     xhigh: 14,
     medium: 622,
@@ -177,6 +180,9 @@ export function recordTurnTelemetry({
   generationMs = null,
   totalMs = null,
   effort = "medium",
+  decodeTps = null,
+  prefillTps = null,
+  tpotMs = null,
 } = {}) {
   const stats = getCumulativeTelemetry();
   stats.total_completion_tokens += completionTokens;
@@ -210,7 +216,72 @@ export function recordTurnTelemetry({
     );
   }
 
+  // Running averages for the standard throughput / per-token-latency rates.
+  // Same 0.95/0.05 EMA convention as the latency averages above; only updated
+  // when the provider actually produced a finite, non-negative value (null
+  // rates from degenerate turns are ignored, never averaged in).
+  if (typeof decodeTps === "number" && decodeTps >= 0) {
+    stats.avg_decode_tps = Number(
+      (((stats.avg_decode_tps || decodeTps) * 0.95) + (decodeTps * 0.05)).toFixed(2)
+    );
+  }
+  if (typeof prefillTps === "number" && prefillTps >= 0) {
+    stats.avg_prefill_tps = Number(
+      (((stats.avg_prefill_tps || prefillTps) * 0.95) + (prefillTps * 0.05)).toFixed(2)
+    );
+  }
+  if (typeof tpotMs === "number" && tpotMs >= 0) {
+    stats.avg_tpot_ms = Number(
+      (((stats.avg_tpot_ms || tpotMs) * 0.95) + (tpotMs * 0.05)).toFixed(2)
+    );
+  }
+
   saveCumulativeTelemetry(stats);
+
+  // Append a per-turn record to the rolling turns.jsonl ledger so that
+  // time-sliced queries (queryTelemetry) can reconstruct distributions and
+  // rates over arbitrary windows. Capped at MAX_TURNS_LEDGER lines; when the
+  // cap is exceeded the oldest lines are dropped (FIFO) to bound disk growth.
+  appendTurnRecord({
+    ts: Date.now(),
+    prompt: promptTokens,
+    comp: completionTokens,
+    reasoning: reasoningTokens,
+    ttft: effectivePrefillMs,
+    gen: effectiveGenMs,
+    total: totalMs,
+    decodeTps,
+    prefillTps,
+    tpotMs,
+    effort,
+  });
+}
+
+const TURNS_LEDGER_FILE = () => path.join(TELEMETRY_DIR, "turns.jsonl");
+const MAX_TURNS_LEDGER = 20000;
+
+/**
+ * Appends a single per-turn record to the rolling turns.jsonl ledger,
+ * trimming the oldest lines when the cap is exceeded. Never throws: a
+ * telemetry-write failure must not break the inference path.
+ */
+function appendTurnRecord(record) {
+  try {
+    if (!fs.existsSync(TELEMETRY_DIR)) {
+      fs.mkdirSync(TELEMETRY_DIR, { recursive: true });
+    }
+    const file = TURNS_LEDGER_FILE();
+    if (fs.existsSync(file)) {
+      const existing = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.trim() !== "");
+      if (existing.length >= MAX_TURNS_LEDGER) {
+        const trimmed = existing.slice(existing.length - (MAX_TURNS_LEDGER - 1));
+        fs.writeFileSync(file, trimmed.join("\n") + "\n", "utf8");
+      }
+    }
+    fs.appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
+  } catch (err) {
+    console.error("[Telemetry] Failed to append turn record:", err.message);
+  }
 }
 
 /**
@@ -324,9 +395,180 @@ export function sampleLiveVllmMetrics() {
 }
 
 /**
- * Formats a user-friendly statistics string with rich telemetry.
+ * Reads the rolling per-turn ledger (turns.jsonl) into an array of records.
+ * Returns [] when the file is absent or unreadable — a missing ledger is a
+ * valid state (fresh install / pre-Slice-2 history) and must not throw.
  */
-export function formatTelemetrySummary() {
+function readTurnsLedger() {
+  try {
+    const file = TURNS_LEDGER_FILE();
+    if (!fs.existsSync(file)) return [];
+    return fs
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
+      .filter((r) => r && typeof r === "object");
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Resolves a time-slice filter into a [startMs, endMs) window.
+ *
+ * Supported keys (first match wins, in this precedence order):
+ *   - since / until : ISO-8601 strings (or ms numbers) bounding the window.
+ *   - window        : "1h" | "24h" | "today" | "yesterday" (relative to now).
+ *   - date          : "YYYY-MM-DD" → that calendar day (local time).
+ *   - hour          : 0-23, combined with `date` (defaults to today).
+ *   - minute        : 0-59, combined with `date`+`hour` (defaults to today).
+ *
+ * Returns { startMs, endMs } where the window is inclusive [startMs, endMs].
+ */
+function resolveTimeWindow({ since, until, date, hour, minute, window } = {}) {
+  const now = Date.now();
+
+  // Explicit ISO / numeric bounds take precedence.
+  if (since !== undefined || until !== undefined) {
+    const startMs = since === undefined ? 0 : (typeof since === "number" ? since : Date.parse(since));
+    const endMs = until === undefined ? now : (typeof until === "number" ? until : Date.parse(until));
+    return {
+      startMs: Number.isFinite(startMs) ? startMs : 0,
+      endMs: Number.isFinite(endMs) ? endMs : now,
+    };
+  }
+
+  // Relative windows.
+  if (window === "1h") return { startMs: now - 3600_000, endMs: now };
+  if (window === "24h") return { startMs: now - 86400_000, endMs: now };
+  if (window === "today") {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return { startMs: d.getTime(), endMs: now };
+  }
+  if (window === "yesterday") {
+    const end = new Date();
+    end.setHours(0, 0, 0, 0);
+    const start = new Date(end);
+    start.setDate(start.getDate() - 1);
+    return { startMs: start.getTime(), endMs: end.getTime() };
+  }
+
+  // Calendar-date windows (optionally narrowed to an hour or minute).
+  if (date !== undefined || hour !== undefined || minute !== undefined) {
+    const base = date !== undefined ? new Date(`${date}T00:00:00`) : new Date();
+    if (Number.isNaN(base.getTime())) base.setHours(0, 0, 0, 0);
+    if (hour !== undefined) base.setHours(hour, 0, 0, 0);
+    if (minute !== undefined) base.setMinutes(minute, 0, 0);
+    const spanMs = minute !== undefined ? 60_000 : hour !== undefined ? 3600_000 : 86400_000;
+    return { startMs: base.getTime(), endMs: base.getTime() + spanMs };
+  }
+
+  // No filter → full lifetime (bounded by the ledger's own extent).
+  return { startMs: 0, endMs: now };
+}
+
+/**
+ * Time-sliced telemetry query.
+ *
+ * Filters the per-turn ledger to a window (see resolveTimeWindow) and returns
+ * aggregate statistics for that slice:
+ *   {
+ *     startMs, endMs,
+ *     turns,
+ *     promptTokens, completionTokens, reasoningTokens,
+ *     avg_ttft_ms, avg_generation_ms,
+ *     avg_decode_tps, avg_prefill_tps, avg_tpot_ms,
+ *     costSavedUsd,
+ *   }
+ *
+ * Averages are computed over the turns that actually reported a finite value
+ * for that field (nulls are excluded, not zero-filled). Returns a zeroed
+ * aggregate (turns: 0) when no turns match the slice.
+ */
+export function queryTelemetry({ since, until, date, hour, minute, window } = {}) {
+  const { startMs, endMs } = resolveTimeWindow({ since, until, date, hour, minute, window });
+  const all = readTurnsLedger();
+  const turns = all.filter((r) => {
+    const t = typeof r.ts === "number" ? r.ts : Date.parse(r.ts);
+    // Inclusive [startMs, endMs] window: a turn recorded at exactly the
+    // window's end boundary (e.g. "now") is part of the slice, not excluded.
+    return Number.isFinite(t) && t >= startMs && t <= endMs;
+  });
+
+  const sum = (key) => turns.reduce((acc, r) => acc + (typeof r[key] === "number" ? r[key] : 0), 0);
+  const avg = (key) => {
+    const vals = turns.map((r) => r[key]).filter((v) => typeof v === "number" && Number.isFinite(v));
+    if (vals.length === 0) return null;
+    return Number((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2));
+  };
+
+  const promptTokens = sum("prompt");
+  const completionTokens = sum("comp");
+
+  return {
+    startMs,
+    endMs,
+    turns: turns.length,
+    promptTokens,
+    completionTokens,
+    reasoningTokens: sum("reasoning"),
+    avg_ttft_ms: avg("ttft"),
+    avg_generation_ms: avg("gen"),
+    avg_decode_tps: avg("decodeTps"),
+    avg_prefill_tps: avg("prefillTps"),
+    avg_tpot_ms: avg("tpotMs"),
+    costSavedUsd: calculateCostSaved(promptTokens, completionTokens),
+  };
+}
+
+/**
+ * Formats a user-friendly statistics string with rich telemetry.
+ *
+ * Accepts an optional time-slice filter (same keys as queryTelemetry). When the
+ * filter carries at least one defined key, the summary is computed over that
+ * slice of the per-turn ledger; otherwise it renders the lifetime cumulative
+ * stats.
+ */
+export function formatTelemetrySummary(filter = {}) {
+  const hasFilter = Object.keys(filter).some((k) => filter[k] !== undefined);
+
+  if (hasFilter) {
+    let label = filter.window || filter.since || filter.date || "slice";
+    if (filter.date && filter.hour !== undefined) {
+      label = `${filter.date} ${String(filter.hour).padStart(2, "0")}:00`;
+      if (filter.minute !== undefined) {
+        label = `${filter.date} ${String(filter.hour).padStart(2, "0")}:${String(filter.minute).padStart(2, "0")}`;
+      }
+    } else if (filter.hour !== undefined) {
+      label = `hour ${filter.hour}`;
+      if (filter.minute !== undefined) {
+        label = `hour ${filter.hour}:${String(filter.minute).padStart(2, "0")}`;
+      }
+    }
+    const slice = queryTelemetry(filter);
+    const fmt = (v, unit, digits = 1) =>
+      v === null || v === undefined ? "n/a" : `${Number(v).toFixed(digits)}${unit ? " " + unit : ""}`;
+    const lines = [
+      `### 📊 Qwen Telemetry — ${label}`,
+      `- **Turns in slice**: **${slice.turns.toLocaleString()}**`,
+      `- **Tokens**: **${slice.promptTokens.toLocaleString()}** prompt | **${slice.completionTokens.toLocaleString()}** completion | **${slice.reasoningTokens.toLocaleString()}** reasoning`,
+      `- **Decode Speed**: **${fmt(slice.avg_decode_tps, "tok/s", 2)}**`,
+      `- **Prefill Speed**: **${fmt(slice.avg_prefill_tps, "tok/s", 2)}**`,
+      `- **TTFT**: **${slice.avg_ttft_ms != null ? fmt(slice.avg_ttft_ms / 1000, "s", 1) : "n/a"}**`,
+      `- **TPOT**: **${fmt(slice.avg_tpot_ms, "ms/tok", 2)}**`,
+      `- **Cost Saved (slice)**: **$${slice.costSavedUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD**`,
+    ];
+    return { summary: lines.join("\n"), stats: slice };
+  }
+
   const stats = getCumulativeTelemetry();
   const compM = (stats.total_completion_tokens / 1_000_000).toFixed(2);
   const reasoningM = (stats.total_reasoning_tokens / 1_000_000).toFixed(2);
@@ -359,21 +601,30 @@ export function formatTelemetrySummary() {
     ? `- **Turn Latency**: ${timingItems.join(" | ")}`
     : null;
 
+  const decodeTps = stats.avg_decode_tps != null ? `**${stats.avg_decode_tps}** tok/s decode` : null;
+  const prefillTps = stats.avg_prefill_tps != null ? `**${stats.avg_prefill_tps}** tok/s prefill` : null;
+  const tpot = stats.avg_tpot_ms != null ? `**${stats.avg_tpot_ms}** ms/tok TPOT` : null;
+  const rateItems = [decodeTps, prefillTps, tpot].filter(Boolean);
+  const rateLine = rateItems.length > 0
+    ? `- **Throughput**: ${rateItems.join(" | ")}`
+    : null;
+
   const summary = [
     `### 🚀 Lifetime Qwen Usage & Anser Telemetry`,
     `- **Completion Generated**: **${compM}M** tokens (${stats.total_completion_tokens.toLocaleString()} tok)`,
     `- **Deliberative Reasoning**: **${reasoningM}M** thinking tokens (${stats.total_reasoning_tokens.toLocaleString()} tok)`,
     `- **Prompt Prefill**: **${promptM}M** tokens (${measuredPromptM}M exact measured + ${((stats.total_prompt_tokens_estimated || 0) / 1_000_000).toFixed(2)}M estimated)`,
     ...(timingLine ? [timingLine] : []),
+    ...(rateLine ? [rateLine] : []),
     `- **Total Turns & Sessions**: **${stats.total_turns.toLocaleString()}** turns across **${stats.total_sessions}** sessions`,
     `- **Task Lifecycle**: **${stats.total_tasks_completed}** completed, **${stats.total_tasks_failed}** failed, **${stats.total_tasks_cancelled || 0}** cancelled`,
     `- **Tool Execution**: **${stats.total_tool_calls.toLocaleString()}** calls with only **${stats.total_tool_errors}** errors (${toolErrorRate}% error rate)`,
     `- **Top Tools**: ${topTools}`,
     `- **vLLM Acceleration**: **${stats.vllm_engine_metrics.prefix_cache_hit_rate_pct}%** Prefix Cache hit rate | **${stats.vllm_engine_metrics.spec_mean_acceptance_length}** tok/step DFlash2 mean acceptance | **${stats.vllm_engine_metrics.peak_gpu_kv_cache_pct}%** peak GPU KV cache`,
-    `- **Financial Value**: **$${stats.estimated_cost_saved_usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** in API cost saved vs **${stats.benchmark_model || BENCHMARK_MODEL}** ($${PROMPT_COST_PER_MILLION.toFixed(2)}/M prompt, $${COMPLETION_COST_PER_MILLION.toFixed(2)}/M completion) at **$0 local token cost**`,
-    `  - *Vs Claude Opus 5.5 ($4/$20)*: **$${opusSaved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** saved`,
-    `  - *Vs GPT-6 Astra / Claude Fable 5.1 ($10/$50)*: **$${frontierSaved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** saved`,
-    `  - *Vs GLM-5.3 ($1.40/$4.40)*: **$${glmSaved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** saved`,
+    `- **Financial Value**: **${stats.estimated_cost_saved_usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** in API cost saved vs **${stats.benchmark_model || BENCHMARK_MODEL}** (${PROMPT_COST_PER_MILLION.toFixed(2)}/M prompt, ${COMPLETION_COST_PER_MILLION.toFixed(2)}/M completion) at **$0 local token cost**`,
+    `  - *Vs Claude Opus 5.5 ($4/$20)*: **${opusSaved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** saved`,
+    `  - *Vs GPT-6 Astra / Claude Fable 5.1 ($10/$50)*: **${frontierSaved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** saved`,
+    `  - *Vs GLM-5.3 ($1.40/$4.40)*: **${glmSaved.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD** saved`,
   ].join("\n");
 
   return {

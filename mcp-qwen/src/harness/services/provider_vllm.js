@@ -526,6 +526,24 @@ export class VllmProviderService {
     const effectiveCompletionTokens =
       engineCompletionTokens ?? completionTokens;
 
+    // Industry-standard throughput rates & per-token latency, derived from the
+    // raw timestamps above. All are null when the denominator is non-positive
+    // (or, for TPOT, when there is not enough output to divide by) so consumers
+    // never see a fabricated rate.
+    //   prefillTps: prompt tokens / prefill seconds (prefill throughput)
+    //   decodeTps:  completion tokens / decode seconds (decode throughput)
+    //   tpotMs:     vLLM Time-Per-Output-Token = decode time / (output tokens - 1)
+    const prefillTps =
+      prefillMs > 0 ? Number((promptTokens / (prefillMs / 1000)).toFixed(2)) : null;
+    const decodeTps =
+      generationMs > 0
+        ? Number((effectiveCompletionTokens / (generationMs / 1000)).toFixed(2))
+        : null;
+    const tpotMs =
+      effectiveCompletionTokens > 1 && generationMs > 0
+        ? Number((generationMs / (effectiveCompletionTokens - 1)).toFixed(2))
+        : null;
+
     const metrics = {
       promptTokens,
       completionTokens: effectiveCompletionTokens,
@@ -540,6 +558,9 @@ export class VllmProviderService {
       // shallow tier), not the static shallow default.
       streamIdleTimeoutMs: idleTimeoutMs,
       streamIdleTier: idleTier,
+      prefillTps,
+      decodeTps,
+      tpotMs,
       ...(promptTokensEstimated ? { promptTokensEstimated: true } : {}),
     };
 

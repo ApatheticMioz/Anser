@@ -612,6 +612,9 @@ export class AnserRunner {
                 prefillMs: m.prefillMs ?? m.ttftMs,
                 generationMs: m.generationMs ?? (m.totalMs && m.ttftMs ? Math.max(0, m.totalMs - m.ttftMs) : 0),
                 totalMs: m.totalMs,
+                prefillTps: m.prefillTps,
+                decodeTps: m.decodeTps,
+                tpotMs: m.tpotMs,
                 effort: reasoningEffort || "medium",
               });
             } catch {}

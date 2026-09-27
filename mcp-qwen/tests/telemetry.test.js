@@ -13,6 +13,7 @@ import {
   recordTaskResult,
   sampleLiveVllmMetrics,
   formatTelemetrySummary,
+  queryTelemetry,
 } from "../src/telemetry.js";
 import { QWEN_STATE_DIR } from "../src/config.js";
 
@@ -146,6 +147,139 @@ test("Telemetry: formatTelemetrySummary produces structured markdown and stats",
   assert.ok(summary.includes("Prefix Cache hit rate"), "Prefix cache in summary");
   assert.ok(stats.total_turns > 0);
   assert.ok(stats.estimated_cost_saved_usd > 0);
+});
+
+// ---------------------------------------------------------------------------
+// Slice 2: Throughput rates, per-turn ledger, and time-sliced queries
+// ---------------------------------------------------------------------------
+
+test("Slice2: recordTurnTelemetry updates running rate averages (decodeTps/prefillTps/tpotMs)", () => {
+  const initial = getCumulativeTelemetry();
+
+  recordTurnTelemetry({
+    completionTokens: 100,
+    promptTokens: 2000,
+    reasoningTokens: 0,
+    ttftMs: 1000,
+    prefillMs: 1000,
+    generationMs: 500,
+    totalMs: 1500,
+    effort: "medium",
+    decodeTps: 200.0,
+    prefillTps: 2000.0,
+    tpotMs: 5.0,
+  });
+
+  const updated = getCumulativeTelemetry();
+  assert.ok(typeof updated.avg_decode_tps === "number" && updated.avg_decode_tps > 0, "avg_decode_tps updated");
+  assert.ok(typeof updated.avg_prefill_tps === "number" && updated.avg_prefill_tps > 0, "avg_prefill_tps updated");
+  assert.ok(typeof updated.avg_tpot_ms === "number" && updated.avg_tpot_ms > 0, "avg_tpot_ms updated");
+
+  // Restore baseline
+  saveCumulativeTelemetry(initial);
+});
+
+test("Slice2: recordTurnTelemetry ignores null rates (never averages in a fabricated value)", () => {
+  const initial = getCumulativeTelemetry();
+  const initDecode = initial.avg_decode_tps;
+  const initTpot = initial.avg_tpot_ms;
+
+  // A degenerate turn: no decode window, no TPOT → null rates.
+  recordTurnTelemetry({
+    completionTokens: 1,
+    promptTokens: 100,
+    reasoningTokens: 0,
+    ttftMs: 50,
+    prefillMs: 50,
+    generationMs: 0,
+    totalMs: 50,
+    effort: "low",
+    decodeTps: null,
+    prefillTps: null,
+    tpotMs: null,
+  });
+
+  const updated = getCumulativeTelemetry();
+  // Null rates must not move the running averages.
+  assert.equal(updated.avg_decode_tps, initDecode, "null decodeTps leaves avg_decode_tps unchanged");
+  assert.equal(updated.avg_tpot_ms, initTpot, "null tpotMs leaves avg_tpot_ms unchanged");
+
+  // Restore baseline
+  saveCumulativeTelemetry(initial);
+});
+
+test("Slice2: queryTelemetry aggregates a time window from the per-turn ledger", () => {
+  const telemetryDir = path.join(QWEN_STATE_DIR, "telemetry");
+  const ledger = path.join(telemetryDir, "turns.jsonl");
+  fs.mkdirSync(telemetryDir, { recursive: true });
+
+  // Snapshot any pre-existing ledger so we can restore it.
+  const prior = fs.existsSync(ledger) ? fs.readFileSync(ledger, "utf8") : null;
+
+  try {
+    // Write a small synthetic ledger spanning two distinct windows.
+    // "inWindow" sits comfortably INSIDE the 1h window (100s inside the
+    // boundary) so the query's later Date.now() cannot push the window start
+    // past it; "twoHoursAgo" sits OUTSIDE the 1h window but inside 24h.
+    const now = Date.now();
+    const inWindow = now - 3500_000;
+    const twoHoursAgo = now - 7200_000;
+    const lines = [
+      JSON.stringify({ ts: twoHoursAgo, prompt: 1000, comp: 50, reasoning: 0, ttft: 800, gen: 400, total: 1200, decodeTps: 125.0, prefillTps: 1250.0, tpotMs: 8.0, effort: "medium" }),
+      JSON.stringify({ ts: inWindow, prompt: 2000, comp: 100, reasoning: 0, ttft: 1000, gen: 500, total: 1500, decodeTps: 200.0, prefillTps: 2000.0, tpotMs: 5.0, effort: "medium" }),
+      JSON.stringify({ ts: now, prompt: 3000, comp: 150, reasoning: 0, ttft: 1200, gen: 600, total: 1800, decodeTps: 250.0, prefillTps: 2500.0, tpotMs: 4.0, effort: "medium" }),
+    ];
+    fs.writeFileSync(ledger, lines.join("\n") + "\n", "utf8");
+
+    // "1h" window should capture the last two turns (oneHourAgo and now),
+    // excluding twoHoursAgo.
+    const slice = queryTelemetry({ window: "1h" });
+    assert.equal(slice.turns, 2, "1h window captures exactly 2 turns");
+    assert.equal(slice.promptTokens, 2000 + 3000, "prompt tokens summed over the slice");
+    assert.equal(slice.completionTokens, 100 + 150, "completion tokens summed over the slice");
+    // Averages over the two in-window turns.
+    assert.equal(slice.avg_decode_tps, Number(((200.0 + 250.0) / 2).toFixed(2)), "avg decode tps over slice");
+    assert.equal(slice.avg_tpot_ms, Number(((5.0 + 4.0) / 2).toFixed(2)), "avg tpot over slice");
+    assert.ok(slice.costSavedUsd > 0, "cost saved computed for the slice");
+
+    // "24h" window should capture all three turns.
+    const day = queryTelemetry({ window: "24h" });
+    assert.equal(day.turns, 3, "24h window captures all 3 turns");
+    assert.equal(day.promptTokens, 1000 + 2000 + 3000, "prompt tokens summed over 24h");
+
+    // An explicit since/until window bounded to the last hour.
+    const explicit = queryTelemetry({ since: inWindow, until: now + 1 });
+    assert.equal(explicit.turns, 2, "explicit since/until window captures 2 turns");
+
+    // A window with no matching turns returns a zeroed aggregate.
+    const empty = queryTelemetry({ since: now + 1000, until: now + 2000 });
+    assert.equal(empty.turns, 0, "empty window returns zero turns");
+    assert.equal(empty.avg_decode_tps, null, "empty window returns null averages");
+  } finally {
+    // Restore the prior ledger state (or remove the file if it did not exist).
+    if (prior === null) {
+      fs.rmSync(ledger, { force: true });
+    } else {
+      fs.writeFileSync(ledger, prior, "utf8");
+    }
+  }
+});
+
+test("Slice2: formatTelemetrySummary(filter) renders a sliced summary", () => {
+  const { summary, stats } = formatTelemetrySummary({ window: "24h" });
+  assert.ok(summary.includes("Qwen Telemetry"), "sliced header present");
+  assert.ok(summary.includes("Decode Speed"), "decode speed surfaced");
+  assert.ok(summary.includes("Prefill Speed"), "prefill speed surfaced");
+  assert.ok(summary.includes("TTFT"), "TTFT surfaced");
+  assert.ok(summary.includes("TPOT"), "TPOT surfaced");
+  assert.ok(typeof stats.turns === "number", "sliced stats carry a turn count");
+});
+
+test("Slice2: formatTelemetrySummary() lifetime summary includes throughput line", () => {
+  const { summary } = formatTelemetrySummary();
+  assert.ok(summary.includes("Lifetime Qwen Usage"), "lifetime header present");
+  // The lifetime summary should surface the throughput rates (decode/prefill/TPOT).
+  assert.ok(summary.includes("Throughput"), "throughput line present in lifetime summary");
 });
 
 // ---------------------------------------------------------------------------

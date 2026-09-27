@@ -347,18 +347,55 @@ export function registerTools(server) {
           .string()
           .optional()
           .describe("Optional reason for supervisor lease extension"),
+        since: z
+          .string()
+          .optional()
+          .describe("Optional ISO-8601 start timestamp for time-sliced stats (e.g. '2026-09-28T00:00:00Z')"),
+        until: z
+          .string()
+          .optional()
+          .describe("Optional ISO-8601 end timestamp for time-sliced stats"),
+        window: z
+          .enum(["1h", "24h", "today", "yesterday", "all"])
+          .optional()
+          .describe("Optional relative time window for time-sliced stats"),
+        date: z
+          .string()
+          .optional()
+          .describe("Optional calendar date for time-sliced stats (YYYY-MM-DD)"),
+        hour: z
+          .number()
+          .int()
+          .min(0)
+          .max(23)
+          .optional()
+          .describe("Optional hour of the day (0-23) for time-sliced stats"),
+        minute: z
+          .number()
+          .int()
+          .min(0)
+          .max(59)
+          .optional()
+          .describe("Optional minute of the hour (0-59) for time-sliced stats"),
       },
       annotations: {
         readOnlyHint: true,
       },
     },
-    async ({ action, task_id, turns, reason }) => {
+    async ({ action, task_id, turns, reason, since, until, window, date, hour, minute }) => {
       try {
       if (action === "kill") {
         action = "cancel";
       }
       if (action === "stats") {
-        const { summary } = formatTelemetrySummary();
+        const filter = {};
+        if (since !== undefined) filter.since = since;
+        if (until !== undefined) filter.until = until;
+        if (window !== undefined) filter.window = window;
+        if (date !== undefined) filter.date = date;
+        if (hour !== undefined) filter.hour = hour;
+        if (minute !== undefined) filter.minute = minute;
+        const { summary } = formatTelemetrySummary(filter);
         return {
           content: [
             {
