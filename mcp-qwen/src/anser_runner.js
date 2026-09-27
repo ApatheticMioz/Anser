@@ -15,13 +15,14 @@ import {
   toPosixWslPath,
   toWindowsPath,
   canonicalizePath,
+  killSessionProcessTreeSync,
 } from "./wsl_bridge.js";
 import {
   ensureServerRunning,
   ensureStreamProxyRunning,
   withBootMutex,
 } from "./server_lifecycle.js";
-import { runQueued } from "./semaphore.js";
+import { runQueued, clearReclaimableTaskSlots } from "./semaphore.js";
 import {
   tasks,
   saveTaskToDisk,
@@ -457,6 +458,34 @@ export function startAnserTask({
         return taskEntry.result;
       } finally {
         clearInterval(heartbeatTimer);
+        // E5: session-end orphan reaping hardening. On EVERY task termination
+        // path (success, error, cancel) run a bounded, idempotent sweep:
+        //   1. Anchored per-session process-tree sweep — kills only processes
+        //      whose cmdline matches THIS session id at an exact boundary
+        //      (pgrep -> /proc cmdline verify -> kill), so a session id that
+        //      is a substring of another session's id is never over-killed.
+        //      This is the same sweep cancelAllTasks uses; running it here
+        //      closes the gap where a task that terminated naturally (or was
+        //      cancelled before the cancel path's own sweep) left WSL children
+        //      behind.
+        //   2. Stale slot-lease cleanup — reclaims only leases whose owner
+        //      pid is dead or whose task is already terminal; a live owner's
+        //      active lease is NEVER touched (LIVE-OWNER INVARIANT).
+        // Bounded & idempotent: both operations are fast, synchronous, and
+        // safe to re-run; any failure is logged to stderr and never thrown
+        // into the runner (cleanup must not mask the task's real result).
+        try {
+          killSessionProcessTreeSync(sessionId);
+        } catch (err) {
+          const msg = err && err.message ? err.message : String(err);
+          console.error(`[anser_runner] session-end sweep failed for ${sessionId}: ${msg}`);
+        }
+        try {
+          clearReclaimableTaskSlots();
+        } catch (err) {
+          const msg = err && err.message ? err.message : String(err);
+          console.error(`[anser_runner] stale slot-lease cleanup failed: ${msg}`);
+        }
       }
     },
     taskEntry,

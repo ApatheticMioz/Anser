@@ -1096,6 +1096,17 @@ export const statusHttpServer = http.createServer(async (req, res) => {
         task.result = { isError: true, text: `Task ${taskId} cancelled by request.` };
         saveTaskToDisk(task);
         notifyWaiters(task);
+        // E5: single-task cancel must also clear any stale slot-lease locks
+        // (dead-owner or already-terminal leases) so a cancelled task does not
+        // leave a zombie lease that blocks the next dispatch. Idempotent and
+        // LIVE-OWNER safe: clearReclaimableTaskSlots never touches a live
+        // owner's active lease.
+        try {
+          clearReclaimableTaskSlots();
+        } catch (err) {
+          const msg = err && err.message ? err.message : String(err);
+          console.error(`[task_registry] stale slot-lease cleanup on cancel failed: ${msg}`);
+        }
       }
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ cancelled: true, id: taskId }));
@@ -1130,6 +1141,14 @@ export const statusHttpServer = http.createServer(async (req, res) => {
       diskTask.isError = true;
       diskTask.result = { isError: true, text: `Task ${taskId} cancelled.` };
       saveTaskToDisk(diskTask);
+      // E5: clear stale slot-lease locks on disk-task cancel (idempotent,
+      // LIVE-OWNER safe — never touches a live owner's active lease).
+      try {
+        clearReclaimableTaskSlots();
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        console.error(`[task_registry] stale slot-lease cleanup on cancel failed: ${msg}`);
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ cancelled: true, id: taskId }));
     }
