@@ -103,7 +103,7 @@ export class VllmProviderService {
    *   content: string,
    *   toolCalls: Array<{ id: string, name: string, arguments: string }>,
    *   finishReason: string | null,
-   *   metrics: { promptTokens: number, completionTokens: number, ttftMs: number, totalMs: number, tokensPerSec: number, reasoningTokens: number, hadReasoning: boolean, reasoningCeilingHit: boolean, streamIdleTimeoutMs: number, streamIdleTier: "shallow" | "deep", promptTokensEstimated?: boolean }
+   *   metrics: { promptTokens: number, completionTokens: number, ttftMs: number, prefillMs: number, generationMs: number, totalMs: number, reasoningTokens: number, hadReasoning: boolean, reasoningCeilingHit: boolean, streamIdleTimeoutMs: number, streamIdleTier: "shallow" | "deep", promptTokensEstimated?: boolean }
    * }>}
    */
   async streamChat({
@@ -502,7 +502,8 @@ export class VllmProviderService {
     }
 
     const totalMs = Math.max(1, Date.now() - t0);
-    const tokensPerSec = Number(((completionTokens / totalMs) * 1000).toFixed(2));
+    const prefillMs = ttft ?? totalMs;
+    const generationMs = Math.max(0, totalMs - prefillMs);
 
     // Prompt-token telemetry: prefer the engine-reported usage (authoritative)
     // from the stream_options terminal chunk; when the engine did not emit it,
@@ -528,9 +529,10 @@ export class VllmProviderService {
     const metrics = {
       promptTokens,
       completionTokens: effectiveCompletionTokens,
-      ttftMs: ttft ?? totalMs,
+      ttftMs: prefillMs,
+      prefillMs,
+      generationMs,
       totalMs,
-      tokensPerSec,
       reasoningTokens,
       hadReasoning,
       reasoningCeilingHit,

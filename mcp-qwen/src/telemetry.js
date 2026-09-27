@@ -38,8 +38,8 @@ export const DEFAULT_STATS = {
   total_tasks_failed: 35,
   total_tasks_cancelled: 4,
   avg_ttft_ms: 13206.3,
-  avg_tokens_per_sec: 1.07,
-  peak_tokens_per_sec: 52.63,
+  avg_prefill_ms: 13206.3,
+  avg_generation_ms: 1850.0,
   reasoning_effort: {
     xhigh: 14,
     medium: 622,
@@ -158,13 +158,24 @@ export function saveCumulativeTelemetry(stats) {
 
 /**
  * Records telemetry from an executed turn.
+ * @param {object} params
+ * @param {number} [params.completionTokens=0] - Tokens generated during the completion phase.
+ * @param {number} [params.promptTokens=0] - Tokens processed during the prefill phase.
+ * @param {number} [params.reasoningTokens=0] - Deliberative reasoning tokens.
+ * @param {number} [params.ttftMs=null] - Time to first token in milliseconds.
+ * @param {number} [params.prefillMs=null] - Duration of the prefill phase in milliseconds.
+ * @param {number} [params.generationMs=null] - Duration of the generation phase in milliseconds.
+ * @param {number} [params.totalMs=null] - Total turn duration in milliseconds.
+ * @param {string} [params.effort="medium"] - Reasoning effort tier.
  */
 export function recordTurnTelemetry({
   completionTokens = 0,
   promptTokens = 0,
   reasoningTokens = 0,
   ttftMs = null,
-  tokensPerSec = null,
+  prefillMs = null,
+  generationMs = null,
+  totalMs = null,
   effort = "medium",
 } = {}) {
   const stats = getCumulativeTelemetry();
@@ -178,19 +189,25 @@ export function recordTurnTelemetry({
     stats.reasoning_effort[effort] += 1;
   }
 
-  if (typeof ttftMs === "number" && ttftMs > 0) {
+  const effectivePrefillMs = prefillMs ?? ttftMs;
+  if (typeof effectivePrefillMs === "number" && effectivePrefillMs > 0) {
     stats.avg_ttft_ms = Number(
-      ((stats.avg_ttft_ms * 0.95) + (ttftMs * 0.05)).toFixed(1)
+      (((stats.avg_ttft_ms || effectivePrefillMs) * 0.95) + (effectivePrefillMs * 0.05)).toFixed(1)
     );
+    stats.avg_prefill_ms = stats.avg_ttft_ms;
   }
 
-  if (typeof tokensPerSec === "number" && tokensPerSec > 0) {
-    stats.avg_tokens_per_sec = Number(
-      ((stats.avg_tokens_per_sec * 0.95) + (tokensPerSec * 0.05)).toFixed(2)
+  const effectiveGenMs =
+    typeof generationMs === "number" && generationMs >= 0
+      ? generationMs
+      : (typeof totalMs === "number" && typeof effectivePrefillMs === "number"
+          ? Math.max(0, totalMs - effectivePrefillMs)
+          : null);
+
+  if (typeof effectiveGenMs === "number" && effectiveGenMs >= 0) {
+    stats.avg_generation_ms = Number(
+      (((stats.avg_generation_ms || effectiveGenMs) * 0.95) + (effectiveGenMs * 0.05)).toFixed(1)
     );
-    if (tokensPerSec > stats.peak_tokens_per_sec) {
-      stats.peak_tokens_per_sec = Number(tokensPerSec.toFixed(2));
-    }
   }
 
   saveCumulativeTelemetry(stats);
@@ -329,11 +346,25 @@ export function formatTelemetrySummary() {
   const frontierSaved = calculateCostSaved(stats.total_prompt_tokens, stats.total_completion_tokens, 10.0, 50.0);
   const glmSaved = calculateCostSaved(stats.total_prompt_tokens, stats.total_completion_tokens, 1.4, 4.4);
 
+  const prefillSec = stats.avg_prefill_ms || stats.avg_ttft_ms
+    ? ((stats.avg_prefill_ms || stats.avg_ttft_ms) / 1000).toFixed(1)
+    : null;
+  const genSec = stats.avg_generation_ms
+    ? (stats.avg_generation_ms / 1000).toFixed(1)
+    : null;
+  const timingItems = [];
+  if (prefillSec) timingItems.push(`**${prefillSec}s** avg prefill (TTFT)`);
+  if (genSec) timingItems.push(`**${genSec}s** avg generation`);
+  const timingLine = timingItems.length > 0
+    ? `- **Turn Latency**: ${timingItems.join(" | ")}`
+    : null;
+
   const summary = [
     `### 🚀 Lifetime Qwen Usage & Anser Telemetry`,
     `- **Completion Generated**: **${compM}M** tokens (${stats.total_completion_tokens.toLocaleString()} tok)`,
     `- **Deliberative Reasoning**: **${reasoningM}M** thinking tokens (${stats.total_reasoning_tokens.toLocaleString()} tok)`,
     `- **Prompt Prefill**: **${promptM}M** tokens (${measuredPromptM}M exact measured + ${((stats.total_prompt_tokens_estimated || 0) / 1_000_000).toFixed(2)}M estimated)`,
+    ...(timingLine ? [timingLine] : []),
     `- **Total Turns & Sessions**: **${stats.total_turns.toLocaleString()}** turns across **${stats.total_sessions}** sessions`,
     `- **Task Lifecycle**: **${stats.total_tasks_completed}** completed, **${stats.total_tasks_failed}** failed, **${stats.total_tasks_cancelled || 0}** cancelled`,
     `- **Tool Execution**: **${stats.total_tool_calls.toLocaleString()}** calls with only **${stats.total_tool_errors}** errors (${toolErrorRate}% error rate)`,

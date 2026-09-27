@@ -609,7 +609,9 @@ export class AnserRunner {
                 promptTokens: m.promptTokens || 0,
                 reasoningTokens: m.reasoningTokens || 0,
                 ttftMs: m.ttftMs,
-                tokensPerSec: m.tokensPerSec,
+                prefillMs: m.prefillMs ?? m.ttftMs,
+                generationMs: m.generationMs ?? (m.totalMs && m.ttftMs ? Math.max(0, m.totalMs - m.ttftMs) : 0),
+                totalMs: m.totalMs,
                 effort: reasoningEffort || "medium",
               });
             } catch {}

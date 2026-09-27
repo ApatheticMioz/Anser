@@ -55,7 +55,8 @@ test("Telemetry: recordTurnTelemetry updates token counts and rolling velocity",
     promptTokens: 4000,
     reasoningTokens: 1200,
     ttftMs: 1500,
-    tokensPerSec: 48.5,
+    prefillMs: 1500,
+    generationMs: 650,
     effort: "xhigh",
   });
 
@@ -65,7 +66,8 @@ test("Telemetry: recordTurnTelemetry updates token counts and rolling velocity",
   assert.equal(updated.total_reasoning_tokens, initReasoning + 1200);
   assert.equal(updated.total_turns, initTurns + 1);
   assert.ok(updated.avg_ttft_ms > 0);
-  assert.ok(updated.avg_tokens_per_sec > 0);
+  assert.ok(updated.avg_prefill_ms > 0);
+  assert.ok(updated.avg_generation_ms > 0);
 
   // Restore baseline
   saveCumulativeTelemetry(initial);
