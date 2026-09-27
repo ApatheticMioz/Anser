@@ -568,6 +568,22 @@ export const CONTEXT_EMERGENCY_CEILING_TOKENS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS;
 })();
 
+// E4: adaptive read-size governor. When the context high-watermark (180k
+// tokens) fires, the runner arms this governor on the session's sandboxed FS
+// service. Subsequent read_file calls are then capped at this size (16KB,
+// down from the 64KB default) instead of pulling a whole file into an
+// already-pressured context (the F6.1 runaway whole-file read). The governor
+// only LOWERS the cap — it never raises it above the caller's max_bytes. A
+// read that exceeds the governed cap is truncated to the cap and a
+// suffix-scoped notice is appended (KV-prefix-stable: the notice is part of
+// the tool *result*, never the prompt prefix). Overridable via
+// QWEN_READ_GOVERNOR_MAX_BYTES for tests / operators.
+const DEFAULT_READ_GOVERNOR_MAX_BYTES = 16 * 1024;
+export const READ_GOVERNOR_MAX_BYTES = (() => {
+  const parsed = parseInt(process.env.QWEN_READ_GOVERNOR_MAX_BYTES, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_READ_GOVERNOR_MAX_BYTES;
+})();
+
 // E1: FS-as-context tool-output spillover threshold (bytes). When a tool
 // result exceeds this size, the FULL payload is written to
 // <workspace>/.scratch/tool_out_<id>.txt and the in-band observation is

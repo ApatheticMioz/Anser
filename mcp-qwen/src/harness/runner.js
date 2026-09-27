@@ -51,6 +51,7 @@ import {
   SUPERVISOR_PREVIEW_CHARS,
   SALVAGE_MAX_TOKENS,
   MAX_LEN_HUGE,
+  READ_GOVERNOR_MAX_BYTES,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
 import { recordTurnTelemetry, recordToolExecution, sampleLiveVllmMetrics } from "../telemetry.js";
@@ -927,6 +928,22 @@ export class AnserRunner {
             promptTokens: turnResult.metrics.promptTokens,
             threshold: CONTEXT_HIGH_WATERMARK_TOKENS,
           });
+          // E4: arm the adaptive read-size governor. The context is under
+          // pressure (near the 180k high-watermark), so a whole-file read
+          // (64KB default) could blow the 245K ceiling (F6.1). Lower the
+          // session's read cap to 16KB so subsequent read_file calls are
+          // bounded. The governor only LOWERS the cap and is per-session
+          // (the SandboxFsService is a fresh per-run instance), so it cannot
+          // leak across tasks. Best-effort: a missing FS service is a no-op.
+          const fsService = ctx.get("fs");
+          if (fsService && typeof fsService.setReadGovernor === "function") {
+            fsService.setReadGovernor(READ_GOVERNOR_MAX_BYTES);
+            logger.append({
+              type: "read_governor_armed",
+              maxBytes: READ_GOVERNOR_MAX_BYTES,
+              promptTokens: turnResult.metrics.promptTokens,
+            });
+          }
           messages.push({
             role: "user",
             content:

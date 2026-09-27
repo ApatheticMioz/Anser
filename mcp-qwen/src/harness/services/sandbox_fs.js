@@ -340,6 +340,28 @@ export class SandboxFsService {
         ? options.gitApplyTimeoutMs
         : 15_000;
     this._getAst = options.getAst || null;
+    // E4: adaptive read-size governor. `null` = ungoverned (the default
+    // 64KB cap applies). When the runner arms the governor (context
+    // high-watermark), it calls setReadGovernor(maxBytes) with a LOWER cap
+    // (16KB). The governor only ever LOWERS the effective read cap — it never
+    // raises it above the caller's max_bytes. This is per-session state: the
+    // SandboxFsService is instantiated fresh per run() (see sandboxFsPlugin),
+    // so the governor cannot leak across tasks.
+    this.readGovernorMaxBytes = null;
+  }
+
+  /**
+   * E4: arm (or disarm) the adaptive read-size governor for this session.
+   *
+   * @param {number|null} maxBytes The governed read cap in bytes. When a
+   *   positive number, subsequent read_file calls are capped at this size
+   *   (only ever LOWERING the effective cap, never raising it above the
+   *   caller's max_bytes). When null/undefined, the governor is disarmed and
+   *   the default 64KB cap applies.
+   */
+  setReadGovernor(maxBytes) {
+    this.readGovernorMaxBytes =
+      typeof maxBytes === "number" && maxBytes > 0 ? maxBytes : null;
   }
 
   /**
@@ -475,11 +497,33 @@ export class SandboxFsService {
       .map((line, idx) => `${startIdx + idx + 1}: ${line}`)
       .join("\n");
 
+    // E4: adaptive read-size governor. When the runner has armed the governor
+    // (context high-watermark), the effective read cap is lowered to the
+    // governed size (16KB default) — but ONLY ever below the caller's
+    // max_bytes (the governor never raises the cap). A read whose numbered
+    // content exceeds the governed cap is truncated to the cap and a
+    // SUFFIX-SCOPED notice is appended to the content (never the prompt
+    // prefix, so KV-cache prefix stability is preserved). The notice is
+    // non-coercive advisory language (policed by prompt_integrity).
+    const governorCap = this.readGovernorMaxBytes;
+    const effectiveMaxBytes =
+      governorCap != null ? Math.min(max_bytes, governorCap) : max_bytes;
+    const content = numbered.slice(0, effectiveMaxBytes);
+    const governedTruncation =
+      governorCap != null &&
+      effectiveMaxBytes === governorCap &&
+      numbered.length > effectiveMaxBytes;
+
+    const governedNotice = governedTruncation
+      ? `\n[Output governed to ${Math.round(governorCap / 1024)}KB due to context pressure. Use narrow start_line/end_line offsets or ast_search.]`
+      : "";
+
     return {
       path: resolved,
       total_lines: totalLines,
       showing_range: [startIdx + 1, endIdx],
-      content: numbered.slice(0, max_bytes),
+      content: content + governedNotice,
+      ...(governedTruncation ? { governed: true, governedMaxBytes: governorCap } : {}),
     };
   }
 
