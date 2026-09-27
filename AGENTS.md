@@ -165,6 +165,21 @@ mcp-qwen/
 **New tools** are in-process microkernel plugins under `src/harness/services/`
 — never external CLI subprocesses (in-process = sub-millisecond).
 
+### 3.5 Documentation & JSDoc Standards (Present-State Truth)
+- **Zero Storytelling / No Historical Changelogs**: Comments and docstrings must document the current software architecture, behavior, and invariants as-is in present-state truth.
+- **Strictly Forbidden Commentary Patterns**:
+  - Chronological narratives: "Raised from X to Y", "Reverted from A to B", "Historically", "Formerly", "The old code used to...".
+  - Calendar dates or version snapshots: "2026-09-12:", "v1.2:".
+  - Milestone or ticket tags: "M6a:", "P15:", "FX2:", "Issue #51:", "PR #13:", "gotcha 9".
+  - Lab notes or exploratory diaries: "Measured on our RTX 3090...", "A/B tested with 6 trials...".
+- **Canonical SWE JSDoc Specification**:
+  All exported functions, constants, and classes must use structured JSDoc specifying:
+  - Technical summary of purpose, behavior, and operational constraints.
+  - `- Unit:` (milliseconds, seconds, tokens, characters, bytes, count, ratio, path).
+  - `- Default:` (default value).
+  - `- Override:` (environment variable name or "None").
+  - Type annotations: `@type`, `@param`, `@returns`.
+
 ---
 
 ## 4. Invariant Boundaries
