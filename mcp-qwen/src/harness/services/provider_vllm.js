@@ -33,13 +33,11 @@ export class VllmProviderService {
   /**
    * Fetches available models from the vLLM server.
    *
-   * D8 (FX6): a probe failure is a real signal, never a fabricated list.
-   * The old code swallowed every failure (network error, non-2xx, bad JSON)
-   * and returned `[this.model]` — a synthetic "success" that hid an engine
-   * that was down. Now every failure path THROWS a loud error carrying the
-   * upstream status/detail, so an engine-down condition surfaces as an error
-   * instead of a fake model list. Only a genuine 2xx with a parseable
-   * `data` array yields a real list.
+   * Every failure path (network error, non-2xx, unparseable body, missing
+   * `data` array) throws an error carrying the upstream status/detail; only a
+   * genuine 2xx with a parseable `data` array yields a model list.
+   * @returns {Promise<string[]>} The list of model ids.
+   * @throws {Error} When the probe fails for any reason.
    */
   async listModels() {
     let res;
@@ -168,8 +166,8 @@ export class VllmProviderService {
     let activeUrl = this.baseUrl;
     let response;
 
-    // P7b: compose an internal abort controller with the caller's signal so
-    // the stream-idle watchdog and the reasoning ceiling can end the request
+    // Compose an internal abort controller with the caller's signal so the
+    // stream-idle watchdog and the reasoning ceiling can end the request
     // themselves, while an external cancel still propagates.
     const streamController = new AbortController();
     const onExternalAbort = () => streamController.abort(signal?.reason);
@@ -229,26 +227,39 @@ export class VllmProviderService {
   /**
    * Reads the SSE body of an established streaming response.
    *
-   * P7b hardening:
-   * - Stream-idle watchdog: if no MEANINGFUL SSE frame arrives within the
-   *   armed idle window, the request is aborted and the turn fails loudly
-   *   instead of blocking forever. M6a depth-aware tier: the window is
-   *   STREAM_IDLE_TIMEOUT_MS (shallow) for normal turns, but
+   * - Stream-idle watchdog: if no meaningful SSE frame arrives within the
+   *   armed idle window, the request is aborted and the turn fails. The
+   *   window is STREAM_IDLE_TIMEOUT_MS (shallow) for normal turns, or
    *   STREAM_IDLE_TIMEOUT_MS_DEEP when the estimated prompt tokens reach
-   *   STREAM_IDLE_DEPTH_TOKENS — a deep-context turn legitimately spends
-   *   >15 min in one healthy thinking pass, so the shallow 900s window must
-   *   not kill it mid-deliberation. The fired tier is named in the thrown
-   *   error and in metrics.streamIdleTier. Proxy keep-alive comment frames
-   *   (": keep-alive") deliberately do NOT reset the watchdog — they keep
-   *   the TCP hop alive without masking true engine silence.
+   *   STREAM_IDLE_DEPTH_TOKENS (deep-context turns). The fired tier is named
+   *   in the thrown error and in metrics.streamIdleTier. Proxy keep-alive
+   *   comment frames (": keep-alive") do not reset the watchdog.
    * - Reasoning ceiling: when estimated reasoning tokens exceed
-   *   MAX_REASONING_TOKENS in a single turn (a thinking loop hogging the
-   *   engine — see P7b forensics), the stream is ended locally with
-   *   finish_reason "length" + reasoningCeilingHit so the runner's P2d
-   *   reasoning-cutoff continuation directive lands.
-   * - Honest finish_reason: a stream that ends WITHOUT any finish_reason
-   *   and produced neither content nor tool calls is reported as null, not
-   *   synthesized as "stop" (P2b: absent signal is never trusted as success).
+   *   MAX_REASONING_TOKENS in a single turn, the stream is ended locally with
+   *   finish_reason "length" and reasoningCeilingHit set.
+   * - finish_reason: a stream that ends with no finish_reason and produced
+   *   neither content nor tool calls is reported as null, not synthesized as
+   *   "stop".
+   *
+   * @param {object} params
+   * @param {Response} params.response
+   * @param {TextDecoder} params.decoder
+   * @param {number} params.t0
+   * @param {number} params.estimatedPromptTokens
+   * @param {string} [params.sessionId]
+   * @param {(token: string) => void} [params.onToken]
+   * @param {(metric: object) => void} [params.onMetrics]
+   * @param {AbortController} params.controller
+   * @param {() => void} [params.cleanup]
+   * @returns {Promise<{
+   *   content: string,
+   *   reasoning: string,
+   *   toolCalls: Array<{ id: string, name: string, arguments: string }>,
+   *   finishReason: string | null,
+   *   metrics: object,
+   *   reasoningTokens: number,
+   *   hadReasoning: boolean
+   * }>}
    */
   async _consumeStream({
     response,
@@ -278,12 +289,10 @@ export class VllmProviderService {
     let engineUsage = null;
     const toolCallsMap = new Map(); // index -> { id, name, arguments }
 
-    // M6a (P1, F6/N3): depth-aware idle tier. A deep-context prompt (estimated
-    // prompt tokens >= STREAM_IDLE_DEPTH_TOKENS) legitimately spends >15 min in
-    // a single healthy thinking turn before any content is emitted, so it gets
-    // the longer DEEP window; normal turns keep the SHALLOW window. The tier is
-    // chosen from the chars-based estimate already computed in streamChat
-    // (the same value used for the context-headroom clamp), so no extra work.
+    // Depth-aware idle tier: a deep-context prompt (estimated prompt tokens
+    // >= STREAM_IDLE_DEPTH_TOKENS) gets the longer DEEP window; normal turns
+    // keep the SHALLOW window. The tier is chosen from the chars-based
+    // estimate already computed in streamChat.
     const isDeep = estimatedPromptTokens >= STREAM_IDLE_DEPTH_TOKENS;
     const idleTimeoutMs = isDeep ? STREAM_IDLE_TIMEOUT_MS_DEEP : STREAM_IDLE_TIMEOUT_MS;
     const idleTier = isDeep ? "deep" : "shallow";
@@ -302,8 +311,7 @@ export class VllmProviderService {
         controller.abort(new Error(`stream idle > ${idleTimeoutMs}ms (${idleTier} tier)`));
       }, idleTimeoutMs);
       if (typeof idleTimer.unref === "function") idleTimer.unref();
-      // M6a honesty: log ONCE when the deep tier arms so an operator can see a
-      // deep-context turn is on the longer window (expected, not a bug).
+      // Log once when the deep tier arms.
       if (isDeep && !deepTierLogged) {
         deepTierLogged = true;
         console.error(
@@ -386,11 +394,9 @@ export class VllmProviderService {
               // stream_options { include_usage: true } (vLLM 0.28+): the engine
               // emits a terminal chunk whose `choices` is EMPTY and whose
               // `usage` field carries the authoritative prompt/completion token
-              // counts. Capture it here, BEFORE the `choice` guard below, so the
-              // empty-choices chunk is consumed gracefully and never mistaken
-              // for a dead/empty stream (it carries no content, tool calls, or
-              // finish_reason — exactly the shape the runner's P2b/P2d guards
-              // key off, so we must not let it contribute to those signals).
+              // counts. Capture it here, before the `choice` guard below, so the
+              // empty-choices chunk is consumed gracefully and does not
+              // contribute to the finish-reason or content signals.
               if (chunk.usage && typeof chunk.usage === "object") {
                 engineUsage = chunk.usage;
               }
@@ -406,15 +412,14 @@ export class VllmProviderService {
               if (!delta) continue;
 
               // Server-side reasoning (thinking) is streamed by vLLM's
-              // --reasoning-parser qwen3 as delta.reasoning (the LIVE field, per
-              // a live SSE capture), while some engines / older parsers use
-              // delta.reasoning_content. Normalize BOTH so accounting works
-              // regardless of which the engine emits. We account for it (so the
-              // ledger shows thinking volume and TTFT reflects the first output
-              // of ANY kind) but we do NOT append it to fullContent or forward it
-              // to onToken — the user-visible token stream stays clean, and the
-              // engine-side /metrics token counters already cover watchdog
-              // velocity.
+              // --reasoning-parser qwen3 as delta.reasoning, while some engines
+              // / older parsers use delta.reasoning_content. Normalize both so
+              // accounting works regardless of which the engine emits. It is
+              // accounted for (so the ledger shows thinking volume and TTFT
+              // reflects the first output of any kind) but is not appended to
+              // fullContent or forwarded to onToken — the user-visible token
+              // stream stays clean, and the engine-side /metrics token counters
+              // already cover watchdog velocity.
               const reasoningText =
                 typeof delta.reasoning === "string"
                   ? delta.reasoning
@@ -463,10 +468,10 @@ export class VllmProviderService {
                 }
               }
 
-              // P7b: reasoning-ceiling enforcement. Cutting the stream here
-              // reports as a length cutoff (with hadReasoning already true),
-              // which routes the runner into the P2d reasoning-cutoff
-              // continuation directive instead of a retry/failure path.
+              // Reasoning-ceiling enforcement: cutting the stream here reports
+              // as a length cutoff (with hadReasoning already true), which
+              // routes the runner into the reasoning-cutoff continuation
+              // directive instead of a retry/failure path.
               if (
                 !reasoningCeilingHit &&
                 reasoningTokens >= MAX_REASONING_TOKENS
@@ -529,9 +534,8 @@ export class VllmProviderService {
       reasoningTokens,
       hadReasoning,
       reasoningCeilingHit,
-      // M6a: report the ACTUAL idle window that armed for this turn (deep vs
-      // shallow tier), not the static shallow default, so telemetry reflects
-      // what the watchdog was really set to.
+      // Report the actual idle window that armed for this turn (deep vs
+      // shallow tier), not the static shallow default.
       streamIdleTimeoutMs: idleTimeoutMs,
       streamIdleTier: idleTier,
       ...(promptTokensEstimated ? { promptTokensEstimated: true } : {}),
@@ -548,12 +552,11 @@ export class VllmProviderService {
       },
     }));
 
-    // P7b honesty rule: never synthesize a finish reason the engine never
-    // sent. A stream that ended with no reason AND no real output stays
-    // null so the runner's P2b/P2d guards classify it (retry → honest
-    // engine_empty_response) instead of mistaking a dead stream for a
-    // clean stop. The tool_calls fallback is retained for engines that
-    // legitimately end the stream after complete tool calls.
+    // Never synthesize a finish reason the engine never sent. A stream that
+    // ended with no reason and no real output stays null so the runner
+    // classifies it (retry → engine_empty_response) instead of mistaking a
+    // dead stream for a clean stop. The tool_calls fallback is retained for
+    // engines that legitimately end the stream after complete tool calls.
     let effectiveFinish = finishReason;
     if (!effectiveFinish) {
       if (toolCalls.length > 0) {
