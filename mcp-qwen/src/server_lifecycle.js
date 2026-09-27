@@ -22,19 +22,17 @@ import {
 import { getApiKeySync, runWslCommand } from "./wsl_bridge.js";
 import { streamProxyPath } from "./platform.js";
 
-// Indirection for the WSL command runner so tests can run fully offline
-// (no real wsl.exe / bash subprocesses). Defaults to the real runner.
+// Indirection for the WSL command runner; tests inject a stub to run offline.
 let wslRun = runWslCommand;
 export function setWslRunner(fn) {
   wslRun = typeof fn === "function" ? fn : runWslCommand;
 }
 
-// HEAL GATEKEEPER (injection hook): a function that returns true when live
-// work is in flight and the engine must NOT be stopped/rebooted. Wired at
-// registration time (index.js / tools.js) to the task registry so this module
-// stays free of a hard dependency on task_registry.js (which has side effects
-// at import: it starts the status HTTP server + a retention interval).
-// Default: no gate (heal allowed) — safe for the pure lifecycle module.
+// Heal gatekeeper: returns true when live work is in flight and the engine
+// must not be stopped/rebooted. Wired at registration time (index.js /
+// tools.js) to the task registry so this module avoids a hard dependency on
+// task_registry.js (which starts the status HTTP server and a retention
+// interval at import). Default: no gate (heal allowed).
 let healGatekeeper = null;
 export function setHealGatekeeper(fn) {
   healGatekeeper = typeof fn === "function" ? fn : null;
@@ -44,6 +42,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let bootMutex = Promise.resolve();
+
+/**
+ * Serializes a function against a module-level mutex so only one invocation
+ * runs at a time; each call waits for the previous one to settle (resolve or
+ * reject) before starting.
+ * @param {() => any} fn - The function to run under the mutex.
+ * @returns {Promise<any>} The promise returned by `fn`.
+ */
 export function withBootMutex(fn) {
   const result = bootMutex.then(fn, fn);
   bootMutex = result.then(
@@ -129,12 +135,16 @@ export function releaseExclusiveLock(lockPath) {
   }
 }
 
+/**
+ * Queries the vLLM engine's /models endpoint and reports the maximum model
+ * length of the first served model.
+ * @returns {Promise<{maxModelLen: number}|null>} The max model length, or
+ *   null when the engine is unreachable or returns a non-OK status.
+ */
 export async function serverInfo() {
   try {
     const key = getApiKeySync();
-    // FX2: vLLM does not require auth. When no key file is found,
-    // getApiKeySync returns null and we send NO Authorization header
-    // (honest) instead of a fabricated token.
+    // Omit the Authorization header when no key file is present.
     const headers = {};
     if (key) headers.Authorization = `Bearer ${key}`;
     const res = await fetch(`${BASE_URL}/models`, {
@@ -150,6 +160,11 @@ export async function serverInfo() {
   }
 }
 
+/**
+ * Classifies the engine by its max model length.
+ * @returns {Promise<"huge"|"fast"|"unknown"|null>} "huge" for >= 200000,
+ *   "fast" for > 0, "unknown" for 0, or null when the engine is unreachable.
+ */
 async function currentMode() {
   const info = await serverInfo();
   if (!info) return null;
@@ -159,6 +174,15 @@ async function currentMode() {
 }
 
 let canaryCache = { at: 0, result: null };
+
+/**
+ * Probes engine health by issuing a minimal chat completion and inspecting the
+ * response for visible content or reasoning. Results are cached for 60s.
+ * @param {boolean} [force=false] - Bypass the 60s cache and re-probe.
+ * @returns {Promise<object>} A result object with `ok` (boolean),
+ *   `latency_ms`, and either `skipped` (when the probe was not run) or
+ *   `reply`/`content_chars`/`has_reasoning`/`finish_reason`/`error`.
+ */
 export async function canaryProbe(force = false) {
   if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
     return { ok: true, skipped: "engine_protected_offline", latency_ms: 0 };
@@ -170,7 +194,7 @@ export async function canaryProbe(force = false) {
   let result;
   try {
     const key = getApiKeySync();
-    // FX2: omit Authorization when no key file exists (honest, not fabricated).
+    // Omit the Authorization header when no key file is present.
     const headers = { "Content-Type": "application/json" };
     if (key) headers.Authorization = `Bearer ${key}`;
     const res = await fetch(`${BASE_URL}/chat/completions`, {
@@ -178,11 +202,7 @@ export async function canaryProbe(force = false) {
       headers,
       body: JSON.stringify({
         model: "qwen3.8-27b",
-        // Ceiling only: the canary prompt ("Reply with: ok") makes a healthy
-        // engine stop after a few visible tokens, so latency stays sub-second.
-        // 8 was too small: with --reasoning-parser qwen3, server-side thinking
-        // streams into the reasoning field and can consume the entire budget,
-        // leaving message.content empty on a perfectly healthy engine.
+        // Cap on total generated tokens (content + reasoning).
         max_tokens: 512,
         messages: [{ role: "user", content: "Reply with: ok" }],
       }),
@@ -211,9 +231,8 @@ export async function canaryProbe(force = false) {
           finish_reason: data?.choices?.[0]?.finish_reason ?? null,
         };
       } else {
-        // HTTP 200 with no visible content AND no reasoning: a generation-less
-        // response — the exact failure shape that silently broke task runs
-        // (commit 742e007). Do NOT treat this as a healthy engine.
+        // HTTP 200 with neither content nor reasoning is a generation-less
+        // response and is not treated as a healthy engine.
         result = {
           ok: false,
           latency_ms: dt,
@@ -290,18 +309,18 @@ export function bumpWedgeCounter(reason) {
   }
 }
 
+/**
+ * Determines whether the engine is wedged. The engine runs a single
+ * concurrent generation (MAX_SEQS=1), so a canary probe is only meaningful
+ * when the engine is idle; while busy, a canary would queue behind the active
+ * generation and time out, so only stats silence is used as a wedge signal.
+ * @returns {Promise<object>} A state object with `wedged`, `canary`, `stats`,
+ *   `isSilenceWedged`, `isCanaryWedged`, `engineBusy`, and `gauges`.
+ */
 export async function engineWedgeState() {
-  // BUSY-GATE: read the engine gauges FIRST. The engine runs MAX_SEQS=1 (one
-  // generation at a time), so while any coworker task is synthesizing (prefill
-  // TTFTs of 100-286s are NORMAL) a canary generation would queue behind it and
-  // time out at the abort deadline — measuring queue depth, NOT health. Firing
-  // the canary unconditionally misfired twice in production (killed a 17-minute
-  // task). So: when the engine is busy, do NOT fire the canary; the only wedge
-  // signal is stats silence. When idle, the canary is authoritative.
+  // Read the engine gauges first to determine busy state.
   const metrics = await readEngineMetrics();
-  // C1: /metrics unavailable → state UNKNOWN → fail CLOSED (treat as busy).
-  // A canary fired against a busy engine would queue behind the active
-  // generation and time out, producing a false wedge signal.
+  // /metrics unavailable is treated as busy (fail-closed).
   const metricsUnavailable = metrics === null;
   const runningReqs = metrics?.["vllm:num_requests_running"] ?? 0;
   const waitingReqs = metrics?.["vllm:num_requests_waiting"] ?? 0;
@@ -318,8 +337,8 @@ export async function engineWedgeState() {
   let canary;
   let isCanaryWedged;
   if (engineBusy) {
-    // C1: when the busy state comes from a metrics fetch failure, the canary
-    // is refused with an explicit error (fail-closed), not a neutral sentinel.
+    // When busy due to a metrics fetch failure, the canary is refused with an
+    // explicit error (fail-closed) rather than a neutral sentinel.
     canary = metricsUnavailable
       ? { ok: false, skipped: "metrics_unavailable", error: "/metrics fetch failed; busy-gate fail-closed" }
       : { ok: true, skipped: "engine_busy", latency_ms: 0 };
@@ -356,15 +375,20 @@ export async function engineWedgeState() {
   };
 }
 
+/**
+ * Stops and restarts a wedged engine. Refuses to run when engine interruption
+ * is disabled, when the heal gatekeeper reports live work in flight, or when
+ * another process already holds the heal lock.
+ * @param {number|null} statsAgeSec - Age of the last engine stats line, in
+ *   seconds; recorded in the heal lock payload.
+ * @returns {Promise<object>} A result object with `healed` (boolean) and a
+ *   `note` (when refused) or `boot` status (when healed).
+ */
 export async function healWedgedEngine(statsAgeSec) {
   if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
     return { healed: false, note: "heal refused: engine interruption disabled by default (ALLOW_ENGINE_INTERRUPT unset)" };
   }
-  // HEAL BACKSTOP: refuse to stop/reboot the engine while live work is in
-  // flight (in-memory running/queued tasks, or a disk task whose owner pid is
-  // alive with a recent heartbeat). A reboot here would kill the in-flight
-  // task's socket (undici "terminated"). Deliberately does NOT bump the wedge
-  // counter — this is a healthy-but-busy engine, not a wedge.
+  // Refuse to stop/reboot the engine while live work is in flight.
   if (healGatekeeper) {
     try {
       if (healGatekeeper()) {
@@ -418,14 +442,13 @@ async function warmEngine() {
 }
 
 // ---------------------------------------------------------------------------
-// P10 — Stream-proxy lifecycle hardening
+// Stream-proxy lifecycle
 // ---------------------------------------------------------------------------
-//
-// Pre-spawn cleanup is TARGETED: it kills the current listener on the port by
+// Pre-spawn cleanup is targeted: it kills the current listener on the port by
 // its specific pid (probed from /health or `ss -ltnp`), never a broad `pkill -f`.
 
-// Indirection for the stream-proxy spawner so tests can simulate a slow or
-// failed start without a real node subprocess. Defaults to the real spawner.
+// Indirection for the stream-proxy spawner; tests inject a stub to simulate a
+// slow or failed start.
 let spawnStreamProxy = null;
 export function setStreamProxySpawner(fn) {
   spawnStreamProxy = typeof fn === "function" ? fn : null;
@@ -437,10 +460,9 @@ export function setStreamProxySpawner(fn) {
  */
 async function realSpawnStreamProxy() {
   if (IS_WINDOWS) {
-    // WSL tears the session down when the `bash -c` leader exits, killing a
-    // freshly-forked bg child before it execs — setsid cannot win that race
-    // (observed 2026-09-27: spawn returned exit 0 in ~70ms while the child
-    // never materialized). Linger 1s, mirroring the engine launcher below.
+    // WSL tears the session down when the `bash -c` leader exits, which can
+    // kill a freshly-forked background child before it execs; the 1s linger
+    // keeps the session alive long enough for the child to detach.
     await runWslCommand(
       `setsid node ${streamProxyPath()} < /dev/null > /tmp/stream_proxy.log 2>&1 & sleep 1`
     );
@@ -455,11 +477,11 @@ async function realSpawnStreamProxy() {
 }
 
 /**
- * Find the pid of the process currently listening on the stream-proxy port,
- * if any. Probes /health first (the proxy may be alive but wedged), then
- * falls back to `ss -ltnp` on the port. Returns null when no listener is
- * found. Never throws.
- * @returns {Promise<number|null>}
+ * Finds the pid of the process currently listening on the stream-proxy port,
+ * if any. Probes /health first, then falls back to `ss -ltnp` on the port.
+ * @returns {Promise<{pid: number, verified: boolean}|null>} The listener pid
+ *   and whether it was verified as the stream proxy, or null when no listener
+ *   is found. Never throws.
  */
 async function findStreamProxyListenerPid() {
   // 1. Probe /health for a verified pid.
@@ -496,14 +518,13 @@ async function findStreamProxyListenerPid() {
 }
 
 /**
- * Ensure the universal stream proxy is running and healthy on
+ * Ensures the universal stream proxy is running and healthy on
  * STREAM_PROXY_PORT.
- *
  * @param {object} [opts]
- * @param {number} [opts.healthPolls=75] number of 200ms health polls before
+ * @param {number} [opts.healthPolls=75] Number of 200ms health polls before
  *   declaring failure (default 75 = 15s). Tests may pass a smaller value.
  * @returns {Promise<boolean>} true once the proxy is healthy.
- * @throws {Error} if the proxy does not become healthy within the window;
+ * @throws {Error} If the proxy does not become healthy within the window;
  *   the message includes the captured spawn failure when present.
  */
 export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
@@ -564,9 +585,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
     process.stderr.write(`[stream-proxy] spawn failed: ${err.message}\n`);
   }
 
-  // 4. HEALTH window: 15s (75 x 200ms) with early-exit success. A cold WSL
-  //    node spawn routinely needs 6-8s; the old 5s window misfired on live
-  //    dispatches.
+  // 4. Health window: poll until the proxy reports healthy, with early exit.
   for (let i = 0; i < healthPolls; i++) {
     await new Promise((r) => setTimeout(r, 200));
     try {
@@ -584,6 +603,14 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
   );
 }
 
+/**
+ * Ensures the vLLM engine is running. If the engine is already up it checks
+ * for a wedge (healing one when AUTO_HEAL is enabled); otherwise it boots the
+ * engine, coordinating across processes via an atomic boot lock.
+ * @returns {Promise<object>} A result object with `switched` (boolean) and a
+ *   `status` string; when a wedged engine was healed, a `heal` object is
+ *   included.
+ */
 export async function ensureServerRunning() {
   if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
     return { switched: false, status: "boot_refused_offline_protected" };
@@ -640,6 +667,12 @@ export async function ensureServerRunning() {
   }
 }
 
+/**
+ * Stops the vLLM engine and waits up to 5s for it to stop responding.
+ * @returns {Promise<object>} A result object with `stopped` (boolean) and a
+ *   `reason` string; when the engine still responds after the grace window,
+ *   `stopped` is false and `mode` reports the detected engine mode.
+ */
 export async function stopServer() {
   if (wslRun === runWslCommand && (!ALLOW_ENGINE_INTERRUPT || process.env.TEST_OFFLINE === "1" || IS_TEST_ENV)) {
     return {
@@ -655,11 +688,8 @@ export async function stopServer() {
     mode = await currentMode();
     if (!mode) return { stopped: true };
   }
-  // FX5-B (D7): the 5s grace window elapsed but the engine STILL responds.
-  // This is a real failure, not a success — report it honestly instead of
-  // fabricating {stopped:true}. The probe is the same currentMode() the loop
-  // already uses (a /models fetch against the engine port), so this is a
-  // genuine liveness check, not a guess.
+  // The grace window elapsed but the engine still responds: report a failure
+  // rather than a success.
   return {
     stopped: false,
     reason: "engine_still_responding",
@@ -668,6 +698,15 @@ export async function stopServer() {
 }
 
 let metricsCache = { at: 0, data: null };
+
+/**
+ * Fetches and parses the vLLM /metrics endpoint, returning a map of metric
+ * name to value. Results are cached for `maxAgeMs`.
+ * @param {number} [maxAgeMs=5000] Maximum age of a cached result, in
+ *   milliseconds.
+ * @returns {Promise<Record<string, number>|null>} The parsed metrics, or null
+ *   when the fetch fails.
+ */
 export async function readEngineMetrics(maxAgeMs = 5000) {
   if (metricsCache.data && Date.now() - metricsCache.at < maxAgeMs) return metricsCache.data;
   try {
@@ -686,14 +725,17 @@ export async function readEngineMetrics(maxAgeMs = 5000) {
     metricsCache = { at: Date.now(), data: map };
     return map;
   } catch (err) {
-    // C1: /metrics fetch failure → state UNKNOWN. Log to stderr so the
-    // failure is observable; the caller (engineWedgeState) fails CLOSED.
+    // A /metrics fetch failure is logged to stderr and reported as null; the
+    // caller (engineWedgeState) treats it as busy (fail-closed).
     process.stderr.write(`[server_lifecycle] /metrics fetch failed: ${err.message}\n`);
     metricsCache = { at: Date.now(), data: null };
     return null;
   }
 }
 
+/**
+ * Clears the canary and metrics caches so the next probe re-fetches.
+ */
 export function resetEngineHealthCache() {
   canaryCache = { at: 0, result: null };
   metricsCache = { at: 0, data: null };
