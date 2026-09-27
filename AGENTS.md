@@ -160,7 +160,7 @@ mcp-qwen/
                            #   web_service, provider_vllm, mcp_bridge, event_logger
       evo/                 # evo_operator, lineage_dag, evaluator,
                            #   trace_repair, watchdog
-  tests/                   # 62 suites (see section 5)
+  tests/                   # 63 suites (see section 5)
 ```
 **New tools** are in-process microkernel plugins under `src/harness/services/`
 — never external CLI subprocesses (in-process = sub-millisecond).
@@ -224,7 +224,7 @@ There is **no root `package.json`** — always use `--prefix mcp-qwen`.
 # Fast canary gate - 9 critical suites (~4s, offline, zero engine interruption). Run during active development.
 npm test --prefix mcp-qwen
 
-# Full authoritative gate - 62 suites (single-pass complete verification). Run before PR / milestone commit.
+# Full authoritative gate - 63 suites (single-pass complete verification). Run before PR / milestone commit.
 npm run test:all --prefix mcp-qwen
 
 # GPU-less / CI: live suites skip honestly by default when ALLOW_ENGINE_INTERRUPT is unset or TEST_OFFLINE=1.
@@ -235,8 +235,8 @@ TEST_OFFLINE=1 npm run test:all --prefix mcp-qwen
 | Command | Suites | Runtime | Purpose |
 |---|---|---|---|
 | `npm test` | **9** | ~4 s | Instant canary gate (security, AST canary, syntax gates, edit_file guard, search_code guard, schema parity, platform, protocol sync, prompt integrity). |
-| `npm run test:all` | **62** | ~48 s | Full authoritative offline & integration gate. Single-pass run (authoritative CI signal). |
-| On-disk `.test.js` | **62** | — | Total test suites in repository. |
+| `npm run test:all` | **63** | ~48 s | Full authoritative offline & integration gate. Single-pass run (authoritative CI signal). |
+| On-disk `.test.js` | **63** | — | Total test suites in repository. |
 
 **Zero Engine Interruption Invariant:**
 By default, tests NEVER interrupt, probe, or reboot a running vLLM instance (`ALLOW_ENGINE_INTERRUPT=0`). Live suites (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) **skip honestly** by default so running background Anser workloads on single-sequence hardware are protected. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
@@ -262,7 +262,7 @@ By default, tests NEVER interrupt, probe, or reboot a running vLLM instance (`AL
 `.github/workflows/ci.yml` runs the gate on every push/PR across a
 **Node 22 & 24 x ubuntu-latest & windows-latest** matrix (4 jobs, no
 fail-fast). It uses `npm ci` in `mcp-qwen/` and runs the authoritative
-`test:all` gate (62 suites). A green CI is required before a PR is mergeable.
+`test:all` gate (63 suites). A green CI is required before a PR is mergeable.
 
 ---
 

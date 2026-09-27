@@ -506,15 +506,32 @@ async function vectorI() {
   assert.strictEqual(res.status, "completed");
   const toolMsg = llm._lastMessages?.find((m) => m.role === "tool" && m.tool_call_id === "call_big_1");
   assert.ok(toolMsg, "i: tool message present in history");
+  // E1: the >8KB observation is no longer hard-truncated; it is spilled to
+  // .scratch/ and the in-band message is a pointer (head + tail + re-read hint).
   assert.ok(
-    toolMsg.content.includes("[Observation Truncated: Tool output exceeded 32KB limit"),
-    "i: observation truncation warning injected"
+    toolMsg.content.includes("[Tool output spilled to disk"),
+    "i: tool observation spilled to disk with pointer block"
   );
   assert.ok(
-    Buffer.byteLength(toolMsg.content, "utf8") < 35000,
-    `i: tool observation capped near 32KB (was ${Buffer.byteLength(toolMsg.content, "utf8")} bytes)`
+    toolMsg.content.includes("tool_out_call_big_1.txt"),
+    "i: pointer names the spill file"
   );
-  console.log("  [PASS] (i) large tool observation (>32KB) -> truncated with explicit SWE-agent warning");
+  assert.ok(
+    Buffer.byteLength(toolMsg.content, "utf8") < 4096,
+    `i: in-band pointer is small (was ${Buffer.byteLength(toolMsg.content, "utf8")} bytes)`
+  );
+  // The full payload was written to the sandbox .scratch/ dir, not amputated.
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const spillPath = path.join(process.cwd(), ".scratch", "tool_out_call_big_1.txt");
+  assert.ok(fs.existsSync(spillPath), "i: spill file written to .scratch/");
+  const spillBytes = Buffer.byteLength(fs.readFileSync(spillPath, "utf8"), "utf8");
+  // The shell executor pre-caps bash output at 48KB (shell_executor.js) before
+  // the spill, so the spilled payload is the capped (~48KB) result, not 50KB.
+  assert.ok(spillBytes > 8192, `i: spill file holds the (capped) payload (${spillBytes} bytes > 8KB threshold)`);
+  assert.ok(fs.readFileSync(spillPath, "utf8").includes("A"), "i: spill file contains the command output");
+  fs.rmSync(spillPath, { force: true });
+  console.log("  [PASS] (i) large tool observation (>8KB) -> spilled to .scratch/ with pointer (no hard truncation)");
 }
 
 // ---------------------------------------------------------------------------

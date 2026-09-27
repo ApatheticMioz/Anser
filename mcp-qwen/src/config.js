@@ -568,5 +568,19 @@ export const CONTEXT_EMERGENCY_CEILING_TOKENS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_EMERGENCY_CEILING_TOKENS;
 })();
 
+// E1: FS-as-context tool-output spillover threshold (bytes). When a tool
+// result exceeds this size, the FULL payload is written to
+// <workspace>/.scratch/tool_out_<id>.txt and the in-band observation is
+// replaced with a pointer block (head + tail preview + re-read hint) instead
+// of being hard-truncated. This fixes the F6.1 context-ceiling blowout: a
+// single large read/bash result no longer either blows the 245K context or
+// amputates the payload past a 32KB cut. Overridable via QWEN_TOOL_SPILL_BYTES
+// for unit-testability (the canary sets it small to trigger the spill).
+const DEFAULT_TOOL_SPILL_BYTES = 8192;
+export const TOOL_SPILL_BYTES = (() => {
+  const parsed = parseInt(process.env.QWEN_TOOL_SPILL_BYTES, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TOOL_SPILL_BYTES;
+})();
+
 
 

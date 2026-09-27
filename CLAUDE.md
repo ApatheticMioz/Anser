@@ -153,7 +153,7 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 1. **Incremental Milestone Verification & Test Gates**:
    - Verify changes after each component batch using the **Fast Canary Gate** (`npm test --prefix mcp-qwen`, ~4s).
    - **Zero Engine Interruption Invariant**: Testing runs offline by default (`ALLOW_ENGINE_INTERRUPT=0`). Automated test suites and offline checks must NEVER probe port 18020, fire canary completions, or reboot the vLLM server while tasks are in flight. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
-   - Run the full authoritative test suite (`npm run test:all --prefix mcp-qwen`, 62 suites) and build validation before concluding the milestone.
+   - Run the full authoritative test suite (`npm run test:all --prefix mcp-qwen`, 63 suites) and build validation before concluding the milestone.
 2. **Milestone Verification Gate**:
    - Before declaring milestone completion or executing git commits, verify all changes against active test suites and ensure no regressions were introduced.
    - Confirm all requirements for the active milestone are fully verified with verifiable test evidence.

@@ -40,6 +40,7 @@ import {
   CONTEXT_WARN_TOKENS,
   CONTEXT_HIGH_WATERMARK_TOKENS,
   CONTEXT_EMERGENCY_CEILING_TOKENS,
+  TOOL_SPILL_BYTES,
   PROMPT_BUDGET_CHARS,
   BASE_TURN_BUDGET,
   MAX_ELASTIC_TURNS,
@@ -172,6 +173,79 @@ export const SESSION_ROLLOVER_ADVISORY =
   "turn-count boundary for a single session. Complete the current task, then " +
   "roll to a FRESH session on the next dispatch — a new session starts with a " +
   "clean, low-cost context instead of re-prefilling this deep one.";
+
+/**
+ * E1: FS-as-context tool-output spillover.
+ *
+ * When a tool result exceeds `thresholdBytes`, the FULL payload is written to
+ * `<scratchDir>/tool_out_<id>.txt` (via the sandboxed FS service, so the write
+ * stays inside the workspace root) and the in-band observation is replaced with
+ * a pointer block: a head preview, a tail preview, the absolute scratch path,
+ * the original byte count, and a re-read hint. This is SUFFIX-SCOPED — it only
+ * bounds the tool *result* message, never the prompt prefix — so KV-cache
+ * prefix stability is preserved.
+ *
+ * Fail-fast (zero-masking): if the scratch write throws, the error is surfaced
+ * as the tool observation (`isError`-style notice) rather than silently
+ * truncating the payload. A failed spill must be loud, not a quiet 32KB cut.
+ *
+ * @param {object} params
+ * @param {string} params.output The full tool output string.
+ * @param {number} params.thresholdBytes Spill threshold (TOOL_SPILL_BYTES).
+ * @param {string} params.id A stable identifier for the spill file (tool call id).
+ * @param {string} params.scratchDir Relative scratch dir under the sandbox root
+ *   (e.g. ".scratch").
+ * @param {object} [params.fsService] The sandboxed FS service (ctx.get("fs")).
+ *   When absent the spill is skipped (returns the original output unchanged) —
+ *   this keeps the helper safe to call in contexts without a mounted FS.
+ * @returns {Promise<{output: string, spilled: boolean, path?: string, bytes?: number}>}
+ */
+export async function spillToolOutput({
+  output,
+  thresholdBytes,
+  id,
+  scratchDir,
+  fsService,
+}) {
+  const bytes = Buffer.byteLength(output, "utf8");
+  if (!fsService || bytes <= thresholdBytes) {
+    return { output, spilled: false, bytes };
+  }
+
+  const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "out";
+  const relPath = `${scratchDir}/tool_out_${safeId}.txt`;
+  const head = output.slice(0, 1024);
+  const tail = output.slice(-1024);
+
+  let writtenPath;
+  try {
+    const res = await fsService.writeFile({ path: relPath, content: output, overwrite: true });
+    writtenPath = res && res.path ? res.path : relPath;
+  } catch (err) {
+    // Fail-fast: a failed spill is surfaced, never silently truncated.
+    return {
+      output:
+        `[ToolOutputSpillError] The full ${bytes}-byte tool output could not be ` +
+        `saved to ${relPath} (${err.message}). The payload was NOT truncated in-band; ` +
+        `re-run the tool with a narrower query (head/tail/grep, start_line/end_line) ` +
+        `to retrieve a smaller result.`,
+      spilled: false,
+      bytes,
+      error: err.message,
+    };
+  }
+
+  const pointer =
+    `[Tool output spilled to disk: ${bytes} bytes > ${thresholdBytes}-byte threshold. ` +
+    `Full payload saved to: ${writtenPath}]\n\n` +
+    `--- Head preview (first 1024 bytes) ---\n${head}\n` +
+    `... [${bytes - 2048} bytes elided] ...\n` +
+    `--- Tail preview (last 1024 bytes) ---\n${tail}\n\n` +
+    `Hint: use read_file with start_line/end_line or search_code to inspect ` +
+    `specific regions of ${writtenPath}.`;
+
+  return { output: pointer, spilled: true, path: writtenPath, bytes };
+}
 
 
 export class AnserRunner {
@@ -937,21 +1011,26 @@ export class AnserRunner {
               ? toolExecution.result
               : JSON.stringify(toolExecution.result ?? "");
 
-          const MAX_TOOL_OUTPUT_BYTES = 32 * 1024; // 32 KB observation limit (SWE-agent standard)
-          const MAX_TOOL_OUTPUT_LINES = 1000;
-
-          if (Buffer.byteLength(toolOutputString, "utf8") > MAX_TOOL_OUTPUT_BYTES) {
-            const originalBytes = Buffer.byteLength(toolOutputString, "utf8");
-            toolOutputString =
-              toolOutputString.slice(0, MAX_TOOL_OUTPUT_BYTES) +
-              `\n\n[Observation Truncated: Tool output exceeded 32KB limit (original: ${originalBytes} bytes). Narrow your query with head/tail/grep or redirect to disk.]`;
-          } else {
-            const lines = toolOutputString.split("\n");
-            if (lines.length > MAX_TOOL_OUTPUT_LINES) {
-              toolOutputString =
-                lines.slice(0, MAX_TOOL_OUTPUT_LINES).join("\n") +
-                `\n\n[Observation Truncated: Tool output exceeded 1,000 lines (original: ${lines.length} lines). Narrow your query with head/tail/grep or redirect to disk.]`;
-            }
+          // E1: FS-as-context spillover. Large tool results are written in full
+          // to <workspace>/.scratch/ and the in-band observation is replaced with
+          // a pointer (head + tail preview + re-read hint) instead of being
+          // hard-truncated. Suffix-scoped, so KV prefix stability is preserved.
+          const spill = await spillToolOutput({
+            output: toolOutputString,
+            thresholdBytes: TOOL_SPILL_BYTES,
+            id: tc.id,
+            scratchDir: ".scratch",
+            fsService: ctx.get("fs"),
+          });
+          toolOutputString = spill.output;
+          if (spill.spilled) {
+            logger.append({
+              type: "tool_output_spilled",
+              toolCallId: tc.id,
+              toolName: tc.function.name,
+              bytes: spill.bytes,
+              path: spill.path,
+            });
           }
 
           if (onActivity) {
