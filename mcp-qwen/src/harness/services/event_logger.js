@@ -66,8 +66,10 @@ export class EventLoggerService {
     let content;
     try {
       content = fs.readFileSync(this.logFile, "utf8");
-    } catch {
-      return false;
+    } catch (err) {
+      // C1: ENOENT is legitimate; other I/O failures throw.
+      if (err.code === "ENOENT") return false;
+      throw err;
     }
     for (const line of content.split("\n")) {
       if (!line.trim()) continue;
@@ -103,8 +105,11 @@ export class EventLoggerService {
           }
         })
         .filter(Boolean);
-    } catch {
-      return [];
+    } catch (err) {
+      // C1: ENOENT is legitimate (file deleted between existsSync and read).
+      // Any other I/O failure is a real error — throw, don't mask.
+      if (err.code === "ENOENT") return [];
+      throw err;
     }
   }
 

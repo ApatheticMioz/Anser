@@ -124,7 +124,14 @@ export function getCumulativeTelemetry() {
         },
       };
     }
-  } catch {}
+  } catch (err) {
+    // C1: corrupt stats file → quarantine, never silent-zero.
+    const quarantineName = `stats.json.corrupt-${Date.now()}`;
+    try {
+      fs.renameSync(STATS_FILE, path.join(TELEMETRY_DIR, quarantineName));
+    } catch {}
+    process.stderr.write(`[Telemetry] Corrupt stats file quarantined to ${quarantineName}: ${err.message}\n`);
+  }
   return JSON.parse(JSON.stringify(DEFAULT_STATS));
 }
 

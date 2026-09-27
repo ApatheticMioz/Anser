@@ -343,6 +343,7 @@ export class WebService {
     }
 
     let lastError = null;
+    let anySucceeded = false;
     for (const p of chain) {
       try {
         let results = [];
@@ -352,6 +353,7 @@ export class WebService {
         else if (p === "searxng") results = await this._searchSearxng(trimmedQuery, limit, cfg.searxng_url);
         else if (p === "duckduckgo") results = await this._searchDuckDuckGo(trimmedQuery, limit, safe_search);
 
+        anySucceeded = true;
         if (results && results.length > 0) {
           return {
             query: trimmedQuery,
@@ -368,6 +370,15 @@ export class WebService {
     }
 
     if (lastError && chain.length === 1) throw lastError;
+
+    // C1: all providers in the auto chain failed — surface the error,
+    // never mask it as a legitimate empty result.
+    if (!anySucceeded && lastError) {
+      return {
+        isError: true,
+        text: `SearchError: all ${chain.length} provider(s) in the auto chain failed. Last error: ${lastError.message}`,
+      };
+    }
 
     return {
       query: trimmedQuery,

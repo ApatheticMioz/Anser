@@ -14,6 +14,7 @@ import {
   sampleLiveVllmMetrics,
   formatTelemetrySummary,
 } from "../src/telemetry.js";
+import { QWEN_STATE_DIR } from "../src/config.js";
 
 test("Telemetry: calculateCostSaved pricing arithmetic", () => {
   // Claude Sonnet 5: 1,000,000 prompt tokens @ $2.00/M = $2.00
@@ -106,6 +107,29 @@ test("Telemetry: recordTaskResult tracks completed, failed, and cancelled tasks"
 
   // Restore baseline
   saveCumulativeTelemetry(initial);
+});
+
+test("Telemetry: C1 — corrupt stats file → quarantine + fresh DEFAULT_STATS (never silent-zero)", () => {
+  const telemetryDir = path.join(QWEN_STATE_DIR, "telemetry");
+  const statsFile = path.join(telemetryDir, "stats.json");
+  fs.mkdirSync(telemetryDir, { recursive: true });
+
+  // Write a corrupt (non-JSON) stats file
+  fs.writeFileSync(statsFile, "{{{not valid json", "utf8");
+
+  const stats = getCumulativeTelemetry();
+
+  // Must return DEFAULT_STATS (not silent-zero)
+  assert.equal(stats.total_completion_tokens, DEFAULT_STATS.total_completion_tokens);
+  assert.equal(stats.total_sessions, DEFAULT_STATS.total_sessions);
+
+  // The corrupt file must be quarantined (renamed to *.corrupt-<epoch>)
+  assert.equal(fs.existsSync(statsFile), false, "original stats.json removed");
+  const quarantined = fs.readdirSync(telemetryDir).filter((f) => f.startsWith("stats.json.corrupt-"));
+  assert.ok(quarantined.length === 1, `exactly one quarantined file (got: ${quarantined.join(",")})`);
+
+  // Clean up
+  fs.rmSync(path.join(telemetryDir, quarantined[0]), { force: true });
 });
 
 test("Telemetry: formatTelemetrySummary produces structured markdown and stats", () => {

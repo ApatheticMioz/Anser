@@ -258,9 +258,30 @@ async function run() {
     }
 
     // -------------------------------------------------------------------------
-    // Test 9: Live Search Integration (when network reachable)
+    // Test 9: C1 — all providers failed → isError, NOT empty success
     // -------------------------------------------------------------------------
-    console.log("\n[Test 9] Web Search Engine Check");
+    console.log("\n[Test 9] C1: all providers failed → isError (not empty success)");
+    {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () => {
+        throw new Error("ENETUNREACH: network unreachable");
+      };
+      try {
+        const res = await web.search({ query: "test query", provider: "auto" });
+        // Must NOT be a silent empty success
+        ok(res.isError === true, "C1: res.isError === true when all providers failed");
+        ok(typeof res.text === "string" && res.text.includes("SearchError"), "C1: res.text contains SearchError");
+        ok(res.count === undefined, "C1: no fabricated count field");
+        ok(res.results === undefined, "C1: no fabricated results field");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 10: Live Search Integration (when network reachable)
+    // -------------------------------------------------------------------------
+    console.log("\n[Test 10] Web Search Engine Check");
     {
       try {
         const searchRes = await web.search({ query: "Node.js", max_results: 3 });

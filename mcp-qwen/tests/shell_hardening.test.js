@@ -244,6 +244,27 @@ await checkAsync("f: regex-metachar id -> pattern regex-escaped AND shell-escape
 });
 
 // ---------------------------------------------------------------------------
+// (g) C1: WSL command failure ≠ no-matches → must throw, not return []/undefined
+// ---------------------------------------------------------------------------
+await checkAsync("g: C1 killSessionProcessTreeSync throws when pgrep runner fails", async () => {
+  setWslCommandSyncRunner(() => {
+    throw new Error("WSL distro not found");
+  });
+  try {
+    let threw = false;
+    try {
+      killSessionProcessTreeSync("test_session_c1");
+    } catch (err) {
+      threw = true;
+      assert.ok(/WslSweepError/.test(err.message), `expected WslSweepError, got: ${err.message}`);
+    }
+    assert.ok(threw, "killSessionProcessTreeSync must throw when pgrep runner fails");
+  } finally {
+    setWslCommandSyncRunner(null);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // (e) getApiKeySync with no key file -> null; request-builder omits Authorization
 // ---------------------------------------------------------------------------
 check("e: getApiKeySync returns null when no key file exists", () => {

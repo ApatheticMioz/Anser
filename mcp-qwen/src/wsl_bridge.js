@@ -221,7 +221,13 @@ function pgrepEscapeId(s) {
 
 /**
  * Synchronous WSL command runner (bash -c) for the shutdown path.
- * Returns the raw stdout (Buffer). Never throws.
+ * Returns the raw stdout (Buffer).
+ *
+ * C1: a WSL command FAILURE (subprocess error / timeout) is NOT the same as
+ * "no matches" — it throws so callers (killSessionProcessTree*) can surface
+ * it instead of masking it as an empty result. The test-safety guard for
+ * kill/stop commands (returns empty buffer without executing) is a deliberate
+ * no-op, not a failure, and is preserved.
  *
  * Indirection for the WSL command runner so tests can run fully offline
  * (no real wsl.exe / bash subprocesses). Defaults to the real runner.
@@ -234,12 +240,11 @@ export function setWslCommandSyncRunner(fn) {
 
 function runWslCommandSync(cmd) {
   if (wslCommandSyncRunner) {
-    try {
-      const out = wslCommandSyncRunner(cmd);
-      return Buffer.isBuffer(out) ? out : Buffer.from(String(out ?? ""));
-    } catch {
-      return Buffer.from("");
-    }
+    // C1: let the injected runner's error propagate — a WSL command failure
+    // is NOT the same as "no matches". The caller (killSessionProcessTree*)
+    // must see the error, not a silent empty buffer.
+    const out = wslCommandSyncRunner(cmd);
+    return Buffer.isBuffer(out) ? out : Buffer.from(String(out ?? ""));
   }
   // ZERO ENGINE INTERRUPTION & TEST SAFETY INVARIANT:
   // Tests are strictly forbidden from running real kill signals in WSL without explicit ALLOW_ENGINE_INTERRUPT=1.
@@ -259,8 +264,9 @@ function runWslCommandSync(cmd) {
       timeout: BOOT_TIMEOUT_MS + 10_000,
       stdio: ["ignore", "pipe", "ignore"],
     });
-  } catch {
-    return Buffer.from("");
+  } catch (err) {
+    // C1: surface the failure — a WSL command error is not "no matches".
+    throw new Error(`WslCommandError: bash -c failed: ${err.message}`);
   }
 }
 
@@ -283,8 +289,9 @@ export async function killSessionProcessTree(sessionId) {
       .split(/\s+/)
       .map((s) => parseInt(s, 10))
       .filter((n) => Number.isFinite(n) && n > 0);
-  } catch {
-    return [];
+  } catch (err) {
+    // C1: WSL command failure ≠ no-matches. Surface the error.
+    throw new Error(`WslSweepError: pgrep sweep failed for session '${id}': ${err.message}`);
   }
   if (candidates.length === 0) return [];
 
@@ -320,8 +327,9 @@ export function killSessionProcessTreeSync(sessionId) {
       .split(/\s+/)
       .map((s) => parseInt(s, 10))
       .filter((n) => Number.isFinite(n) && n > 0);
-  } catch {
-    return;
+  } catch (err) {
+    // C1: WSL command failure ≠ no-matches. Surface the error.
+    throw new Error(`WslSweepError: pgrep sweep failed for session '${id}': ${err.message}`);
   }
   if (candidates.length === 0) return;
   const boundaryRe = new RegExp(`(^|[\\s/'"=])${escapeRe(id)}( |$|['"])`);
@@ -431,7 +439,13 @@ export async function killProcessTree(child, sessionId) {
 
   // 1. Anchored session-id sweep (best-effort; never over-kills a decoy).
   if (sessionId) {
-    await killSessionProcessTree(sessionId);
+    try {
+      await killSessionProcessTree(sessionId);
+    } catch (err) {
+      // C1: sweep failure is surfaced to stderr but does not abort the
+      // direct-child kill path (killProcessTree contract: never throws).
+      process.stderr.write(`[wsl_bridge] session sweep failed: ${err.message}\n`);
+    }
   }
 
   // 2. Direct child pid kill + post-kill verification + escalation.

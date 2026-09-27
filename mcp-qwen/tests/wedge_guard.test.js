@@ -266,6 +266,33 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// (g) C1: /metrics fetch failure → state UNKNOWN → busy-gate fail CLOSED
+// ---------------------------------------------------------------------------
+console.log("\n[Test g: /metrics fetch failure → fail-closed busy-gate]");
+reset();
+// Make /metrics throw (simulating network failure)
+const origFetch = globalThis.fetch;
+globalThis.fetch = async (url) => {
+  const u = String(url);
+  if (u.endsWith("/metrics")) throw new Error("ECONNREFUSED: metrics endpoint unreachable");
+  return origFetch(url);
+};
+try {
+  const g = await engineWedgeState();
+  check(g.engineBusy === true, "g: engineBusy=true when /metrics unavailable (fail-closed)");
+  check(g.canary.skipped === "metrics_unavailable", "g: canary.skipped === 'metrics_unavailable'");
+  check(g.canary.ok === false, "g: canary.ok === false (refused, not neutral sentinel)");
+  check(typeof g.canary.error === "string" && g.canary.error.includes("metrics"), "g: canary.error mentions metrics");
+  check(g.wedged === false, "g: wedged=false (no stats silence data, canary refused)");
+  check(
+    !fetchLog.some((u) => u.includes("/chat/completions")),
+    "g: /chat/completions NEVER fetched (canary not fired)"
+  );
+} finally {
+  globalThis.fetch = origFetch;
+}
+
+// ---------------------------------------------------------------------------
 // (f) canaryProbe: evidence-based ok (reasoning-parser blind spot)
 // ---------------------------------------------------------------------------
 console.log("\n[Test f: canaryProbe evidence-based ok]");

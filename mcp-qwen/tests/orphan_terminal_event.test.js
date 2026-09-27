@@ -408,6 +408,36 @@ async function testHasTerminalEventUnit() {
   check("E5: malformed line does not throw", threw === false);
   check("E6: malformed line does not hide a real terminal event",
     val === true, `val=${val}`);
+
+  // C1: non-ENOENT I/O failure (e.g. EACCES) must throw, not return []/false.
+  // Simulate by making the file unreadable via a directory-as-file trick:
+  // create a directory at the logFile path so readFileSync gets EISDIR.
+  const c1Dir = path.join(SESSIONS_DIR, "s_c1_eisdir");
+  fs.mkdirSync(c1Dir, { recursive: true });
+  const c1LogFile = path.join(c1Dir, "events.jsonl");
+  fs.mkdirSync(c1LogFile, { recursive: true }); // directory, not file
+  const c1Logger = new EventLoggerService({ sessionId: "s_c1_eisdir", baseDir: SESSIONS_DIR });
+  let c1Threw = false;
+  try {
+    c1Logger.readAll();
+  } catch (err) {
+    c1Threw = true;
+    check("E7: C1 readAll() throws on non-ENOENT I/O error (EISDIR)",
+      err.code === "EISDIR" || err.code === "EACCES" || err.code === "EPERM",
+      `err.code=${err.code}`);
+  }
+  check("E8: C1 readAll() did NOT silently return [] on I/O failure", c1Threw === true);
+
+  let c1hThrew = false;
+  try {
+    c1Logger.hasTerminalEvent();
+  } catch (err) {
+    c1hThrew = true;
+  }
+  check("E9: C1 hasTerminalEvent() throws on non-ENOENT I/O error", c1hThrew === true);
+
+  // Clean up
+  fs.rmSync(c1Dir, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------

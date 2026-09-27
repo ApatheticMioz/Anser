@@ -297,9 +297,13 @@ export async function engineWedgeState() {
   // task). So: when the engine is busy, do NOT fire the canary; the only wedge
   // signal is stats silence. When idle, the canary is authoritative.
   const metrics = await readEngineMetrics();
+  // C1: /metrics unavailable → state UNKNOWN → fail CLOSED (treat as busy).
+  // A canary fired against a busy engine would queue behind the active
+  // generation and time out, producing a false wedge signal.
+  const metricsUnavailable = metrics === null;
   const runningReqs = metrics?.["vllm:num_requests_running"] ?? 0;
   const waitingReqs = metrics?.["vllm:num_requests_waiting"] ?? 0;
-  const engineBusy = runningReqs > 0 || waitingReqs > 0;
+  const engineBusy = metricsUnavailable || runningReqs > 0 || waitingReqs > 0;
 
   const line = await readLastEngineStatsLine();
   const stats = line ? parseEngineStats(line) : null;
@@ -312,8 +316,11 @@ export async function engineWedgeState() {
   let canary;
   let isCanaryWedged;
   if (engineBusy) {
-    // Neutral sentinel: a canary queued behind an active generation is meaningless.
-    canary = { ok: true, skipped: "engine_busy", latency_ms: 0 };
+    // C1: when the busy state comes from a metrics fetch failure, the canary
+    // is refused with an explicit error (fail-closed), not a neutral sentinel.
+    canary = metricsUnavailable
+      ? { ok: false, skipped: "metrics_unavailable", error: "/metrics fetch failed; busy-gate fail-closed" }
+      : { ok: true, skipped: "engine_busy", latency_ms: 0 };
     isCanaryWedged = false;
   } else {
     canary = await canaryProbe();
@@ -676,7 +683,10 @@ export async function readEngineMetrics(maxAgeMs = 5000) {
     }
     metricsCache = { at: Date.now(), data: map };
     return map;
-  } catch {
+  } catch (err) {
+    // C1: /metrics fetch failure → state UNKNOWN. Log to stderr so the
+    // failure is observable; the caller (engineWedgeState) fails CLOSED.
+    process.stderr.write(`[server_lifecycle] /metrics fetch failed: ${err.message}\n`);
     metricsCache = { at: Date.now(), data: null };
     return null;
   }
