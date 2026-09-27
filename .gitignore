@@ -22,10 +22,7 @@ api_key.txt
 .git-credentials
 
 # Large binaries & pre-compiled distributions
-llama-cpp/*.exe
-llama-cpp/*.dll
-llama-cpp/*.lib
-llama-cpp/*.pdb
+llama-cpp/
 *.gguf
 *.safetensors
 *.bin
