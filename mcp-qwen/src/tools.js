@@ -163,17 +163,7 @@ export function registerTools(server) {
     }) => {
       let raceHandle;
       try {
-      // P4i: canonicalize the working directory ONCE at the single task-entry
-      // point, through the OS symlink/junction resolution layer. This is the
-      // provenance fix: if the MCP server process was launched with a
-      // junction/symlink cwd (e.g. D:\mnt\d\LLM_Ecosystem\mcp-qwen -> D:\),
-      // process.cwd() returns the junction literal, and every downstream
-      // service (SandboxFsService, AstService, EvoOperator, the runner)
-      // would inherit that literal and produce false
-      // SymlinkEscapeError/PathEscapeError. Canonicalizing here - before the
-      // cwd is persisted to the task entry, hashed into the session id, and
-      // passed to the runner - makes the entire pipeline operate on the real
-      // path. A requested real-path cwd is unaffected (realpath is a no-op on
+      // Canonicalize working directory through OS symlink/junction layer to ensure realpath consistency.
       if (!cwd && isIdeAppDirectory(process.cwd())) {
         return {
           content: [
@@ -322,10 +312,7 @@ export function registerTools(server) {
         isError: false,
       };
       } catch (err) {
-        // P12: MCP-conformant tool-execution failure - a normal result with
-        // isError:true, never a thrown exception or protocol-level error.
-        // The original message is preserved verbatim; stack traces are never
-        // leaked into content.
+        // Return MCP tool-execution failure response with isError: true.
         return {
           content: [{ type: "text", text: `qwen_coworker: ${err && err.message ? err.message : String(err)}` }],
           isError: true,
@@ -486,9 +473,7 @@ export function registerTools(server) {
 
       let task = tasks.get(task_id) || readTaskFromDisk(task_id);
       if (task && task.corrupted) {
-        // D11 (FX6): a corrupt task file is an explicit corruption signal,
-        // never conflated with a clean not-found. Surface the file and the
-        // parse error verbatim (the file has already been quarantined).
+        // Report corrupt task state with error details.
         return {
           content: [
             {
@@ -512,14 +497,7 @@ export function registerTools(server) {
       }
 
       if (action === "status") {
-        // FX3-A (F2): compute elapsed seconds ONCE before the branch dispatch.
-        // The DONE branch previously used a camelCase `elapsedS` while the
-        // QUEUED/EXECUTING branches referenced an undeclared snake_case
-        // `elapsed_s` -> ReferenceError for any non-done task. A not-done task
-        // has finishedAt=null, so this resolves to now - (startedAt ||
-        // createdAt): queued -> now - createdAt (time waiting), executing ->
-        // now - startedAt (time running). The DONE branch keeps the identical
-        // formula and value.
+        // Compute elapsed execution or queued duration.
         const elapsedS = Math.round(
           ((task.finishedAt || Date.now()) - (task.startedAt || task.createdAt)) / 1000
         );
@@ -611,24 +589,13 @@ export function registerTools(server) {
         const memTask = tasks.get(task_id);
         if (memTask && !memTask.done) {
           killProcessTree(memTask.child, memTask.sessionId);
-          // P10: trigger the native runner's abort signal. For a
-          // native task `memTask.child` is null (in-process microkernel),
-          // so killProcessTree is a no-op and the ONLY way to stop the
-          // in-flight LLM call is the abort signal. Aborting it makes the
-          // provider's fetch reject, which lands in the runner's catch and
-          // then its finally block - which disposes the MCP extension bridge
-          // (no leaked children). Without this, cancel would mark the task
-          // done but the runner (and its bridge children) would keep running
-          // until the LLM call completed naturally.
+          // Signal abort to stop in-flight execution and clean up bridged tools.
           if (memTask.abortController) {
             try {
               memTask.abortController.abort();
             } catch {}
           }
-          // FX5-A (D6): release the task slot immediately. For a wedged
-          // task the runner's finally never fires (the fn never returns), so
-          // the slot must be freed here. releaseTaskSlot is idempotent — a
-          // cancel landing after natural completion is a no-op.
+          // Release task slot lease immediately upon cancellation.
           if (memTask.slot) {
             releaseTaskSlot(memTask.slot);
             memTask.slot = null;
@@ -688,9 +655,7 @@ export function registerTools(server) {
 
         const diskTask = readTaskFromDisk(task_id);
         if (diskTask && diskTask.corrupted) {
-          // D11 (FX6): a corrupt task file is an explicit corruption signal.
-          // There is no live task to cancel (the file is already quarantined);
-          // surface the file and the parse error rather than a fabricated
+        // Report corrupt task state with error details.
           // "already finished".
           return {
             content: [
@@ -704,11 +669,7 @@ export function registerTools(server) {
         }
         if (diskTask && !diskTask.done) {
           if (diskTask.sessionId) {
-            // P15: anchored sweep (pgrep -> /proc cmdline boundary verify ->
-            // kill) instead of a raw unanchored `pkill -9 -f` - a session id
-            // that is a substring of another session's id must never be
-            // over-killed, and the hardcoded `-d "Ubuntu"` wsl.exe call is
-            // gone with the switch.
+            // Terminate child processes matching exact session ID boundaries.
             try {
               await killSessionProcessTree(diskTask.sessionId);
             } catch {}
@@ -727,10 +688,7 @@ export function registerTools(server) {
         };
       }
       } catch (err) {
-        // P12: MCP-conformant tool-execution failure - a normal result with
-        // isError:true, never a thrown exception or protocol-level error.
-        // The original message is preserved verbatim; stack traces are never
-        // leaked into content.
+        // Return MCP tool-execution failure response with isError: true.
         return {
           content: [{ type: "text", text: `qwen_task: ${err && err.message ? err.message : String(err)}` }],
           isError: true,
@@ -915,10 +873,7 @@ export function registerTools(server) {
           };
         }
         await cancelAllTasks("server stopped by user");
-        // FX5-B (D7): report the HONEST stop result. stopServer() now returns
-        // {stopped:false, reason:"engine_still_responding"} when the engine
-        // survives the grace window, so we surface that instead of fabricating
-        // a "stopped" success.
+        // Surface actual stop operation status and diagnostics.
         const stopRes = await stopServer();
         resetEngineHealthCache();
         return {
@@ -948,10 +903,7 @@ export function registerTools(server) {
         };
       }
       } catch (err) {
-        // P12: MCP-conformant tool-execution failure - a normal result with
-        // isError:true, never a thrown exception or protocol-level error.
-        // The original message is preserved verbatim; stack traces are never
-        // leaked into content.
+        // Return MCP tool-execution failure response with isError: true.
         return {
           content: [{ type: "text", text: `qwen_server: ${err && err.message ? err.message : String(err)}` }],
           isError: true,
