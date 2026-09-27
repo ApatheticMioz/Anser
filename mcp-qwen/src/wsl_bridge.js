@@ -165,30 +165,6 @@ export function getApiKeySync() {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// P10 — Kill certainty + honest lifecycle
-// ---------------------------------------------------------------------------
-//
-// The legacy kill paths fired a broad unanchored `pkill -9 -f`
-// and never verified the kill landed. Two failure modes were observed live:
-//   (a) over-kill: a session id that is a SUBSTRING of another session's id
-//       (e.g. "abc" vs "abc123") matched the wrong process;
-//   (b) silent failure: the kill was fire-and-forget, so a surviving /
-//       zombie process was never detected or escalated.
-//
-// The hardened path:
-//   1. ANCHORS the session-id sweep: it lists candidate pids with a broad
-//      `pgrep -f`, then verifies each candidate's full command line has the
-//      id at an exact boundary (space or end-of-line) before killing, so a
-//      decoy that merely CONTAINS the id as a substring is never over-killed.
-//   2. KILLS the direct child pid (taskkill /T /F on Windows, SIGKILL on
-//      Linux) and then VERIFIES it is dead via pidAlive (two probes 500ms
-//      apart). If still alive it ESCALATES (re-issue the kill) and does a
-//      final liveness check.
-//   3. Returns a structured { killed, escalations } so callers can log
-//      honestly. A pid-less target (already-dead / never a real child) is a
-//      no-op success: killed:false, escalations:0 — NOT a failure.
-
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }

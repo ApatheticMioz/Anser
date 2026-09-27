@@ -412,27 +412,8 @@ export async function warmEngine() {
 // P10 — Stream-proxy lifecycle hardening
 // ---------------------------------------------------------------------------
 //
-// The legacy ensureStreamProxyRunning had three weaknesses, some observed
-// live this week:
-//   (a) its `catch {}` swallowed spawn failures silently, so a failed spawn
-//       looked identical to a slow start;
-//   (b) its pre-kill `pkill -9 -f 'stream_proxy.js'` was a broad pattern that
-//       could match unrelated processes and left a zombie (observed: pid 242
-//       defunct) when the parent did not reap;
-//   (c) its 5s health window (25 x 200ms) was too tight for a cold WSL node
-//       spawn (observed: two consecutive dispatch boots failed with "failed
-//       to become healthy ... after 5s" while the proxy was actually coming
-//       up at ~6-8s).
-//
-// The hardened path:
-//   1. TARGETED pre-spawn cleanup: kill the CURRENT listener on the port by
-//      its specific pid (probed from /health, or from `ss -ltnp`), never a
-//      broad `pkill -f`. Best-effort, and it LOGS what it did.
-//   2. HONEST spawn: the spawner is an injectable seam (setStreamProxySpawner)
-//      so offline tests can simulate a slow or failed start. Spawn failures
-//      are CAPTURED (not swallowed) and included in the final error.
-//   3. WIDER health window: 15s (75 x 200ms) with early-exit success, so a
-//      cold WSL node spawn (6-8s) is no longer misreported as a failure.
+// Pre-spawn cleanup is TARGETED: it kills the current listener on the port by
+// its specific pid (probed from /health or `ss -ltnp`), never a broad `pkill -f`.
 
 // Indirection for the stream-proxy spawner so tests can simulate a slow or
 // failed start without a real node subprocess. Defaults to the real spawner.
