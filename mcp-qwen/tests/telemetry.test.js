@@ -145,3 +145,105 @@ test("Telemetry: formatTelemetrySummary produces structured markdown and stats",
   assert.ok(stats.total_turns > 0);
   assert.ok(stats.estimated_cost_saved_usd > 0);
 });
+
+// ---------------------------------------------------------------------------
+// E3: Context Headroom Telemetry
+// ---------------------------------------------------------------------------
+
+test("E3: runner exposes lastPromptTokens and contextHeadroom in return object", async () => {
+  const { AnserRunner } = await import("../src/harness/runner.js");
+  const { MAX_LEN_HUGE } = await import("../src/config.js");
+
+  // Mock LLM that reports a known promptTokens on the first turn.
+  const mockLlm = {
+    async streamChat({ messages, onMetrics }) {
+      const metrics = {
+        promptTokens: 50000,
+        completionTokens: 200,
+        ttftMs: 50,
+        totalMs: 200,
+        tokensPerSec: 10,
+        hadReasoning: false,
+      };
+      if (onMetrics) onMetrics(metrics);
+      return {
+        content: "Done.",
+        toolCalls: [],
+        finishReason: "stop",
+        hadReasoning: false,
+        metrics,
+      };
+    },
+  };
+
+  const events = [];
+  const mockLogger = {
+    append(ev) { events.push(ev); },
+    readAll() { return events; },
+    getConversationHistory() { return []; },
+  };
+
+  const runner = new AnserRunner({ llm: mockLlm, logger: mockLogger });
+  const result = await runner.run({
+    prompt: "Quick task.",
+    sessionId: "e3_headroom",
+    maxTurns: 5,
+  });
+
+  // lastPromptTokens must be the measured value.
+  assert.equal(result.lastPromptTokens, 50000, "lastPromptTokens must be 50000");
+  // contextHeadroom must be MAX_LEN_HUGE - lastPromptTokens (non-negative).
+  assert.equal(
+    result.contextHeadroom,
+    MAX_LEN_HUGE - 50000,
+    "contextHeadroom must be 245760 - 50000"
+  );
+  assert.ok(result.contextHeadroom >= 0, "contextHeadroom must be non-negative");
+  assert.ok(
+    result.contextHeadroom === 195760,
+    `contextHeadroom should be 195760 (got ${result.contextHeadroom})`
+  );
+});
+
+test("E3: runner reports null lastPromptTokens/contextHeadroom when no metrics available", async () => {
+  const { AnserRunner } = await import("../src/harness/runner.js");
+
+  // Mock LLM that does NOT report promptTokens in metrics.
+  const mockLlm = {
+    async streamChat({ messages, onMetrics }) {
+      const metrics = {
+        completionTokens: 100,
+        ttftMs: 10,
+        totalMs: 50,
+        tokensPerSec: 5,
+        hadReasoning: false,
+        // No promptTokens field.
+      };
+      if (onMetrics) onMetrics(metrics);
+      return {
+        content: "Done.",
+        toolCalls: [],
+        finishReason: "stop",
+        hadReasoning: false,
+        metrics,
+      };
+    },
+  };
+
+  const events = [];
+  const mockLogger = {
+    append(ev) { events.push(ev); },
+    readAll() { return events; },
+    getConversationHistory() { return []; },
+  };
+
+  const runner = new AnserRunner({ llm: mockLlm, logger: mockLogger });
+  const result = await runner.run({
+    prompt: "Quick task (no metrics).",
+    sessionId: "e3_null_headroom",
+    maxTurns: 5,
+  });
+
+  assert.equal(result.lastPromptTokens, null, "lastPromptTokens must be null when no metrics");
+  assert.equal(result.contextHeadroom, null, "contextHeadroom must be null when no metrics");
+});

@@ -7,6 +7,7 @@ import {
   MAX_TURNS,
   BASE_TURN_BUDGET,
   SESSION_TURNS_RECOMMEND,
+  MAX_LEN_HUGE,
   getReasoningEffort,
 } from "./config.js";
 import {
@@ -234,6 +235,8 @@ export function startAnserTask({
     lines: [],
     fileOps: [],
     toolCallsCount: 0,
+    lastPromptTokens: null,
+    contextHeadroom: null,
     result: null,
     waiters: [],
   };
@@ -369,6 +372,15 @@ export function startAnserTask({
             taskEntry.lastHeartbeatAt = Date.now();
             saveTaskToDisk(taskEntry);
           },
+          // E3: live context-headroom tracking. Each turn's promptTokens
+          // updates the task state so the status/wait endpoints can surface
+          // remaining headroom to the orchestrator in real time.
+          onMetrics: (m) => {
+            if (typeof m?.promptTokens === "number" && m.promptTokens > 0) {
+              taskEntry.lastPromptTokens = m.promptTokens;
+              taskEntry.contextHeadroom = Math.max(0, MAX_LEN_HUGE - m.promptTokens);
+            }
+          },
         });
 
         if (lineageEngine && testCommand) {
@@ -388,6 +400,9 @@ export function startAnserTask({
         taskEntry.finishedAt = Date.now();
         taskEntry.status = runResult.status;
         taskEntry.isError = !isSuccess;
+        // E3: propagate context headroom telemetry from the runner.
+        taskEntry.lastPromptTokens = runResult.lastPromptTokens ?? null;
+        taskEntry.contextHeadroom = runResult.contextHeadroom ?? null;
         // M5b: surface the 80-turn session-rollover recommendation to the
         // ORCHESTRATOR in the dispatch result text. The runner's M5a
         // `session_turn_limit_recommended` event lands in the session event

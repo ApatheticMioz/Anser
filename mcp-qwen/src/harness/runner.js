@@ -50,6 +50,7 @@ import {
   LOOP_DETECTION_REPETITIONS,
   SUPERVISOR_PREVIEW_CHARS,
   SALVAGE_MAX_TOKENS,
+  MAX_LEN_HUGE,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
 import { recordTurnTelemetry, recordToolExecution, sampleLiveVllmMetrics } from "../telemetry.js";
@@ -406,7 +407,9 @@ export class AnserRunner {
    *   durationMs: number,
    *   totalCompletionTokens: number,
    *   sessionId: string,
-   *   sessionTurns: number
+   *   sessionTurns: number,
+   *   lastPromptTokens: number | null,
+   *   contextHeadroom: number | null
    * }>}
    */
   async run({
@@ -1351,6 +1354,15 @@ export class AnserRunner {
       durationMs: Date.now() - t0,
       totalCompletionTokens,
       sessionId,
+      // E3: context headroom telemetry. lastPromptTokens is the most recent
+      // prompt-token count observed (0 when no metrics yet). contextHeadroom
+      // is the remaining tokens under the 245,760 ceiling (clamped ≥ 0), or
+      // null when no measurement is available yet.
+      lastPromptTokens: lastPromptTokens > 0 ? lastPromptTokens : null,
+      contextHeadroom:
+        lastPromptTokens > 0
+          ? Math.max(0, MAX_LEN_HUGE - lastPromptTokens)
+          : null,
     };
   }
 }
