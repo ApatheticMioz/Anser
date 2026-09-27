@@ -10,7 +10,7 @@ Qwen3.8-27B coworker (vLLM + DFlash2 + KVarN, 245K context) to two runtimes:
 - Closed-loop evolutionary optimization (`.evo/lineage.json`)
 - Zero-turn OS-level wait (`curl` long-poll on `:18021` saving ~590M tokens)
 - Engine wedge detection + auto-heal
-- Full 58-suite test gate (`npm run test:all`) validated live with zero skips
+- Full 62-suite test gate (`npm run test:all`) validated live with zero skips
 
 ## Quickstart
 
@@ -21,7 +21,7 @@ claude mcp add --scope user qwen-anser node <repo-root>/mcp-qwen/index.js
 ```
 
 The server registers three tools: `qwen_coworker`, `qwen_task`, `qwen_server`.
-On first dispatch the vLLM engine boots automatically (up to 180s) and the
+On first dispatch the vLLM engine boots automatically (up to 480s) and the
 stream proxy starts on `:18022`.
 
 ### Google Antigravity IDE
@@ -120,14 +120,14 @@ All variables are read at process start (module-level) unless noted.
 | `QWEN_STATE_DIR` | `~/.qwen` (or WSL-mapped Windows home) | Root for task JSON, slot leases, session logs, wedge counter |
 | `QWEN_MAX_TOKENS` | `49152` | Per-turn output token budget |
 | `QWEN_MAX_REASONING_TOKENS` | `32768` | Per-turn reasoning (thinking) token ceiling; hit → `finish_reason: "length"` |
-| `QWEN_STREAM_IDLE_TIMEOUT_MS` | `900000` (15 min) | SSE stream idle watchdog (first-byte + inter-chunk) |
+| `QWEN_STREAM_IDLE_TIMEOUT_MS` | `1200000` (20 min) | SSE stream idle watchdog (first-byte + inter-chunk) |
 | `QWEN_REASONING_EFFORT` | `medium` | Fallback effort when a dispatch sends none; per-dispatch `reasoning_effort` overrides. Engine accepts exactly {xhigh, medium, low}. `xhigh` is explicit-only. |
 | `QWEN_RACE_MS` | `15000` (15 s) | Client-side race deadline before yielding `taskId` + `wait_command` |
 | `QWEN_MIN_TIMEOUT_MS` | `600000` (10 min) | Floor for task timeout |
 | `QWEN_INACTIVITY_TIMEOUT_MS` | `1800000` (30 min) | Task execution inactivity watchdog |
 | `QWEN_FIRST_TOKEN_TIMEOUT_MS` | `240000` (4 min) | **Reserved, no consumer yet** (retained as near-term knob per honesty-drift decision). Live zero-output protection is `QWEN_STREAM_IDLE_TIMEOUT_MS`, whose first-byte watchdog already covers this case |
 | `QWEN_TASK_RETENTION_MS` | `604800000` (7 days) | Task-telemetry retention window; floored at `DEFAULT_TIMEOUT_MS + 30min` so a live task's JSON is never unlinked mid-run |
-| `QWEN_MAX_CONCURRENT` | `2` | Global task slot count (cross-process, disk-lease); kept 1:1 with the engine's `MAX_SEQS` |
+| `QWEN_MAX_CONCURRENT` | `1` | Global task slot count (cross-process, disk-lease); kept 1:1 with the engine's `MAX_SEQS` |
 | `QWEN_MAX_TURNS` | *(null = unbounded)* | Max agent turns per dispatch |
 | `QWEN_MAX_CONTINUATION_TURNS` | `8` | Max re-prompts after `finish_reason: "length"` |
 | `QWEN_EMPTY_STREAM_RETRIES` | `2` | Retries for empty/zero-byte generations before honest failure |
@@ -281,8 +281,8 @@ rewrite as valid.
 
 ### Engine wedge auto-heal + busy-gate
 
-The engine runs `MAX_SEQS=2` (raised from 1 on 2026-09-12; one-or-two
-generations at a time). While a task is
+The engine runs `MAX_SEQS=1` (one generation at a time; the 2026-09-12
+two-seat raise was reverted on 2026-09-25). While a task is
 executing, a canary probe would queue behind the active generation and time
 out — measuring queue depth, not health. The **busy-gate** in
 `src/server_lifecycle.js` (`engineWedgeState`) reads `/metrics` gauges first:
@@ -345,7 +345,7 @@ Two layers of defense:
 
 ## Test Suite
 
-`npm test` runs 28 suites (25 offline + 3 live/skip). `npm run test:all` runs all 33 suites (all must exit 0):
+`npm test` runs 9 critical suites (offline, zero engine interruption). `npm run test:all` runs all 62 suites (all must exit 0). The table below is a representative listing of the core suites; the full 62-suite list is the authoritative `test:all` invocation in `package.json`.
 
 | # | Suite | Command | Type | Purpose |
 |---|-------|---------|------|---------|
@@ -383,7 +383,7 @@ Two layers of defense:
 | 32 | `status_lifecycle.test.js` | `npm test` | Offline | Status-server keeper re-election, elapsed fix, cancel slot release, honest `stopServer` |
 | 33 | `shell_hardening.test.js` | `npm test` | Offline | Shell-injection hardening (session-id charset, pgrep escape), credential honesty |
 
-**Live-engine test gating**: Suites 6, 19, 20, and 26 use `tests/helpers/engine_probe.js` (`isEngineAvailable` / `requireEngineOrSkip`) to probe `/v1/models` with a 3s timeout. When vLLM is running, all 33 suites execute live; when offline, those four print `[SKIP]` and exit 0 (the remaining 29 run offline or against a mock upstream). Under active engine operation, `npm run test:all` runs all 33 suites with **zero skips and zero failures**.
+**Live-engine test gating**: Suites 6, 19, 20, and 26 use `tests/helpers/engine_probe.js` (`isEngineAvailable` / `requireEngineOrSkip`) to probe `/v1/models` with a 3s timeout. When vLLM is running, all 62 suites execute live; when offline, those four print `[SKIP]` and exit 0 (the remaining 58 run offline or against a mock upstream). Under active engine operation, `npm run test:all` runs all 62 suites with **zero skips and zero failures**.
 
 ## 11-Hour Production Verification & Telemetry Ledger
 

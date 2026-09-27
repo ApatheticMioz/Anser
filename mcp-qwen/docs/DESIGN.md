@@ -34,11 +34,13 @@ locked by `tests/ast_engine.test.js`.
 
 ### 1.2 Why `MAX_SEQS=1` shapes the whole design
 
-> **2026-09-12 addendum:** the seat count was raised to 2 (engine launcher +
-> `MAX_CONCURRENT_TASKS` fallback), staying at the upstream huge-profile
-> validated count. The machinery below was designed under 1 seat and remains
-> correct at 2: the busy-gate keys off live `/metrics` gauges, not the seat
-> count, and the single-slot semaphore simply became a two-slot lease.
+> **2026-09-12 addendum (reverted 2026-09-25):** the seat count was briefly
+> raised to 2 (engine launcher + `MAX_CONCURRENT_TASKS` fallback), then
+> reverted to 1 for single-user pair programming (eliminates multi-stream
+> prefill queueing, reclaims ~800MB non-KV VRAM headroom). The machinery
+> below was designed under 1 seat and remains correct at 1: the busy-gate
+> keys off live `/metrics` gauges, not the seat count, and the single-slot
+> semaphore is a one-slot lease.
 
 The engine runs one generation at a time (`MAX_SEQS=1` on the vLLM side;
 `QWEN_MAX_CONCURRENT=1` on the harness side, `src/config.js`). This single
@@ -58,7 +60,7 @@ fact drives most of the liveness machinery:
   constant now has **no consumer** — it is retained as a reserved knob
   (honesty-drift decision) — because live zero-output protection moved into
   `QWEN_STREAM_IDLE_TIMEOUT_MS`, whose first-byte watchdog covers the same
-  failure with a 15-min budget sized for cold 200K prefills and MAX_SEQS
+  failure with a 20-min budget sized for cold 200K prefills and MAX_SEQS
   queue waits.
 - **The disk-lease semaphore** (`src/semaphore.js`): each Claude surface
   spawns its own MCP server process, so an in-process semaphore is useless

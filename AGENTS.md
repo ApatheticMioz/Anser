@@ -79,7 +79,7 @@ npm ci          # deterministic; REQUIRED for the platform-specific @ast-grep
 node <repo>/mcp-qwen/index.js
 ```
 Registers three stdio tools: `qwen_coworker`, `qwen_task`, `qwen_server`.
-On first dispatch the vLLM engine boots (up to 180 s) and the stream proxy
+On first dispatch the vLLM engine boots (up to 480 s) and the stream proxy
 starts on `:18022`.
 
 ### 2.4 Register with a client
@@ -94,7 +94,7 @@ python <repo>/mcp-qwen/update_schemas.py
 ### 2.5 Key environment variables (all in `mcp-qwen/src/config.js`)
 | Variable | Default | Meaning |
 |---|---|---|
-| `QWEN_RACE_MS` | `45000` | Sync race window before yielding to the zero-turn long-poll wait. |
+| `QWEN_RACE_MS` | `15000` | Sync race window before yielding to the zero-turn long-poll wait. |
 | `QWEN_MAX_CONCURRENT` | `1` | Cross-process execution slots (disk-lease semaphore). |
 | `QWEN_STATE_DIR` | `~/.qwen` | Root for task JSON, slot leases, session logs, Evo lineage. |
 | `VLLM_PORT` | `18020` | vLLM OpenAI-compatible API. |
@@ -160,7 +160,7 @@ mcp-qwen/
                            #   web_service, provider_vllm, mcp_bridge, event_logger
       evo/                 # evo_operator, lineage_dag, evaluator,
                            #   trace_repair, watchdog
-  tests/                   # 37 suites (see section 5)
+  tests/                   # 62 suites (see section 5)
 ```
 **New tools** are in-process microkernel plugins under `src/harness/services/`
 — never external CLI subprocesses (in-process = sub-millisecond).
@@ -262,7 +262,7 @@ By default, tests NEVER interrupt, probe, or reboot a running vLLM instance (`AL
 `.github/workflows/ci.yml` runs the gate on every push/PR across a
 **Node 22 & 24 x ubuntu-latest & windows-latest** matrix (4 jobs, no
 fail-fast). It uses `npm ci` in `mcp-qwen/` and runs the authoritative
-`test:all` gate (36 suites). A green CI is required before a PR is mergeable.
+`test:all` gate (62 suites). A green CI is required before a PR is mergeable.
 
 ---
 

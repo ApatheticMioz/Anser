@@ -35,8 +35,9 @@ the flaw before a fix ships.
    - **Reproducible steps** or a minimal proof-of-concept.
    - The version / commit you tested against.
    - Any mitigation you discovered.
-3. If you have a way to encrypt your report (PGP key published in
-   `CONTRIBUTING.md`), please use it.
+3. If you have a way to encrypt your report (e.g. PGP), please use it.
+   We do not currently publish a PGP key; use the private channel in
+   `CONTRIBUTING.md` or GitHub's private security advisory feature.
 
 ### What to include (and what to redact)
 
