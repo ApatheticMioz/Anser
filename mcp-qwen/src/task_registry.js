@@ -195,7 +195,7 @@ function describeOrphanCause(diskTask) {
  * readTaskFromDisk (single read) and listTasksFromDisk (bulk read) so BOTH
  * surface corruption identically instead of silently swallowing it.
  *
- * D11 (FX6): a corrupt file is a real signal, never conflated with a clean
+        // Report corrupted task disk artifacts with HTTP 500 containing parse details.
  * not-found. It is preserved (renamed, not deleted) so it can be inspected,
  * and the corruption is announced on stderr.
  */
@@ -221,20 +221,14 @@ function quarantineCorruptTaskFile(filePath, err) {
 }
 
 /**
- * Reads a single task from disk, distinguishing the signals honestly:
- *   - file ABSENT             -> null (clean not-found)
- *   - transient file lock     -> { transientLock: true, id } (EBUSY/EPERM;
- *                                 the worker is mid-write; retry next tick)
- *   - file CORRUPT/unreadable -> { corrupted: true, id, file, error }
- *                                 (the file is QUARANTINEd and a loud
- *                                 stderr log is emitted)
- *   - healthy file            -> the parsed task object
+ * Reads a single task from disk, distinguishing execution signals:
+ *   - file ABSENT             -> null (not found)
+ *   - transient file lock     -> { transientLock: true, id } (retry next tick)
+ *   - file CORRUPT/unreadable -> { corrupted: true, id, file, error } (quarantined)
+ *   - healthy file            -> parsed task object
  *
- * D11 (FX6): the old code returned null for BOTH "absent" and "corrupt", so
- * a corrupt task file was reported as "task not found" (and, in the wait
- * path, as "failed") — dishonest. Now a corrupt file is an explicit
- * corruption signal: quarantined, logged loudly, and surfaced to the caller
- * as a distinguishable result, never conflated with a clean not-found.
+ * @param {string} taskId Unique task identifier.
+ * @returns {object|null} Parsed task object, lock/corruption descriptor, or null.
  */
 export function readTaskFromDisk(taskId) {
   const filePath = path.join(TASK_DIR, `${taskId}.json`);
@@ -271,7 +265,7 @@ export function readTaskFromDisk(taskId) {
 /**
  * Lists all on-disk tasks, applying retention cleanup.
  *
- * D11 (FX6): a corrupt/unreadable file is no longer silently skipped (the old
+        // Report corrupted task disk artifacts with HTTP 500 containing parse details.
  * `catch {}` swallowed it, so a corrupt task vanished from the list with no
  * signal). Now each corrupt file is QUARANTINEd and logged loudly to stderr
  * (same helper as readTaskFromDisk); a transient lock (EBUSY/EPERM) is still
@@ -294,11 +288,7 @@ export function listTasksFromDisk() {
   }
   const now = Date.now();
   for (const f of files) {
-    // Match healthy task JSON files AND orphaned tmp files. A tmp file is
-    // `<task>.json.tmp_<pid>_<ts>` — the leftover of a saveTaskToDisk whose
-    // writeFileSync succeeded but whose renameSync never ran (the old catch{}
-    // swallowed that failure, so these orphans accumulated forever). The tmp
-    // lifetime is sub-second, so the same mtime age gate reaps them.
+    // Match completed task JSON files and orphaned atomic write tmp files.
     const isTmpOrphan = /\.json\.tmp_\d+_\d+$/.test(f);
     if (!f.endsWith(".json") && !isTmpOrphan) continue;
     const filePath = path.join(TASK_DIR, f);
@@ -357,7 +347,7 @@ export function hasLiveWork() {
 }
 
 /**
- * M9 (P2, N2): mid-session liveness reaper.
+  // Periodic liveness check: reap orphaned tasks on the regular retention interval.
  *
  * The boot-only orphan sweep (markTaskOrphanedOnDisk, invoked from
  * readTaskFromDisk) only runs when a task file is READ at process start. A
@@ -433,21 +423,15 @@ export function cleanOldTasks() {
     }
   }
   listTasksFromDisk(); // Triggers disk retention cleanup
-  // M9 (P2, N2): piggyback the mid-session liveness reaper on the existing
-  // retention cadence (the same 5-minute setInterval that drives cleanOldTasks
-  // from initStatusServer). This is the file's existing periodic pattern — no
-  // new timer, no new cadence.
+  // Periodic liveness check: reap orphaned tasks on the regular retention interval.
   reapOrphans();
 }
 
 export function notifyWaiters(task) {
   saveTaskToDisk(task);
   if (!task.waiters || task.waiters.length === 0) return;
-  // M1 (F9/N4/N5): terminal wait responses are ALWAYS HTTP 200 + JSON,
-  // identical in shape to GET /task/:id. A task FAILURE is a normal terminal
-  // state, not an infra crash — the old 500 + text/markdown caused
-  // curl --fail (exit 22) retry-storms on the orchestrator side.
-  // Connection:close ensures the socket terminates cleanly after the body.
+  // Terminal wait responses return HTTP 200 with standard task JSON.
+  // Connection:close ensures socket terminates cleanly.
   const now = Date.now();
   const elapsed_s = Math.round(
     ((task.finishedAt || now) - task.createdAt) / 1000
@@ -501,9 +485,7 @@ export function notifyWaiters(task) {
 
 export async function cancelAllTasks(reason = "cancelled by caller") {
   let count = 0;
-  // 1. Cancel in-memory tasks and notify waiters
-  // P15: collect the session ids of the in-memory tasks we cancel here so the
-  // anchored sweep below reaches their session children too.
+  // Cancel in-memory tasks and collect session IDs for child process cleanup.
   const memSessionIds = new Set();
   for (const task of tasks.values()) {
     if (!task.done) {
@@ -517,9 +499,7 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
         } catch {}
         task.abortController = null;
       }
-      // FX5-A (D6): release the task's execution slot immediately on cancel.
-      // releaseTaskSlot is idempotent, so a cancel landing after natural
-      // completion (slot already freed by runQueued's finally) is a no-op.
+      // Release task execution slot immediately on cancel.
       if (task.slot) {
         releaseTaskSlot(task.slot);
         task.slot = null;
@@ -555,9 +535,7 @@ export async function cancelAllTasks(reason = "cancelled by caller") {
     }
   }
 
-  // 3. P15: anchored per-session sweep.
-  // The anchored sweep (pgrep -> /proc cmdline boundary verify -> kill) only matches
-  // a session id at an exact boundary, so substring decoys and other instances'
+  // Terminate child processes matching exact session IDs across WSL and Windows.
   // sessions survive. Sync kills are fast; cancel_all still returns promptly.
   const sweepIds = new Set([...memSessionIds, ...diskSessionIds]);
   for (const sessionId of sweepIds) {
@@ -762,9 +740,7 @@ export const statusHttpServer = http.createServer(async (req, res) => {
     if (!task) {
       diskTask = readTaskFromDisk(taskId);
       if (diskTask && diskTask.corrupted) {
-        // D11 (FX6): a corrupt task file is an explicit corruption signal,
-        // never conflated with a clean not-found. Surface it as a 500 with
-        // the file and the parse error.
+        // Report corrupted task disk artifacts with HTTP 500 containing parse details.
         res.writeHead(500, {
           "Content-Type": "application/json",
           "Connection": "close",
@@ -787,11 +763,8 @@ export const statusHttpServer = http.createServer(async (req, res) => {
 
     const isDone = task ? task.done : diskTask.done;
     if (isDone) {
-      // M1 (F9/N4/N5): terminal wait responses are ALWAYS HTTP 200 + JSON,
-      // identical in shape to GET /task/:id. A task FAILURE is a normal
-      // terminal state, not an infra crash — the old 500 + text/markdown
-      // caused curl --fail (exit 22) retry-storms on the orchestrator side.
-      // Connection:close ensures the socket terminates cleanly after the body.
+  // Terminal wait responses return HTTP 200 with standard task JSON.
+  // Connection:close ensures socket terminates cleanly.
       const t = task || diskTask;
       const now = Date.now();
       const elapsed_s = Math.round(((t.finishedAt || now) - t.createdAt) / 1000);
@@ -856,7 +829,7 @@ export const statusHttpServer = http.createServer(async (req, res) => {
         return;
       }
       if (current?.corrupted) {
-        // D11 (FX6): the task file is corrupt. End the wait with an explicit
+        // Report corrupted task disk artifacts with HTTP 500 containing parse details.
         // corruption signal (500) naming the file and the parse error — never
         // debounced into a fabricated "Task failed."
         clearInterval(diskPoll);
@@ -889,10 +862,8 @@ export const statusHttpServer = http.createServer(async (req, res) => {
 
       if (!current || current.done) {
         clearInterval(diskPoll);
-        // M1 (F9/N4/N5): same contract as the memory path — ALWAYS HTTP 200 +
-        // JSON (shape identical to GET /task/:id), Connection:close for clean
-        // socket termination. A missing file after the debounce window is a
-        // terminal failure, not an infra crash.
+  // Terminal wait responses return HTTP 200 with standard task JSON.
+  // Connection:close ensures socket terminates cleanly.
         const t = current || {
           id: taskId,
           done: true,
@@ -975,9 +946,7 @@ export const statusHttpServer = http.createServer(async (req, res) => {
       task = readTaskFromDisk(taskId);
     }
     if (task && task.corrupted) {
-      // D11 (FX6): a corrupt task file is an explicit corruption signal,
-      // never conflated with a clean not-found. Surface it as a 500 with the
-      // file and the parse error.
+      // Return HTTP 500 with error details for corrupted task disk state.
       res.writeHead(500, { "Content-Type": "application/json" });
       return res.end(
         JSON.stringify({
@@ -1075,16 +1044,13 @@ export const statusHttpServer = http.createServer(async (req, res) => {
     if (task) {
       if (!task.done) {
         killProcessTree(task.child, task.sessionId);
-        // P10: trigger the native runner's abort signal so the in-flight
-        // LLM call stops and the runner's finally block disposes the MCP
-        // extension bridge (no leaked children). For a native task
-        // `task.child` is null, so this is the only way to stop it.
+        // Abort in-flight task execution via AbortController.
         if (task.abortController) {
           try {
             task.abortController.abort();
           } catch {}
         }
-        // FX5-A (D6): release the task's execution slot immediately on cancel
+      // Release task execution slot immediately on cancel.
         // (idempotent — a cancel after natural completion is a no-op).
         if (task.slot) {
           releaseTaskSlot(task.slot);
@@ -1113,9 +1079,7 @@ export const statusHttpServer = http.createServer(async (req, res) => {
     }
     const diskTask = readTaskFromDisk(taskId);
     if (diskTask && diskTask.corrupted) {
-      // D11 (FX6): a corrupt task file is an explicit corruption signal.
-      // There is no live task to cancel (the file is already quarantined);
-      // surface the corruption as a 500 rather than fabricating a cancel.
+      // Report corrupt task file on cancel attempt with HTTP 500.
       res.writeHead(500, { "Content-Type": "application/json" });
       return res.end(
         JSON.stringify({
@@ -1129,9 +1093,7 @@ export const statusHttpServer = http.createServer(async (req, res) => {
     }
     if (diskTask) {
       if (diskTask.sessionId) {
-        // P15: anchored sweep (pgrep -> /proc cmdline boundary verify -> kill)
-        // instead of a raw unanchored `pkill -9 -f` — a session id that is a
-        // substring of another session's id must never be over-killed.
+        // Perform anchored process sweep targeting exact session ID boundaries.
         try {
           killSessionProcessTreeSync(diskTask.sessionId);
         } catch {}
@@ -1185,42 +1147,15 @@ statusHttpServer.on("error", (err) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// FX3-B (F1) — status-server keeper re-election
-// ---------------------------------------------------------------------------
-//
-// The status server is a single machine-wide coordinator on STATUS_PORT.
-// Exactly one process (the "keeper") owns the port; every other process is a
-// "follower". At boot, initStatusServer() does a ONE-SHOT listen: the first
-// process to win the port becomes keeper, the rest become followers.
-//
-// The defect (F1): a follower that lost the boot race set statusServerOwned=
-// false FOREVER. If the keeper process later exited, the port went dark
-// permanently while task dispatches kept advertising a wait_command URL on it
-// (live-observed). The fix is a re-election protocol, in the same honest-
-// signal style as the stream proxy's identity verification:
-//
-//   * The /health endpoint already self-identifies:
-//       {"status":"ok","service":"mcp-qwen-status","port":STATUS_PORT}
-//     so a follower can tell OUR service from a foreign one.
-//   * A follower periodically probes /health. If the port is DARK (connection
-//     refused / timeout), the follower attempts to re-listen. If the responder
-//     is OUR identity, it stays a follower. If the responder is a FOREIGN
-//     identity, it stays a follower and reports loudly — it never fights a
-//     foreign process for the port (stream-proxy PortConflictError doctrine).
-//   * The re-listen is a SINGLE atomic listen() call. The OS grants the port
-//     to exactly one process, so with N client processes at most one wins the
-//     election; the losers get EADDRINUSE and remain followers. This is the
-//     thundering-herd guard: no lockfile, no coordination channel — the port
-//     itself is the atomic arbiter.
-//
-//   This is NOT a fallback. A failed re-listen (EADDRINUSE) is an honest
-//   "someone else owns the port" signal, and we keep polling — the election
-//   protocol working as designed. We never fabricate ownership: statusServer-
-//   Owned becomes true ONLY when our own listen() callback fires.
-//
-// The OWNER path is unchanged: initStatusServer() still does the one-shot
-// boot listen, and a process that wins at boot never runs the election.
+/**
+ * Status Server Keeper Re-Election Protocol.
+ *
+ * Coordinates ownership of STATUS_PORT across concurrent client instances:
+ * - Exactly one process binds STATUS_PORT as keeper; other instances act as followers.
+ * - Followers periodically probe /health to verify keeper availability and service identity.
+ * - If the port becomes dark, followers attempt atomic listen() re-election.
+ * - The OS kernel arbitrates port ownership: the winner becomes keeper, losers remain followers.
+ */
 
 // The identity our /health endpoint advertises. A responder with this exact
 // service string is a healthy keeper of OUR service; anything else is foreign.
