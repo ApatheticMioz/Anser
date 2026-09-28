@@ -285,13 +285,20 @@ async function run() {
     {
       try {
         const searchRes = await web.search({ query: "Node.js", max_results: 3 });
-        ok(typeof searchRes.count === "number", "Returned numeric count");
-        ok(Array.isArray(searchRes.results), "Returned results array");
-        if (searchRes.results.length > 0) {
-          const first = searchRes.results[0];
-          ok(first.title && first.url, `Live search result: '${first.title}' -> ${first.url}`);
+        if (searchRes.isError) {
+          // All providers in the auto chain failed (e.g. no API keys / network
+          // blocked in CI). search() returns { isError, text } with no
+          // count/results, so skip the shape assertions and pass gracefully.
+          console.log(`  [INFO] Search network probe skipped (${searchRes.text}) - offline pass`);
         } else {
-          console.log("  [INFO] DuckDuckGo returned 0 results or rate limited (graceful pass)");
+          ok(typeof searchRes.count === "number", "Returned numeric count");
+          ok(Array.isArray(searchRes.results), "Returned results array");
+          if (searchRes.results.length > 0) {
+            const first = searchRes.results[0];
+            ok(first.title && first.url, `Live search result: '${first.title}' -> ${first.url}`);
+          } else {
+            console.log("  [INFO] DuckDuckGo returned 0 results or rate limited (graceful pass)");
+          }
         }
       } catch (err) {
         console.log(`  [INFO] Search network probe skipped (${err.message}) - offline pass`);
