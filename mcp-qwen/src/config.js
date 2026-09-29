@@ -421,6 +421,18 @@ export const TAVILY_API_KEY = _initSearchConfig.tavily_api_key;
 const CONTEXT7_API_KEY = _initSearchConfig.context7_api_key;
 const SEARXNG_URL = _initSearchConfig.searxng_url;
 
+/**
+ * Maximum characters returned by web_fetch before boundary-aware truncation.
+ * - Unit: characters
+ * - Default: 60000
+ * - Override: QWEN_MAX_FETCH_CHARS
+ * @type {number}
+ */
+export const MAX_FETCH_CHARS = (() => {
+  const parsed = parseInt(process.env.QWEN_MAX_FETCH_CHARS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60_000;
+})();
+
 
 /**
  * Inactivity threshold for engine telemetry before declaring an engine wedge.

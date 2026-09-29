@@ -12,11 +12,14 @@ import {
 } from "./config.js";
 import {
   isWslLocation,
+  isWindowsDrivePath,
   toPosixWslPath,
   toWindowsPath,
+  toMsys2Path,
   canonicalizePath,
   killSessionProcessTreeSync,
 } from "./wsl_bridge.js";
+import { posixShell } from "./platform.js";
 import {
   ensureServerRunning,
   ensureStreamProxyRunning,
@@ -257,9 +260,33 @@ export function startAnserTask({
         } catch {}
       }
 
-      const cwdInWsl = isWslLocation(cwd);
+      // Reconcile the shell path dialect between the system prompt and the
+      // executor. The executor (shell_executor.js) routes by the *actual*
+      // execution shell: WSL-native locations (/home/, /root/, ...) go to
+      // wsl.exe (WSL dialect /mnt/d/...), while Windows drive locations
+      // (D:\, /mnt/d/, /d/) go to Git Bash/MSYS2 (MSYS2 dialect /d/...) or
+      // cmd.exe (Windows path). The prompt's working directory must match the
+      // dialect the executor will actually use, or the model issues commands
+      // against a non-existent path (e.g. `mkdir /mnt/...` in Git Bash).
+      //
+      // WSL-native = a WSL location that is NOT a Windows drive mount.
+      const cwdInWsl = isWslLocation(cwd) && !isWindowsDrivePath(cwd);
+      // MCP extension routing (separate concern from the shell dialect):
+      // WSL-native, or forced WSL on a Windows host.
       const targetInWsl = cwdInWsl || (IS_WINDOWS && process.env.QWEN_FORCE_WSL !== "0");
-      const targetCwd = targetInWsl ? toPosixWslPath(cwd) : toWindowsPath(cwd);
+      // Prompt/executor dialect: mirror the shell executor's routing decision
+      // (isWslLocation of the normalized cwd), NOT QWEN_FORCE_WSL.
+      let targetCwd;
+      if (cwdInWsl) {
+        // wsl.exe target: WSL dialect (/mnt/d/... for drives, /home/... for native).
+        targetCwd = toPosixWslPath(cwd);
+      } else if (IS_WINDOWS && posixShell()) {
+        // Git Bash / MSYS2 target: MSYS2 dialect (/d/... for drives).
+        targetCwd = toMsys2Path(cwd);
+      } else {
+        // cmd.exe target (no POSIX shell): Windows path (D:\...).
+        targetCwd = toWindowsPath(cwd);
+      }
 
       // P9: keyword auto-inject matching skills from the packaged skills/
       // library into the instruction block. Additive and budget-capped; when

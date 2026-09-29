@@ -11,8 +11,9 @@
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
+import { PDFParse } from "pdf-parse";
 import { search, SafeSearchType } from "duck-duck-scrape";
-import { getSearchConfig } from "../../config.js";
+import { getSearchConfig, MAX_FETCH_CHARS } from "../../config.js";
 import { createRequire } from "node:module";
 
 // Single source of truth for the harness version: read from package.json
@@ -23,11 +24,6 @@ const PKG_VERSION = require("../../../package.json").version;
 const DEFAULT_USER_AGENT =
   `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Anser/${PKG_VERSION}`;
 
-const DEFAULT_MAX_FETCH_CHARS = 24_000;
-const MAX_FETCH_CHARS = (() => {
-  const parsed = parseInt(process.env.QWEN_MAX_FETCH_CHARS, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_FETCH_CHARS;
-})();
 const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
 const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
 
@@ -98,6 +94,145 @@ function isDocQuery(q) {
   return /\b(docs?|documentation|api|library|package|sdk|crate|module|import|framework|reference|guide)\b/i.test(q);
 }
 
+/**
+ * Strips inline HTML tags and decodes common HTML entities in a string.
+ *
+ * @param {string} s
+ * @returns {string}
+ */
+function sanitizeSnippet(s) {
+  if (!s) return s;
+  return s
+    .replace(/<[^>]+>/g, "")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+// Media types that must never be decoded as UTF-8 text.
+const BINARY_MEDIA_PREFIXES = ["image/", "audio/", "video/"];
+const BINARY_MEDIA_TYPES = new Set([
+  "application/zip",
+  "application/octet-stream",
+  "application/gzip",
+  "application/x-gzip",
+  "application/x-tar",
+  "application/x-7z-compressed",
+  "application/x-rar-compressed",
+  "application/wasm",
+  "application/x-bzip2",
+  "application/x-xz",
+  "font/woff",
+  "font/woff2",
+  "font/ttf",
+  "font/otf",
+]);
+
+const PDF_MAGIC = Buffer.from("%PDF-");
+
+/**
+ * Returns true when the leading bytes of a buffer contain a NUL byte,
+ * a strong signal of binary (non-text) content.
+ *
+ * @param {Buffer} buf
+ * @returns {boolean}
+ */
+function hasNulByte(buf) {
+  const limit = Math.min(buf.length, 8192);
+  for (let i = 0; i < limit; i++) {
+    if (buf[i] === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Classifies an HTTP response body into a handling category before any text
+ * decoding, using the Content-Type header and leading magic bytes.
+ *
+ * @param {string} contentType Lowercased Content-Type header value.
+ * @param {Buffer} buf Full response body.
+ * @returns {"json"|"text"|"html"|"pdf"|"binary"}
+ */
+function classifyResponse(contentType, buf) {
+  const base = contentType.split(";")[0].trim().toLowerCase();
+
+  // PDF: explicit type or %PDF- magic (catches mislabeled/octet-stream PDFs).
+  if (base === "application/pdf" || buf.subarray(0, 5).equals(PDF_MAGIC)) {
+    return "pdf";
+  }
+  if (base === "application/json" || base.endsWith("+json")) {
+    return "json";
+  }
+  if (base === "text/html" || base === "application/xhtml+xml") {
+    return "html";
+  }
+  if (base.startsWith("text/")) {
+    return "text";
+  }
+  if (
+    BINARY_MEDIA_TYPES.has(base) ||
+    BINARY_MEDIA_PREFIXES.some((p) => base.startsWith(p))
+  ) {
+    return "binary";
+  }
+  // Unknown/absent Content-Type: sniff the leading bytes.
+  if (hasNulByte(buf)) {
+    return "binary";
+  }
+  return "html";
+}
+
+/**
+ * Extracts plain text from a PDF buffer using pdf-parse (pdfjs-dist based).
+ *
+ * @param {Buffer} buf Raw PDF bytes.
+ * @returns {Promise<string>} Concatenated per-page text.
+ */
+async function extractPdfText(buf) {
+  const parser = new PDFParse({ data: new Uint8Array(buf) });
+  try {
+    const result = await parser.getText();
+    return result.pages.map((p) => p.text).join("\n\n").trim();
+  } finally {
+    await parser.destroy();
+  }
+}
+
+/**
+ * Truncates text to at most `maxChars` characters, cutting at a clean
+ * boundary (a paragraph `\n\n`, else a line `\n`) when one exists within the
+ * last 500 characters of the window, and closing any open markdown code
+ * fence. Appends a concise marker reporting the shown and total character
+ * counts. Returns the input unchanged when it already fits.
+ *
+ * @param {string} text
+ * @param {number} maxChars
+ * @returns {string}
+ */
+function smartTruncate(text, maxChars) {
+  if (text.length <= maxChars) return text;
+
+  const window = text.slice(0, maxChars);
+  const searchStart = Math.max(0, maxChars - 500);
+
+  let cut = window.lastIndexOf("\n\n");
+  if (cut < searchStart) cut = window.lastIndexOf("\n");
+  if (cut < searchStart) cut = maxChars;
+
+  let out = window.slice(0, cut);
+
+  // Close an open markdown code fence so the document stays well-formed.
+  const fenceCount = (out.match(/^```/gm) || []).length;
+  if (fenceCount % 2 === 1) {
+    out = out.replace(/\s+$/, "") + "\n```";
+  }
+
+  return out + `\n\n[Content truncated: showing ${out.length} of ${text.length} chars]`;
+}
+
 export class WebService {
   constructor(options = {}) {
     this.userAgent = options.userAgent || DEFAULT_USER_AGENT;
@@ -140,9 +275,9 @@ export class WebService {
     const data = await res.json();
     const items = data.web?.results || [];
     return items.slice(0, limit).map((r) => ({
-      title: r.title || "",
+      title: sanitizeSnippet(r.title || ""),
       url: r.url || "",
-      snippet: r.description || "",
+      snippet: sanitizeSnippet(r.description || ""),
     }));
   }
 
@@ -334,10 +469,16 @@ export class WebService {
     if (chosenProvider !== "auto") {
       chain.push(chosenProvider);
     } else {
-      // Auto chain: Brave -> Tavily -> Context7 (if documentation query) -> SearXNG -> DuckDuckGo
-      if (cfg.brave_api_key) chain.push("brave");
-      if (cfg.tavily_api_key) chain.push("tavily");
-      if (cfg.context7_api_key && isDocQuery(trimmedQuery)) chain.push("context7");
+      // Doc queries: Context7 -> Tavily -> Brave -> SearXNG -> DuckDuckGo
+      // General queries: Brave -> Tavily -> SearXNG -> DuckDuckGo
+      if (isDocQuery(trimmedQuery)) {
+        if (cfg.context7_api_key) chain.push("context7");
+        if (cfg.tavily_api_key) chain.push("tavily");
+        if (cfg.brave_api_key) chain.push("brave");
+      } else {
+        if (cfg.brave_api_key) chain.push("brave");
+        if (cfg.tavily_api_key) chain.push("tavily");
+      }
       if (cfg.searxng_url) chain.push("searxng");
       chain.push("duckduckgo");
     }
@@ -412,13 +553,18 @@ export class WebService {
       throw new Error(`InvalidUrlError: Only HTTP and HTTPS URLs are supported (got '${parsedUrl.protocol}')`);
     }
 
+    const headers = {
+      "User-Agent": this.userAgent,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,text/plain;q=0.7,*/*;q=0.5",
+      "Accept-Language": "en-US,en;q=0.9",
+    };
+    if (parsedUrl.hostname === "api.github.com" && process.env.GITHUB_TOKEN) {
+      headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
     const response = await globalThis.fetch(parsedUrl.href, {
       method: "GET",
-      headers: {
-        "User-Agent": this.userAgent,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,text/plain;q=0.7,*/*;q=0.5",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
+      headers,
       signal: AbortSignal.timeout(timeout_ms),
     });
 
@@ -426,14 +572,46 @@ export class WebService {
       throw new Error(`HttpError: GET '${url}' failed with status ${response.status} ${response.statusText}`);
     }
 
+    // Read the body once as a Buffer so the content can be classified before
+    // any text decoding (prevents binary bodies from being mangled as UTF-8).
+    const body = Buffer.from(await response.arrayBuffer());
     const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    const category = classifyResponse(contentType, body);
 
-    // 1. JSON handling (with automatic token distillation)
-    if (contentType.includes("application/json")) {
-      const data = await response.json();
+    // 1. PDF: extract plain text in-process (never decode as UTF-8).
+    if (category === "pdf") {
+      const text = await extractPdfText(body);
+      const truncated = smartTruncate(text, max_chars);
+      return {
+        url: parsedUrl.href,
+        status: response.status,
+        content_type: "application/pdf",
+        markdown: truncated,
+        length: text.length,
+      };
+    }
+
+    // 2. Binary media: return a structured stub, never a UTF-8 decode.
+    if (category === "binary") {
+      return {
+        url: parsedUrl.href,
+        status: response.status,
+        content_type: contentType || "application/octet-stream",
+        binary: true,
+        byte_length: body.length,
+        markdown:
+          `[Binary content: ${contentType || "unknown type"}, ${body.length} bytes. ` +
+          "Not rendered as text; use a dedicated tool to inspect this file.",
+        length: body.length,
+      };
+    }
+
+    // 3. JSON handling (with automatic token distillation)
+    if (category === "json") {
+      const data = JSON.parse(body.toString("utf-8"));
       const distilled = pruneJsonPayload(data);
       const jsonStr = JSON.stringify(distilled, null, 2);
-      const truncated = jsonStr.length > max_chars ? jsonStr.slice(0, max_chars) + "\n...[truncated]" : jsonStr;
+      const truncated = smartTruncate(jsonStr, max_chars);
       return {
         url: parsedUrl.href,
         status: response.status,
@@ -443,10 +621,10 @@ export class WebService {
       };
     }
 
-    // 2. Plaintext / Markdown handling
-    if (contentType.includes("text/plain") || contentType.includes("text/markdown")) {
-      const text = await response.text();
-      const truncated = text.length > max_chars ? text.slice(0, max_chars) + "\n...[truncated]" : text;
+    // 4. Plaintext / Markdown handling
+    if (category === "text") {
+      const text = body.toString("utf-8");
+      const truncated = smartTruncate(text, max_chars);
       return {
         url: parsedUrl.href,
         status: response.status,
@@ -456,8 +634,8 @@ export class WebService {
       };
     }
 
-    // 3. HTML handling: Mozilla Readability + Turndown
-    const rawHtml = await response.text();
+    // 5. HTML handling: Mozilla Readability + Turndown
+    const rawHtml = body.toString("utf-8");
     const dom = new JSDOM(rawHtml, { url: parsedUrl.href });
     const document = dom.window.document;
 
@@ -472,9 +650,7 @@ export class WebService {
         if (article && article.content) {
           let markdown = this.turndown.turndown(article.content);
           const fullLength = markdown.length;
-          if (markdown.length > max_chars) {
-            markdown = markdown.slice(0, max_chars) + "\n\n...[content truncated to " + max_chars + " chars]";
-          }
+          markdown = smartTruncate(markdown, max_chars);
           return {
             url: parsedUrl.href,
             status: response.status,
@@ -496,9 +672,7 @@ export class WebService {
     const bodyHtml = document.body ? document.body.innerHTML : rawHtml;
     let markdown = this.turndown.turndown(bodyHtml);
     const fullLength = markdown.length;
-    if (markdown.length > max_chars) {
-      markdown = markdown.slice(0, max_chars) + "\n\n...[content truncated to " + max_chars + " chars]";
-    }
+    markdown = smartTruncate(markdown, max_chars);
 
     return {
       url: parsedUrl.href,

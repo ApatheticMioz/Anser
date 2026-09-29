@@ -28,11 +28,12 @@ import {
   isWslLocation,
   toPosixWslPath,
   toWindowsPath,
+  toMsys2Path,
   normalizeWorkspacePath,
 } from "./wsl_bridge.js";
 
 // Re-export the Windows<->POSIX path translators (do NOT reimplement them).
-export { isWslLocation, toPosixWslPath, toWindowsPath, normalizeWorkspacePath };
+export { isWslLocation, toPosixWslPath, toWindowsPath, toMsys2Path, normalizeWorkspacePath };
 
 // ---------------------------------------------------------------------------
 // WSL distro / user / home — re-exported from the leaf wsl_env.js.

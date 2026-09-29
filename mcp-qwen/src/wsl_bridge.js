@@ -11,6 +11,8 @@ const execFileAsync = promisify(execFile);
 
 /**
  * Checks if a target path resides inside the WSL filesystem.
+ * Recognizes WSL-native prefixes, WSL Windows-drive mounts (/mnt/<drive>/),
+ * and UNC paths (\\wsl.*\).
  */
 export function isWslLocation(inputPath) {
   if (!inputPath) return false;
@@ -22,12 +24,14 @@ export function isWslLocation(inputPath) {
     p.startsWith("/var/") ||
     p.startsWith("/usr/") ||
     p.startsWith("/tmp/") ||
+    p.startsWith("/mnt/") ||
     /^\\\\wsl(?:\.localhost|\$)\\/i.test(p)
   );
 }
 
 /**
- * Normalizes any path to a clean POSIX WSL path (e.g. <wslHome>/Work).
+ * Normalizes any path to a clean POSIX WSL path (e.g. /mnt/d/Work).
+ * Handles Windows (D:\...), WSL UNC (\\wsl.localhost\...), and MSYS2 (/d/...) inputs.
  */
 export function toPosixWslPath(inputPath) {
   if (!inputPath) return wslHome();
@@ -42,11 +46,18 @@ export function toPosixWslPath(inputPath) {
     const sub = winMatch[2].replace(/\\/g, "/");
     return `/mnt/${drive}/${sub}`;
   }
+  // MSYS2: /d/foo -> /mnt/d/foo
+  const msysMatch = p.match(/^\/([a-zA-Z])\/(.*)/);
+  if (msysMatch) {
+    const drive = msysMatch[1].toLowerCase();
+    return `/mnt/${drive}/${msysMatch[2]}`;
+  }
   return p.replace(/\\/g, "/");
 }
 
 /**
  * Normalizes any path to a valid Windows path (e.g. D:\LLM_Ecosystem or \\wsl.localhost\<distro>\home\...).
+ * Handles WSL-native (/home/...), WSL drive mounts (/mnt/d/...), MSYS2 (/d/...), and Windows (D:\...) inputs.
  */
 export function toWindowsPath(inputPath) {
   if (!inputPath) return process.cwd();
@@ -60,12 +71,62 @@ export function toWindowsPath(inputPath) {
     const sub = mntMatch[2].replace(/\//g, "\\");
     return `${drive}:\\${sub}`;
   }
+  // MSYS2: /d/foo -> D:\foo
+  const msysMatch = p.match(/^\/([a-zA-Z])\/(.*)/);
+  if (msysMatch) {
+    const drive = msysMatch[1].toUpperCase();
+    const sub = msysMatch[2].replace(/\//g, "\\");
+    return `${drive}:\\${sub}`;
+  }
   const winMatch = p.match(/^([a-zA-Z]):[\\/]+(.*)/);
   if (winMatch) {
     const drive = winMatch[1].toUpperCase();
     const sub = winMatch[2].replace(/[\\/]+/g, "\\");
     return `${drive}:\\${sub}`;
   }
+  return p;
+}
+
+/**
+ * True if the path refers to a Windows drive (D:\, /mnt/d/, or MSYS2 /d/).
+ * These route to Git Bash/MSYS2 on a Windows host, not wsl.exe.
+ * Distinguished from WSL-native locations (/home/, /root/, /usr/, ...) which
+ * use multi-letter first path segments.
+ */
+export function isWindowsDrivePath(inputPath) {
+  if (!inputPath) return false;
+  const p = inputPath.trim();
+  return (
+    /^([a-zA-Z]):[\\\/]/.test(p) ||
+    /^\/mnt\/[a-zA-Z]\//.test(p) ||
+    /^\/[a-zA-Z]\//.test(p)
+  );
+}
+
+/**
+ * Normalizes any path to MSYS2 dialect (e.g. /d/LLM_Ecosystem).
+ * Used for Git Bash / MSYS2 execution targets where Windows drives
+ * mount as /<drive>/ and /mnt/ does not exist.
+ * Handles Windows (D:\...), WSL drive mounts (/mnt/d/...), and passes
+ * through already-MSYS2 or WSL-native paths unchanged.
+ */
+export function toMsys2Path(inputPath) {
+  if (!inputPath) return process.cwd();
+  let p = inputPath.trim();
+  // Windows: D:\foo\bar -> /d/foo/bar
+  const winMatch = p.match(/^([a-zA-Z]):[\\\/](.*)/);
+  if (winMatch) {
+    const drive = winMatch[1].toLowerCase();
+    const sub = winMatch[2].replace(/\\/g, "/");
+    return `/${drive}/${sub}`;
+  }
+  // WSL drive mount: /mnt/d/foo -> /d/foo
+  const mntMatch = p.match(/^\/mnt\/([a-zA-Z])\/(.*)/);
+  if (mntMatch) {
+    const drive = mntMatch[1].toLowerCase();
+    return `/${drive}/${mntMatch[2]}`;
+  }
+  // Already MSYS2 or WSL-native: pass through
   return p;
 }
 
