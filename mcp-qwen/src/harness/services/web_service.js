@@ -14,6 +14,11 @@ import TurndownService from "turndown";
 import { PDFParse } from "pdf-parse";
 import { search, SafeSearchType } from "duck-duck-scrape";
 import { getSearchConfig, MAX_FETCH_CHARS } from "../../config.js";
+import {
+  ensureSearxngRunning,
+  markSearxngActive,
+  registerShutdown,
+} from "./searxng_lifecycle.js";
 import { createRequire } from "node:module";
 
 // Single source of truth for the harness version: read from package.json
@@ -388,9 +393,12 @@ export class WebService {
 
   /**
    * Search via SearXNG JSON instance.
+   * For local (loopback) instances, ensures the Docker container is running
+   * before issuing the request, and marks activity for the idle-stop watchdog.
    */
   async _searchSearxng(query, limit, baseUrl) {
     if (!baseUrl) throw new Error("MissingSearxngUrl");
+    await ensureSearxngRunning(baseUrl);
     const u = new URL(baseUrl.replace(/\/+$/, "") + "/search");
     u.searchParams.set("q", query);
     u.searchParams.set("format", "json");
@@ -404,6 +412,7 @@ export class WebService {
       throw new Error(`SearxngSearchError: HTTP ${res.status} ${res.statusText}`);
     }
     const data = await res.json();
+    markSearxngActive();
     const items = data.results || [];
     return items.slice(0, limit).map((r) => ({
       title: r.title || "",
@@ -746,6 +755,7 @@ export class WebService {
 export function webPlugin(ctx, options = {}) {
   const web = new WebService(options);
   ctx.provide("web", web);
+  registerShutdown();
 
   ctx.registerTool("web_search", {
     description:

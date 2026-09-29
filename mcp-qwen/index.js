@@ -38,6 +38,7 @@ import {
   activeSseSessions,
 } from "./src/task_registry.js";
 import { registerTools } from "./src/tools.js";
+import { shutdownSearxng } from "./src/harness/services/searxng_lifecycle.js";
 import { disposeAllBridges } from "./src/harness/services/mcp_bridge.js";
 
 const require = createRequire(import.meta.url);
@@ -91,6 +92,9 @@ function setupProcessLifecycleHandlers() {
           } catch {}
         }
       }
+      try {
+        shutdownSearxng().catch(() => {});
+      } catch {}
     } catch {}
   };
 
