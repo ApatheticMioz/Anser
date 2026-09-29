@@ -304,9 +304,38 @@ if (IS_TEST_ENV && process.env.NODE_ENV !== "test") {
 }
 
 /**
+ * One-time migration from the legacy ~/.qwen state directory to ~/.anser.
+ * If the legacy directory exists and the new one does not, it is renamed
+ * (or copied as a fallback) so existing task state, config.json, and
+ * session ledgers carry over. Never throws; failures are logged to stderr.
+ *
+ * @param {string} legacyDir - legacy state dir (e.g. ~/.qwen)
+ * @param {string} newDir - new state dir (e.g. ~/.anser)
+ */
+function migrateStateDir(legacyDir, newDir) {
+  try {
+    if (!fs.existsSync(legacyDir) || fs.existsSync(newDir)) return;
+    try {
+      fs.renameSync(legacyDir, newDir);
+    } catch {
+      // Cross-device or permission failure: fall back to a recursive copy.
+      fs.cpSync(legacyDir, newDir, { recursive: true });
+    }
+    process.stderr.write(
+      `[config] Migrated state directory ${legacyDir} -> ${newDir}\n`
+    );
+  } catch (err) {
+    process.stderr.write(
+      `[config] State dir migration failed (${err.message}); using ${newDir}\n`
+    );
+  }
+}
+
+/**
  * Root directory for task state, slot leases, and session ledgers.
  * In test environments, allocates an isolated temporary scratchpad.
- * In production environments, resolves to ~/.qwen or WSL host equivalent.
+ * In production environments, resolves to ~/.anser (or WSL host equivalent),
+ * with a one-time migration from the legacy ~/.qwen directory.
  * - Override: QWEN_STATE_DIR
  * @type {string}
  */
@@ -316,29 +345,52 @@ export const QWEN_STATE_DIR = process.env.QWEN_STATE_DIR || (() => {
     process.env.QWEN_STATE_DIR = testDir;
     return testDir;
   }
-  if (IS_WINDOWS) return path.join(os.homedir(), ".qwen");
+  if (IS_WINDOWS) {
+    const newDir = path.join(os.homedir(), ".anser");
+    migrateStateDir(path.join(os.homedir(), ".qwen"), newDir);
+    return newDir;
+  }
   const winHomeWslPath = winHomeWsl();
   if (winHomeWslPath) {
-    const winUserHomeQwen = path.join(winHomeWslPath, ".qwen");
+    const winUserHomeAnser = path.join(winHomeWslPath, ".anser");
+    migrateStateDir(path.join(winHomeWslPath, ".qwen"), winUserHomeAnser);
     try {
-      if (fs.existsSync(winUserHomeQwen)) return winUserHomeQwen;
+      if (fs.existsSync(winUserHomeAnser)) return winUserHomeAnser;
     } catch {}
   }
-  return path.join(os.homedir(), ".qwen");
+  const newDir = path.join(os.homedir(), ".anser");
+  migrateStateDir(path.join(os.homedir(), ".qwen"), newDir);
+  return newDir;
 })();
 
 export const TASK_DIR = path.join(QWEN_STATE_DIR, "tasks");
 export const SLOTS_DIR = path.join(TASK_DIR, "slots");
 
-// Global Configuration (~/.qwen/config.json and ~/.qwen/.env)
+// Global Configuration (~/.anser/config.json and ~/.anser/.env)
 const GLOBAL_CONFIG_FILE = path.join(QWEN_STATE_DIR, "config.json");
 const GLOBAL_ENV_FILE = path.join(QWEN_STATE_DIR, ".env");
 
 /**
- * Loads the machine-wide global configuration from ~/.qwen/config.json or ~/.qwen/.env.
- * Single source of truth across all MCP host sessions (Claude Code, Antigravity, Cursor).
+ * Loads the machine-wide global configuration from ~/.anser/config.json or
+ * ~/.anser/.env. Single source of truth across all MCP host sessions
+ * (Claude Code, Antigravity, Cursor).
  *
- * @returns {{ search: { provider?: string, brave_api_key?: string, tavily_api_key?: string, context7_api_key?: string, searxng_url?: string } }}
+ * Recognized top-level keys:
+ *   - model: model name served by the engine (env: QWEN_MODEL)
+ *   - baseURL: OpenAI-compatible endpoint (env: QWEN_BASE_URL)
+ *   - max_context: nominal context window in tokens (env: QWEN_MAX_CONTEXT)
+ *   - launch_command: shell command used to (re)start the engine (env: QWEN_LAUNCH_COMMAND)
+ *   - tool_prefix: prefix applied to registered MCP tool names (env: MCP_TOOL_PREFIX)
+ *   - search: { provider, brave_api_key, tavily_api_key, context7_api_key, searxng_url }
+ *
+ * @returns {{
+ *   model?: string,
+ *   baseURL?: string,
+ *   max_context?: number,
+ *   launch_command?: string,
+ *   tool_prefix?: string,
+ *   search: { provider?: string, brave_api_key?: string, tavily_api_key?: string, context7_api_key?: string, searxng_url?: string }
+ * }}
  */
 export function loadGlobalConfig() {
   const config = { search: {} };
@@ -347,6 +399,17 @@ export function loadGlobalConfig() {
       const raw = fs.readFileSync(GLOBAL_CONFIG_FILE, "utf8").replace(/^\uFEFF/, "");
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object") {
+        if (typeof parsed.model === "string" && parsed.model) config.model = parsed.model;
+        if (typeof parsed.baseURL === "string" && parsed.baseURL) config.baseURL = parsed.baseURL;
+        if (typeof parsed.max_context === "number" && parsed.max_context > 0) {
+          config.max_context = parsed.max_context;
+        }
+        if (typeof parsed.launch_command === "string" && parsed.launch_command) {
+          config.launch_command = parsed.launch_command;
+        }
+        if (typeof parsed.tool_prefix === "string" && parsed.tool_prefix) {
+          config.tool_prefix = parsed.tool_prefix;
+        }
         if (parsed.search && typeof parsed.search === "object") {
           Object.assign(config.search, parsed.search);
         }
@@ -842,6 +905,76 @@ export const SALVAGE_MAX_TOKENS = (() => {
   const parsed = parseInt(process.env.QWEN_SALVAGE_MAX_TOKENS, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SALVAGE_MAX_TOKENS;
 })();
+
+// ---------------------------------------------------------------------------
+// Engine configuration: model / baseURL / max_context / launch_command
+// Precedence: environment variables > ~/.anser/config.json > built-in defaults.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_MODEL = "Qwen3.8-27B";
+const DEFAULT_MAX_CONTEXT = MAX_LEN_HUGE;
+const DEFAULT_LAUNCH_COMMAND = "";
+
+/**
+ * Resolves the engine configuration with precedence:
+ *   1. Environment variables (QWEN_MODEL, QWEN_BASE_URL, QWEN_MAX_CONTEXT,
+ *      QWEN_LAUNCH_COMMAND, MCP_TOOL_PREFIX)
+ *   2. ~/.anser/config.json keys (model, baseURL, max_context, launch_command, tool_prefix)
+ *   3. Built-in defaults
+ *
+ * @returns {{
+ *   model: string,
+ *   baseURL: string,
+ *   max_context: number,
+ *   launch_command: string,
+ *   tool_prefix: string
+ * }}
+ */
+export function getEngineConfig() {
+  const cfg = loadGlobalConfig();
+  return {
+    model: process.env.QWEN_MODEL || cfg.model || DEFAULT_MODEL,
+    baseURL: process.env.QWEN_BASE_URL || cfg.baseURL || BASE_URL,
+    max_context:
+      parseInt(process.env.QWEN_MAX_CONTEXT, 10) ||
+      cfg.max_context ||
+      DEFAULT_MAX_CONTEXT,
+    launch_command: process.env.QWEN_LAUNCH_COMMAND || cfg.launch_command || DEFAULT_LAUNCH_COMMAND,
+    tool_prefix: process.env.MCP_TOOL_PREFIX ?? cfg.tool_prefix ?? "qwen",
+  };
+}
+
+/**
+ * Model name served by the local engine.
+ * - Default: "Qwen3.8-27B"
+ * - Override: QWEN_MODEL (env) or `model` in ~/.anser/config.json
+ * @type {string}
+ */
+export const MODEL = getEngineConfig().model;
+
+/**
+ * Nominal maximum context window for the served model, in tokens.
+ * - Default: 245760
+ * - Override: QWEN_MAX_CONTEXT (env) or `max_context` in ~/.anser/config.json
+ * @type {number}
+ */
+export const MAX_CONTEXT = getEngineConfig().max_context;
+
+/**
+ * Shell command used to (re)start the inference engine.
+ * - Default: "" (no managed launch)
+ * - Override: QWEN_LAUNCH_COMMAND (env) or `launch_command` in ~/.anser/config.json
+ * @type {string}
+ */
+export const LAUNCH_COMMAND = getEngineConfig().launch_command;
+
+/**
+ * Prefix applied to registered MCP tool names (e.g. "qwen" -> "qwen_coworker").
+ * - Default: "qwen"
+ * - Override: MCP_TOOL_PREFIX (env) or `tool_prefix` in ~/.anser/config.json
+ * @type {string}
+ */
+export const TOOL_PREFIX = getEngineConfig().tool_prefix;
 
 
 

@@ -34,7 +34,7 @@ const HEALTH_POLL_MS = 500;
 
 /** WSL-side path to the docker-compose.yml. */
 function composeFile() {
-  return `${wslHome()}/.qwen/searxng/docker-compose.yml`;
+  return `${wslHome()}/.anser/searxng/docker-compose.yml`;
 }
 
 // ---------------------------------------------------------------------------

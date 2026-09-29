@@ -20,6 +20,7 @@ import {
   AnserRunner,
 } from "../src/harness/runner.js";
 import { registerTools } from "../src/tools.js";
+import { MODEL, MAX_CONTEXT } from "../src/config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
@@ -354,6 +355,40 @@ test("prompt_integrity: DEFAULT_SYSTEM_PROMPT maintains core invariants while be
     DEFAULT_SYSTEM_PROMPT.includes("Peer Partnership & Two-Way Discussion"),
     "Must preserve Peer Partnership invariant"
   );
+});
+
+test("prompt_integrity: DEFAULT_SYSTEM_PROMPT parameterizes the model name from config", () => {
+  // The system prompt must carry the configured model name (MODEL from config.js),
+  // not a hardcoded identifier, so QWEN_MODEL / ~/.anser/config.json overrides
+  // propagate into the prompt.
+  assert.ok(
+    DEFAULT_SYSTEM_PROMPT.includes(`(${MODEL})`),
+    `System prompt must embed the configured model name (${MODEL})`
+  );
+  assert.ok(
+    DEFAULT_SYSTEM_PROMPT.startsWith(`You are the Autonomous Execution Coworker (${MODEL}) running in the Anser harness.`),
+    "System prompt opening must be parameterized with the configured model"
+  );
+});
+
+test("prompt_integrity: DEFAULT_SYSTEM_PROMPT follows QWEN_MODEL override (fresh process)", async () => {
+  // The module cache prevents re-resolving config.js in-process, so verify the
+  // dynamic model interpolation in a child node process with QWEN_MODEL set.
+  const { execFileSync } = await import("node:child_process");
+  const out = execFileSync(
+    process.execPath,
+    [
+      "-e",
+      'process.env.QWEN_MODEL = "TestModel-9B";' +
+        'import("./src/harness/runner.js").then((m) => {' +
+        '  if (!m.DEFAULT_SYSTEM_PROMPT.includes("(TestModel-9B)")) { console.error("OVERRIDE_MISSING"); process.exit(1); }' +
+        '  if (m.DEFAULT_SYSTEM_PROMPT.includes("Qwen3.8-27B")) { console.error("DEFAULT_LEAKED"); process.exit(1); }' +
+        '  console.log("OK");' +
+        '});',
+    ],
+    { cwd: path.join(__dirname, ".."), encoding: "utf8" }
+  );
+  assert.ok(out.includes("OK"), "Child process with QWEN_MODEL override must embed the overridden model in the system prompt");
 });
 
 test("prompt_integrity: runner allows collaborative resolution on continuation turn after reasoning cutoff", async () => {

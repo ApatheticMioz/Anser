@@ -219,10 +219,13 @@ that they agree.
 
 **Structural fix:** `tests/schema_parity.test.js` spawns the real server
 (`node index.js`), completes the MCP handshake, captures the served
-`tools/list` array, and deep-compares it against the JSON files
-`update_schemas.py` generates. The script's header now states the dict is
-the single source of truth for the Antigravity side and must stay in
-lockstep; the test makes drift a red build, not a silent divergence.
+`tools/list` array, and deep-compares it against the JSON files written by
+`anser install` into the Antigravity MCP schema dir. The script was later
+retired entirely: `bin/anser.js install` now derives the Antigravity-side
+schemas directly from `getToolManifest()` (the exact SDK code path used by
+`tools/list`), so there is a single source of truth and the parity test
+additionally asserts the served tools match `getToolManifest()` in-process.
+Drift is a red build, not a silent divergence.
 
 ### L5. Offline test contention with live leases (Gemini Issue 3)
 

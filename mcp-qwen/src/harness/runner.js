@@ -52,6 +52,8 @@ import {
   SALVAGE_MAX_TOKENS,
   MAX_LEN_HUGE,
   READ_GOVERNOR_MAX_BYTES,
+  MODEL,
+  MAX_CONTEXT,
 } from "../config.js";
 import { GUARD_MARKER_PREFIX } from "../repetition_detector.js";
 import { recordTurnTelemetry, recordToolExecution, sampleLiveVllmMetrics } from "../telemetry.js";
@@ -98,7 +100,7 @@ function emptyStreamRetryBackoffMs(retryNumber) {
   return Math.min(ms, EMPTY_STREAM_RETRY_BACKOFF_CAP_MS);
 }
 
-export const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (Qwen3.8-27B) running in the Anser harness.
+export const DEFAULT_SYSTEM_PROMPT = `You are the Autonomous Execution Coworker (${MODEL}) running in the Anser harness.
 You pair with the Lead Architect (Gemini in Antigravity / GLM in Claude Code) as a senior peer engineer. The Lead Architect holds high-level architecture and task decomposition; you hold hands-on execution, empirical testing, and codebase navigation.
 
 Operating Principles:
@@ -546,7 +548,7 @@ export class AnserRunner {
             contextEmergencySynthesisEmitted = true;
           }
           const synthesisPrompt = contextEmergencyCeilingLatched
-            ? `[Emergency Context Landing (${lastPromptTokens || "215,000+"}/245,760 tokens)]: Context space is near capacity. Tools are now disabled to prevent an unhandled engine crash. Synthesize your final deliverable, findings, code changes, and grounded conclusions immediately.`
+            ? `[Emergency Context Landing (${lastPromptTokens || "215,000+"}/${MAX_CONTEXT.toLocaleString("en-US")} tokens)]: Context space is near capacity. Tools are now disabled to prevent an unhandled engine crash. Synthesize your final deliverable, findings, code changes, and grounded conclusions immediately.`
             : `[Dispatch Budget Notice (${turnsTaken + 1}/${currentMaxTurns})]: You have reached the final turn of your allotted budget for this dispatch. Synthesize your final deliverable, findings, code changes, and grounded conclusions immediately based on the facts gathered so far.`;
 
           messages.push({
@@ -798,7 +800,7 @@ export class AnserRunner {
             role: "user",
             content:
               `[Context High-Watermark Advisory] Prompt context has reached ${turnResult.metrics.promptTokens} tokens ` +
-              `(high-watermark: ${CONTEXT_HIGH_WATERMARK_TOKENS}, max ceiling: 245,760). ` +
+              `(high-watermark: ${CONTEXT_HIGH_WATERMARK_TOKENS}, max ceiling: ${MAX_CONTEXT.toLocaleString("en-US")}). ` +
               `Wrap up your deliverable and return your final response now. ` +
               `Advise the user/orchestrator to roll into a fresh session_id for subsequent dispatches to prevent context exhaustion.`,
           });
@@ -1155,7 +1157,7 @@ export class AnserRunner {
       if (isContextExhausted) {
         status = "context_exhausted";
         finalText =
-          `[Context Exhausted] The session's cumulative context exceeded the model's 245,760 token ceiling.\n` +
+          `[Context Exhausted] The session's cumulative context exceeded the model's ${MAX_CONTEXT.toLocaleString("en-US")} token ceiling.\n` +
           `Prior session events and tool outputs remain intact in the local event ledger.\n` +
           `Action: Roll into a fresh session_id (e.g. "${sessionId}_stage2") for subsequent dispatches.`;
         logger.append({

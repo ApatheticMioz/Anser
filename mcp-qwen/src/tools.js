@@ -1,6 +1,9 @@
 import { z } from "zod";
 import http from "node:http";
 import path from "node:path";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { normalizeObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
+import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 import {
   BASE_URL,
   STATUS_PORT,
@@ -19,6 +22,8 @@ import {
   BASE_TURN_BUDGET,
   MAX_ELASTIC_TURNS,
   IS_TEST_ENV,
+  MODEL,
+  TOOL_PREFIX,
 } from "./config.js";
 import {
   normalizeWorkspacePath,
@@ -55,19 +60,25 @@ import {
 import { startAnserTask, resolveSessionId } from "./anser_runner.js";
 import { formatTelemetrySummary, recordTaskResult } from "./telemetry.js";
 
-export function registerTools(server) {
+export function registerTools(server, options = {}) {
+  // Effective tool-name prefix: explicit option > MCP_TOOL_PREFIX env /
+  // ~/.anser/config.json tool_prefix > "qwen". An empty string yields the
+  // canonical unprefixed names (coworker, task, server).
+  const prefix = options.prefix ?? TOOL_PREFIX;
+  const toolName = (base) => (prefix ? `${prefix}_${base}` : base);
+
   // Wire the heal backstop: refuse to stop/reboot the engine while live work
   // is in flight. Uses the injection hook so server_lifecycle.js stays free of
   // a hard dependency on task_registry.js (which has import-time side effects).
   setHealGatekeeper(hasLiveWork);
 
-  // Tool 1: qwen_coworker (Primary Hybrid Agent Interface)
+  // Tool 1: coworker (Primary Hybrid Agent Interface)
   server.registerTool(
-    "qwen_coworker",
+    toolName("coworker"),
     {
       title: "Autonomous Senior Coworker (Anser Microkernel + Universal 245K vLLM)",
       description:
-        "Primary autonomous execution coworker for local Qwen3.8-27B via Anser microkernel harness ($0 local text execution). " +
+        `Primary autonomous execution coworker for local ${MODEL} via Anser microkernel harness ($0 local text execution). ` +
         "Has full native access to Filesystem, Shell, and Git across Windows and WSL. Pure text-only model with Universal 245K context. " +
         "Executes codebase exploration, refactoring, implementation, diagnostics, live web/docs research, and git operations.\n\n" +
         "ORCHESTRATION RULES:\n" +
@@ -169,7 +180,7 @@ export function registerTools(server) {
           content: [
             {
               type: "text",
-              text: `qwen_coworker: 'cwd' parameter is required. The MCP server process was started from an IDE application directory (\`${process.cwd()}\`), which cannot be used as a project workspace. Please provide the target repository or directory path in 'cwd'.`,
+              text: `${toolName("coworker")}: 'cwd' parameter is required. The MCP server process was started from an IDE application directory (\`${process.cwd()}\`), which cannot be used as a project workspace. Please provide the target repository or directory path in 'cwd'.`,
             },
           ],
           isError: true,
@@ -205,7 +216,7 @@ export function registerTools(server) {
           content: [
             {
               type: "text",
-              text: `qwen_coworker: Refusing to use IDE application directory (\`${workingDir}\`) as workspace. Please specify a valid project directory in 'cwd'.`,
+              text: `${toolName("coworker")}: Refusing to use IDE application directory (\`${workingDir}\`) as workspace. Please specify a valid project directory in 'cwd'.`,
             },
           ],
           isError: true,
@@ -294,7 +305,7 @@ export function registerTools(server) {
         statusCallout = [
           `> [!TIP]`,
           `> **Qwen Engine Status: ACTIVELY EXECUTING**`,
-          `> Task \`${taskId}\` is actively running on the local Qwen3.8-27B engine with full 245K context.`,
+          `> Task \`${taskId}\` is actively running on the local ${MODEL} engine with full 245K context.`,
         ].join("\n");
       }
 
@@ -304,7 +315,7 @@ export function registerTools(server) {
         `- **Working Directory**: \`${workingDir}\``,
         statusCallout ? `${statusCallout}` : null,
         `- **Wait Command**: \`${waitCmdWin}\` (WSL: \`${waitCmdWsl}\`)`,
-        `- **Status Command**: \`qwen_task(action: "status", task_id: "${taskId}")\``,
+        `- **Status Command**: \`${toolName("task")}(action: "status", task_id: "${taskId}")\``,
       ].filter(Boolean);
 
       return {
@@ -314,16 +325,16 @@ export function registerTools(server) {
       } catch (err) {
         // Return MCP tool-execution failure response with isError: true.
         return {
-          content: [{ type: "text", text: `qwen_coworker: ${err && err.message ? err.message : String(err)}` }],
+          content: [{ type: "text", text: `${toolName("coworker")}: ${err && err.message ? err.message : String(err)}` }],
           isError: true,
         };
       }
     }
   );
 
-  // Tool 2: qwen_task (Unified Background Task Management)
+  // Tool 2: task (Unified Background Task Management)
   server.registerTool(
-    "qwen_task",
+    toolName("task"),
     {
       title: "Manage Background Qwen Tasks",
       description: "Check status, retrieve output, cancel, or list background Qwen coworker tasks.",
@@ -727,18 +738,18 @@ export function registerTools(server) {
       } catch (err) {
         // Return MCP tool-execution failure response with isError: true.
         return {
-          content: [{ type: "text", text: `qwen_task: ${err && err.message ? err.message : String(err)}` }],
+          content: [{ type: "text", text: `${toolName("task")}: ${err && err.message ? err.message : String(err)}` }],
           isError: true,
         };
       }
     }
   );
 
-  // Tool 3: qwen_server (Unified Server Lifecycle)
+  // Tool 3: server (Unified Server Lifecycle)
   server.registerTool(
-    "qwen_server",
+    toolName("server"),
     {
-      title: "Manage Local Qwen3.8-27B vLLM Instance Lifecycle",
+      title: `Manage Local ${MODEL} vLLM Instance Lifecycle`,
       description:
         "Check status, start, or stop the universal 245K context vLLM server in WSL Ubuntu. Status includes live engine gauges from /metrics (running/waiting requests, KV cache %, prefix-cache hit ratio, spec-decode acceptance) and an end-to-end canary completion - the port answering is NOT proof of health. Note: during active task execution, canary latency will be higher due to GPU batch contention; this is normal under load and is NOT a wedge. Only stop the server if the engine is idle or if the human user explicitly commands it.",
       inputSchema: {
@@ -898,7 +909,7 @@ export function registerTools(server) {
                     status: "rejected",
                     error: `Refusing to stop vLLM server: task '${activeTasks[0].id}' is actively executing.`,
                     guidance:
-                      "To cancel the active task without rebooting vLLM, call qwen_task(action: 'cancel', task_id: '" +
+                      `To cancel the active task without rebooting vLLM, call ${toolName("task")}(action: 'cancel', task_id: '` +
                       activeTasks[0].id +
                       "'). Only pass force: true to stop the server if the human USER explicitly commanded stopping the server or cancelling all tasks.",
                   },
@@ -942,10 +953,45 @@ export function registerTools(server) {
       } catch (err) {
         // Return MCP tool-execution failure response with isError: true.
         return {
-          content: [{ type: "text", text: `qwen_server: ${err && err.message ? err.message : String(err)}` }],
+          content: [{ type: "text", text: `${toolName("server")}: ${err && err.message ? err.message : String(err)}` }],
           isError: true,
         };
       }
     }
   );
+}
+
+/**
+ * getToolManifest() — read-only introspection of the registered tool surface.
+ *
+ * Builds a throwaway McpServer, registers the real tools against it, and
+ * converts each registered tool's zod `inputSchema` into a JSON Schema using
+ * the EXACT same code path the SDK uses when it serves `tools/list`
+ * (normalizeObjectSchema -> toJsonSchemaCompat with strictUnions/pipeStrategy
+ * 'input'). This guarantees the manifest is byte-identical to what a client
+ * receives over the wire, without touching or mutating any live registration.
+ *
+ * @param {object} [options]
+ * @param {string} [options.prefix] Tool-name prefix override (defaults to
+ *   TOOL_PREFIX, i.e. MCP_TOOL_PREFIX env / ~/.anser/config.json tool_prefix /
+ *   "qwen"). An empty string yields the canonical unprefixed names.
+ * @returns {Array<{ name: string, description: string, inputSchema: object }>}
+ */
+export function getToolManifest(options = {}) {
+  const server = new McpServer({ name: "manifest-probe", version: "0.0.0" });
+  registerTools(server, options);
+
+  return Object.entries(server._registeredTools)
+    .filter(([, tool]) => tool.enabled)
+    .map(([name, tool]) => {
+      const obj = normalizeObjectSchema(tool.inputSchema);
+      const inputSchema = obj
+        ? toJsonSchemaCompat(obj, { strictUnions: true, pipeStrategy: "input" })
+        : { type: "object", properties: {} };
+      return {
+        name,
+        description: tool.description,
+        inputSchema,
+      };
+    });
 }

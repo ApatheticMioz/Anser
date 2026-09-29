@@ -44,11 +44,6 @@ import { disposeAllBridges } from "./src/harness/services/mcp_bridge.js";
 const require = createRequire(import.meta.url);
 const { name: pkgName, version: pkgVersion } = require("./package.json");
 const __filename = fileURLToPath(import.meta.url);
-const isMain = Boolean(
-  process.argv[1] &&
-    (path.resolve(process.argv[1]).toLowerCase() === __filename.toLowerCase() ||
-      process.argv[1].toLowerCase().endsWith("index.js"))
-);
 
 function setupProcessLifecycleHandlers() {
   const cleanup = (signal) => {
@@ -141,7 +136,16 @@ function createMcpServer() {
 
 setMcpServerFactory(createMcpServer);
 
-async function main() {
+/**
+ * Starts the Anser MCP server on the stdio transport.
+ *
+ * Exported so that `bin/anser.js` (the packaged CLI entrypoint) can import
+ * and invoke it, while direct execution of `index.js` still works as before.
+ *
+ * Stdio purity contract: this function must never write to stdout except
+ * through the MCP transport (JSON-RPC frames). All diagnostics go to stderr.
+ */
+export async function startMcpServer() {
   setupProcessLifecycleHandlers();
   initStatusServer();
 
@@ -160,8 +164,16 @@ export {
   markTaskOrphanedOnDisk,
 };
 
+// Direct-run guard: only auto-start when this file is the actual entrypoint
+// (e.g. `node index.js`), not when imported by bin/anser.js or tests.
+const isMain = Boolean(
+  process.argv[1] &&
+    (path.resolve(process.argv[1]).toLowerCase() === __filename.toLowerCase() ||
+      process.argv[1].toLowerCase().endsWith("index.js"))
+);
+
 if (isMain) {
-  main().catch((err) => {
+  startMcpServer().catch((err) => {
     console.error("MCP Server Fatal Error:", err);
     process.exit(1);
   });

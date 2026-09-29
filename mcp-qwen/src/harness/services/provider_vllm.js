@@ -10,7 +10,6 @@
  */
 
 import {
-  STREAM_PROXY_PORT,
   VLLM_PORT,
   MAX_TOKENS,
   MAX_LEN_HUGE,
@@ -19,13 +18,18 @@ import {
   STREAM_IDLE_TIMEOUT_MS_DEEP,
   STREAM_IDLE_DEPTH_TOKENS,
   MAX_REASONING_TOKENS,
+  MODEL,
+  BASE_URL,
 } from "../../config.js";
 
 export class VllmProviderService {
   constructor(options = {}) {
-    this.baseUrl = options.baseUrl || `http://127.0.0.1:${STREAM_PROXY_PORT}/v1`;
+    // Engine identity is sourced from config.js (env > ~/.anser/config.json >
+    // built-in defaults) so the provider never hardcodes a model name or
+    // endpoint that could drift from the rest of the harness.
+    this.baseUrl = options.baseUrl || BASE_URL;
     this.fallbackUrl = options.fallbackUrl || `http://127.0.0.1:${VLLM_PORT}/v1`;
-    this.model = options.model || "qwen3.8-27b";
+    this.model = options.model || MODEL;
     this.defaultTemperature = options.temperature ?? 0.0;
     this.defaultMaxTokens = options.maxTokens ?? MAX_TOKENS;
   }
@@ -289,6 +293,104 @@ export class VllmProviderService {
     let engineUsage = null;
     const toolCallsMap = new Map(); // index -> { id, name, arguments }
 
+    // ------------------------------------------------------------------
+    // Inline think-tag normalization (Ollama / llama-server style):
+    // engines without a reasoning parser emit thinking segments inside
+    // delta.content wrapped in backtick-think tags. A small per-stream
+    // state machine splits the stream so the thinking lands in
+    // fullReasoning (counted, never surfaced to the user) and only the
+    // stripped text reaches fullContent / onToken. The pending buffer
+    // holds text whose tag boundary is not yet resolvable (a tag split
+    // across chunk boundaries).
+    // ------------------------------------------------------------------
+    const THINK_OPEN = String.fromCharCode(96) + "think";
+    const THINK_CLOSE = String.fromCharCode(96) + "think" + String.fromCharCode(96);
+    let thinkPending = "";
+    let inThink = false;
+
+    const flushThinkPending = () => {
+      if (!thinkPending) return;
+      if (inThink) {
+        // Unclosed think segment at stream end: the remainder is reasoning.
+        fullReasoning += thinkPending;
+        reasoningTokens += Math.max(1, Math.round(thinkPending.length / 4));
+        hadReasoning = true;
+      } else {
+        // A partial opening tag that never completed is plain content.
+        fullContent += thinkPending;
+        if (onToken) onToken(thinkPending);
+      }
+      thinkPending = "";
+    };
+
+    const processThinkDelta = (text) => {
+      thinkPending += text;
+      for (;;) {
+        if (inThink) {
+          const closeIdx = thinkPending.indexOf(THINK_CLOSE);
+          if (closeIdx < 0) return; // hold until the closing tag arrives
+          const thinking = thinkPending.slice(0, closeIdx);
+          if (thinking.length > 0) {
+            fullReasoning += thinking;
+            reasoningTokens += Math.max(1, Math.round(thinking.length / 4));
+            hadReasoning = true;
+          }
+          thinkPending = thinkPending.slice(closeIdx + THINK_CLOSE.length);
+          inThink = false;
+          continue;
+        }
+        const openIdx = thinkPending.indexOf(THINK_OPEN);
+        if (openIdx < 0) {
+          // Hold a trailing partial opening tag (e.g., a backtick-th
+          // split across chunks) so it can be matched once the rest arrives.
+          let hold = 0;
+          for (
+            let k = Math.min(THINK_OPEN.length, thinkPending.length);
+            k > 0;
+            k--
+          ) {
+            if (thinkPending.endsWith(THINK_OPEN.slice(0, k))) {
+              hold = k;
+              break;
+            }
+          }
+          const emit = thinkPending.slice(0, thinkPending.length - hold);
+          if (emit) {
+            fullContent += emit;
+            if (onToken) onToken(emit);
+          }
+          thinkPending = thinkPending.slice(thinkPending.length - hold);
+          return;
+        }
+        const closeIdx = thinkPending.indexOf(
+          THINK_CLOSE,
+          openIdx + THINK_OPEN.length
+        );
+        const before = thinkPending.slice(0, openIdx);
+        if (before) {
+          fullContent += before;
+          if (onToken) onToken(before);
+        }
+        if (closeIdx < 0) {
+          // Opening tag present but not yet closed: enter think mode and
+          // hold the remainder until the closing tag arrives.
+          inThink = true;
+          thinkPending = thinkPending.slice(openIdx + THINK_OPEN.length);
+          return;
+        }
+        const thinking = thinkPending.slice(
+          openIdx + THINK_OPEN.length,
+          closeIdx
+        );
+        if (thinking.length > 0) {
+          fullReasoning += thinking;
+          reasoningTokens += Math.max(1, Math.round(thinking.length / 4));
+          hadReasoning = true;
+        }
+        thinkPending = thinkPending.slice(closeIdx + THINK_CLOSE.length);
+      }
+    };
+
     // Depth-aware idle tier: a deep-context prompt (estimated prompt tokens
     // >= STREAM_IDLE_DEPTH_TOKENS) gets the longer DEEP window; normal turns
     // keep the SHALLOW window. The tier is chosen from the chars-based
@@ -442,11 +544,14 @@ export class VllmProviderService {
                 ttft = Date.now() - t0;
               }
 
-              // Stream text content
+              // Stream text content. Engines without a reasoning parser
+              // (Ollama, llama-server) emit think-tag segments inside
+              // delta.content; the state machine above splits them so the
+              // thinking lands in fullReasoning and only the stripped text
+              // reaches fullContent / onToken.
               if (delta.content) {
                 completionTokens++;
-                fullContent += delta.content;
-                if (onToken) onToken(delta.content);
+                processThinkDelta(delta.content);
               }
 
               // Stream tool calls
@@ -500,6 +605,10 @@ export class VllmProviderService {
         await reader.cancel();
       } catch {}
     }
+
+    // Flush any held think-tag buffer at stream end: an unclosed think
+    // segment is reasoning; a partial opening tag is plain content.
+    flushThinkPending();
 
     const totalMs = Math.max(1, Date.now() - t0);
     const prefillMs = ttft ?? totalMs;

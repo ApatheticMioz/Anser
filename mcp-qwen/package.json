@@ -3,6 +3,17 @@
   "version": "2026.2.0",
   "description": "Universal 245K local Qwen3.8-27B Anser agent microkernel & MCP server: collaborative Socratic pair-programming, native multi-provider research (Brave, Tavily, Context7 docs, SearXNG, DuckDuckGo), cooperative landing turn ceiling preservation, in-process structural AST surgery (@ast-grep/napi), in-memory syntax gates (JS/TS, Python, JSON, LaTeX, BibTeX), 137-vector zero-trust sandbox, closed-loop evolutionary optimization (.evo/lineage.json), vLLM + DFlash2 + KVarN @ 245K context, and zero-turn reactive OS wait @18021.",
   "main": "index.js",
+  "bin": {
+    "anser": "bin/anser.js"
+  },
+  "files": [
+    "bin/",
+    "index.js",
+    "stream_proxy.js",
+    "src/",
+    "skills/",
+    "README.md"
+  ],
   "scripts": {
     "test": "node tests/canary.test.js && node tests/security.test.js && node tests/syntax_gates.test.js && node tests/edit_file_guard.test.js && node tests/search_code_guard.test.js && node tests/schema_parity.test.js && node tests/platform.test.js && node --test tests/protocol_sync.test.js && node --test tests/prompt_integrity.test.js",
     "test:fast": "npm test",

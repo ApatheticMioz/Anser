@@ -27,13 +27,16 @@ stream proxy starts on `:18022`.
 ### Google Antigravity IDE
 
 ```bash
-python update_schemas.py
+npx -y mcp-anser init
 ```
 
-This writes the three tool JSON schemas + `instructions.md` into
-`~/.gemini/antigravity-ide/mcp/qwen38-local/` (both Windows and WSL copies)
-and verifies the `mcp_config.json` entries. Re-run after any schema change in
-`src/tools.js`.
+This writes `~/.anser/config.json` (baseURL, model, max_context,
+tool_prefix) and then runs `anser install`, which writes the tool JSON
+schemas (from `getToolManifest()`) into
+`~/.gemini/antigravity-ide/mcp/anser/` and merges the `mcpServers.anser`
+entry into `~/.gemini/config/mcp_config.json`. From a local checkout use
+`node bin/anser.js init` (or `node bin/anser.js install --antigravity`
+to skip the config prompt). Re-run after any schema change in `src/tools.js`.
 
 ## Module Map
 
@@ -67,7 +70,7 @@ and verifies the `mcp_config.json` entries. Re-run after any schema change in
 | `src/harness/evo/trace_repair.js` | Traceback condenser (≤100-token failure digest) |
 | `src/harness/evo/watchdog.js` | Evo watchdog: stagnation breaker, token-velocity decay |
 | `stream_proxy.js` | Universal stream proxy (`:18022`): UTF-8 reassembly, SSE keep-alive, multimodal guard, repetition breaker |
-| `update_schemas.py` | Antigravity schema generator (writes JSON + instructions.md) |
+| `bin/anser.js` | Anser CLI: `init` (config), `install` (Antigravity schemas + mcp_config merge, Claude Code registration), `config`, `status` |
 
 ## Dual-Runtime Quickstart
 
@@ -95,15 +98,17 @@ claude mcp add --scope user qwen-anser node <repo-root>/mcp-qwen/index.js
 ### Antigravity IDE
 
 ```bash
-# Generate schemas (one-time, re-run after schema changes)
-python update_schemas.py
+# Install (one-time, re-run after schema changes)
+npx -y mcp-anser init
+# or from a local checkout:
+node bin/anser.js install --antigravity
 
 # Antigravity auto-discovers the MCP server from:
-#   ~/.gemini/antigravity-ide/mcp/qwen38-local/
-#   (both Windows C:\Users\... and WSL /home/... copies)
+#   ~/.gemini/antigravity-ide/mcp/anser/
+#   (mcpServers.anser is merged into ~/.gemini/config/mcp_config.json)
 #
 # Call via:
-#   call_mcp_tool(serverName="qwen38-local", toolName="qwen_coworker", arguments={...})
+#   call_mcp_tool(serverName="anser", toolName="qwen_coworker", arguments={...})
 ```
 
 ## Environment Variables
@@ -371,7 +376,7 @@ Two layers of defense:
 | 20 | `fifo_queue.test.js` | `npm test` | Live / Skip | FIFO queue semantics (live engine; honest-skip offline) |
 | 21 | `stdio_purity.test.js` | `npm run test:stdio` | Offline | Zero-stdout-write invariant lock (stdio JSON-RPC purity) |
 | 22 | `tool_errors.test.js` | `npm run test:tool_errors` | Offline | MCP-conformant tool-error envelopes (isError, no thrown exceptions) |
-| 23 | `schema_parity.test.js` | `npm run test:schema_parity` | Offline | Schema drift lock: live-served zod schemas vs `update_schemas.py` JSON |
+| 23 | `schema_parity.test.js` | `npm run test:schema_parity` | Offline | Schema drift lock: live-served zod schemas vs `anser install` JSON + `getToolManifest()` |
 | 24 | `stream_proxy.test.js` | `npm run test:proxy` | Live / Mock | SSE stream proxy: repetition tiering, UTF-8 reassembly, real proxy regression |
 | 25 | `utf8_proxy.test.js` | `npm run test:proxy` | Live / Mock | Multi-byte UTF-8 split across chunks reassembly verification |
 | 26 | `benchmark.test.js` | `npm run test:benchmark` | Live / Skip | Head-to-head Evo benchmark |
