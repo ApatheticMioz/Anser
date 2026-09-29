@@ -3,7 +3,7 @@
  * Multi-Provider Web Search & Leaky-Bucket Rate Limiter Verification (fully OFFLINE).
  *
  * Adversarially tests:
- * 1. Automatic failover chain across providers (Brave -> Tavily -> Context7 -> SearXNG -> DuckDuckGo).
+ * 1. Automatic failover chain across providers (SearXNG -> Tavily -> Brave -> Context7 -> DuckDuckGo).
  * 2. Strict fail-fast invariant when an explicit provider is selected (no silent fallbacks).
  * 3. Leaky-bucket rate limiter for DuckDuckGo (enforces >=1500ms intervals between calls).
  * 4. Input validation: rejects empty, whitespace, null, and non-string queries fail-fast.
@@ -87,7 +87,7 @@ check("UTF-8 BOM handling: loads config without SyntaxError even if BOM is prese
 });
 
 // ---------------------------------------------------------------------------
-// Section 3: Multi-Provider Failover Chain (Brave 429 -> Tavily 500 -> DDG)
+// Section 3: Multi-Provider Failover Chain (Tavily 500 -> Brave 429 -> DDG)
 // ---------------------------------------------------------------------------
 await checkAsync("Automatic failover: falls through failed upstream APIs to subsequent healthy provider", async () => {
   const originalFetch = globalThis.fetch;

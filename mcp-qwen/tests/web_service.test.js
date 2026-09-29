@@ -15,6 +15,7 @@
  * 11. Doc query provider ordering in auto chain (context7/tavily before brave).
  * 12. GitHub API token header attachment for api.github.com requests.
  * 13. Live search integration probe.
+ * 14. Tracking-parameter URL sanitization and normalized-URL deduplication.
  */
 
 import http from "node:http";
@@ -445,8 +446,12 @@ async function run() {
         callOrder.length = 0;
         await web.search({ query: "best pizza in nyc", provider: "auto" });
         ok(
-          callOrder[0] === "brave",
-          `General query: brave is first (got: ${callOrder[0]})`
+          callOrder[0] === "tavily",
+          `General query: tavily is first (got: ${callOrder[0]})`
+        );
+        ok(
+          callOrder.indexOf("tavily") < callOrder.indexOf("brave"),
+          "General query: tavily before brave"
         );
       } finally {
         globalThis.fetch = originalFetch;
@@ -540,6 +545,74 @@ async function run() {
         }
       } catch (err) {
         console.log(`  [INFO] Search network probe skipped (${err.message}) - offline pass`);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 14: Tracking-Param URL Sanitization & Deduplication
+    // -------------------------------------------------------------------------
+    console.log("\n[Test 14] Tracking-Param URL Sanitization & Deduplication");
+    {
+      const originalFetch = globalThis.fetch;
+      const originalEnv = {
+        BRAVE_API_KEY: process.env.BRAVE_API_KEY,
+        TAVILY_API_KEY: process.env.TAVILY_API_KEY,
+        CONTEXT7_API_KEY: process.env.CONTEXT7_API_KEY,
+        SEARXNG_URL: process.env.SEARXNG_URL,
+      };
+      process.env.BRAVE_API_KEY = "brave-key";
+      delete process.env.TAVILY_API_KEY;
+      delete process.env.CONTEXT7_API_KEY;
+      delete process.env.SEARXNG_URL;
+
+      globalThis.fetch = async () => ({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          web: {
+            results: [
+              {
+                title: "A",
+                url: "https://example.com/page?utm_source=mail&utm_medium=campaign&gclid=abc&ref=partner",
+                description: "snippet a",
+              },
+              {
+                title: "B",
+                url: "https://example.com/page?fbclid=xyz&msclkid=123&mc_eid=456&source=feed",
+                description: "snippet b",
+              },
+              {
+                title: "C",
+                url: "https://example.com/other?keep=1",
+                description: "snippet c",
+              },
+            ],
+          },
+        }),
+      });
+      try {
+        const res = await web.search({ query: "test dedup", provider: "brave" });
+        ok(res.results.length === 2, `Dedup: 3 results with 2 duplicate URLs -> 2 (got ${res.results.length})`);
+        ok(
+          res.results[0].url === "https://example.com/page",
+          `Tracking params stripped from first URL (got: ${res.results[0].url})`
+        );
+        ok(
+          res.results[1].url === "https://example.com/other?keep=1",
+          `Non-tracking params preserved (got: ${res.results[1].url})`
+        );
+        ok(res.count === 2, "count reflects deduplicated results");
+      } finally {
+        globalThis.fetch = originalFetch;
+        if (originalEnv.BRAVE_API_KEY !== undefined) process.env.BRAVE_API_KEY = originalEnv.BRAVE_API_KEY;
+        else delete process.env.BRAVE_API_KEY;
+        if (originalEnv.TAVILY_API_KEY !== undefined) process.env.TAVILY_API_KEY = originalEnv.TAVILY_API_KEY;
+        else delete process.env.TAVILY_API_KEY;
+        if (originalEnv.CONTEXT7_API_KEY !== undefined) process.env.CONTEXT7_API_KEY = originalEnv.CONTEXT7_API_KEY;
+        else delete process.env.CONTEXT7_API_KEY;
+        if (originalEnv.SEARXNG_URL !== undefined) process.env.SEARXNG_URL = originalEnv.SEARXNG_URL;
+        else delete process.env.SEARXNG_URL;
       }
     }
   } finally {

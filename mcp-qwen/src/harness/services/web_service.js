@@ -95,6 +95,53 @@ function isDocQuery(q) {
 }
 
 /**
+ * Removes common tracking query parameters (utm_*, gclid, fbclid, mc_eid,
+ * msclkid, ref, source) from a URL string, preserving all other parameters.
+ *
+ * @param {string} urlStr
+ * @returns {string}
+ */
+function stripTrackingParams(urlStr) {
+  if (!urlStr) return urlStr;
+  try {
+    const u = new URL(urlStr);
+    for (const key of [...u.searchParams.keys()]) {
+      if (
+        key.toLowerCase().startsWith("utm_") ||
+        ["gclid", "fbclid", "mc_eid", "msclkid", "ref", "source"].includes(key.toLowerCase())
+      ) {
+        u.searchParams.delete(key);
+      }
+    }
+    return u.toString();
+  } catch {
+    return urlStr;
+  }
+}
+
+/**
+ * Normalizes a URL for deduplication: strips tracking parameters, lowercases
+ * the scheme and host, drops the fragment, and removes a trailing slash.
+ *
+ * @param {string} urlStr
+ * @returns {string}
+ */
+function normalizeUrl(urlStr) {
+  const stripped = stripTrackingParams(urlStr);
+  try {
+    const u = new URL(stripped);
+    u.hash = "";
+    u.hostname = u.hostname.toLowerCase();
+    u.protocol = u.protocol.toLowerCase();
+    let s = u.toString();
+    if (s.endsWith("/")) s = s.slice(0, -1);
+    return s;
+  } catch {
+    return stripped;
+  }
+}
+
+/**
  * Strips inline HTML tags and decodes common HTML entities in a string.
  *
  * @param {string} s
@@ -276,7 +323,7 @@ export class WebService {
     const items = data.web?.results || [];
     return items.slice(0, limit).map((r) => ({
       title: sanitizeSnippet(r.title || ""),
-      url: r.url || "",
+      url: stripTrackingParams(r.url || ""),
       snippet: sanitizeSnippet(r.description || ""),
     }));
   }
@@ -307,7 +354,7 @@ export class WebService {
     const items = data.results || [];
     return items.slice(0, limit).map((r) => ({
       title: r.title || "",
-      url: r.url || "",
+      url: stripTrackingParams(r.url || ""),
       snippet: r.content || "",
     }));
   }
@@ -334,7 +381,7 @@ export class WebService {
     const items = data.results || data.snippets || (Array.isArray(data) ? data : []);
     return items.slice(0, limit).map((r) => ({
       title: r.title || r.library || "Context7 Documentation",
-      url: r.url || r.source || "https://context7.com",
+      url: stripTrackingParams(r.url || r.source || "https://context7.com"),
       snippet: r.content || r.snippet || r.text || "",
     }));
   }
@@ -360,7 +407,7 @@ export class WebService {
     const items = data.results || [];
     return items.slice(0, limit).map((r) => ({
       title: r.title || "",
-      url: r.url || "",
+      url: stripTrackingParams(r.url || ""),
       snippet: r.content || "",
     }));
   }
@@ -406,7 +453,7 @@ export class WebService {
       const title = (titleEl.textContent || "").trim();
       const snippet = snippetEl ? (snippetEl.textContent || "").trim() : "";
       if (title && link) {
-        results.push({ title, url: link, snippet });
+        results.push({ title, url: stripTrackingParams(link), snippet });
       }
     }
 
@@ -439,7 +486,7 @@ export class WebService {
 
     return res.results.slice(0, limit).map((r) => ({
       title: r.title || "",
-      url: r.url || "",
+      url: stripTrackingParams(r.url || ""),
       snippet: r.description || r.rawDescription || "",
     }));
   }
@@ -449,12 +496,12 @@ export class WebService {
    *
    * @param {object} params
    * @param {string} params.query Search terms or phrase
-   * @param {number} [params.max_results=10] Max results to return
+   * @param {number} [params.max_results=5] Max results to return
    * @param {"strict"|"moderate"|"off"} [params.safe_search="moderate"] SafeSearch level
    * @param {string} [params.provider="auto"] Provider override ('auto', 'brave', 'tavily', 'context7', 'searxng', 'duckduckgo')
    * @returns {Promise<{ query: string, count: number, provider: string, results: Array<{ title: string, url: string, snippet: string }> }>}
    */
-  async search({ query, max_results = 10, safe_search = "moderate", provider }) {
+  async search({ query, max_results = 5, safe_search = "moderate", provider }) {
     if (!query || typeof query !== "string" || !query.trim()) {
       throw new Error("InvalidQueryError: Search query must be a non-empty string");
     }
@@ -469,17 +516,18 @@ export class WebService {
     if (chosenProvider !== "auto") {
       chain.push(chosenProvider);
     } else {
-      // Doc queries: Context7 -> Tavily -> Brave -> SearXNG -> DuckDuckGo
-      // General queries: Brave -> Tavily -> SearXNG -> DuckDuckGo
+      // Doc queries: Context7 -> Tavily -> SearXNG -> Brave -> DuckDuckGo
+      // General queries: SearXNG -> Tavily -> Brave -> DuckDuckGo
       if (isDocQuery(trimmedQuery)) {
         if (cfg.context7_api_key) chain.push("context7");
         if (cfg.tavily_api_key) chain.push("tavily");
+        if (cfg.searxng_url) chain.push("searxng");
         if (cfg.brave_api_key) chain.push("brave");
       } else {
-        if (cfg.brave_api_key) chain.push("brave");
+        if (cfg.searxng_url) chain.push("searxng");
         if (cfg.tavily_api_key) chain.push("tavily");
+        if (cfg.brave_api_key) chain.push("brave");
       }
-      if (cfg.searxng_url) chain.push("searxng");
       chain.push("duckduckgo");
     }
 
@@ -496,11 +544,18 @@ export class WebService {
 
         anySucceeded = true;
         if (results && results.length > 0) {
+          const seen = new Set();
+          const deduped = results.filter((r) => {
+            const key = normalizeUrl(r.url);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
           return {
             query: trimmedQuery,
-            count: results.length,
+            count: deduped.length,
             provider: p,
-            results,
+            results: deduped,
           };
         }
       } catch (err) {
@@ -707,8 +762,8 @@ export function webPlugin(ctx, options = {}) {
         },
         max_results: {
           type: "integer",
-          description: "Maximum number of search results to return (default 10, max 25)",
-          default: 10,
+          description: "Maximum number of search results to return (default 5, max 25)",
+          default: 5,
         },
         safe_search: {
           type: "string",

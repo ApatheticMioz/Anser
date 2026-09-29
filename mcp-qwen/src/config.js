@@ -820,11 +820,11 @@ export const READ_GOVERNOR_MAX_BYTES = (() => {
 /**
  * Tool result size threshold above which payload is spilled to disk.
  * - Unit: bytes
- * - Default: 8192 (8 KB)
+ * - Default: 16384 (16 KB)
  * - Override: QWEN_TOOL_SPILL_BYTES
  * @type {number}
  */
-const DEFAULT_TOOL_SPILL_BYTES = 8192;
+const DEFAULT_TOOL_SPILL_BYTES = 16384;
 export const TOOL_SPILL_BYTES = (() => {
   const parsed = parseInt(process.env.QWEN_TOOL_SPILL_BYTES, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TOOL_SPILL_BYTES;
