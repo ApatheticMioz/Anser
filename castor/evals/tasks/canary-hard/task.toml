@@ -1,0 +1,24 @@
+id = "canary-hard"
+# HARD CANARY — expected to FAIL on the current agent. The gate is only
+# trusted while this stays red. If it ever passes without a code change,
+# the scorer is broken (see EVALS.md §4.1). Do NOT tune it to pass.
+prompt = """Implement a correct, allocation-free `parseIpv4` in src/ip.js that
+returns an array of 4 integers for a valid dotted-quad string and `null` for
+anything invalid (leading zeros, >255, wrong part count, non-digits, empty).
+It must handle all cases in test/ip.test.js. This is a hard task: the current
+agent is known to fail at least one edge case."""
+setup = "setup.sh"
+timeout_s = 180
+tags = ["tier-a", "canary", "F2"]
+
+[[scorer.checks]]
+id = "tests-green"
+kind = "exec"
+cmd = "node --test \"test/*.test.js\""
+expect_exit = 0
+
+[[scorer.checks]]
+id = "no-leading-zero-accepted"
+kind = "exec"
+cmd = "node -e \"import('./src/ip.js').then(m=>{if(m.parseIpv4('1.2.3.04')!==null)process.exit(1)})\""
+expect_exit = 0

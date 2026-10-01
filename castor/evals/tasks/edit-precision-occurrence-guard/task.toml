@@ -1,0 +1,30 @@
+id = "edit-precision-occurrence-guard"
+prompt = """In src/config.js the string `default: "dev"` appears in two places:
+the `env` block (line ~4) and the `logging` block (line ~9). Change ONLY the
+`env` block's value from "dev" to "prod". Leave the `logging` block untouched.
+Use a single edit_file call with a target that is unique to the env block."""
+setup = "setup.sh"
+timeout_s = 120
+tags = ["tier-a", "F2", "F5"]
+
+[[scorer.checks]]
+id = "env-block-changed"
+kind = "file"
+path = "src/config.js"
+expect_contains = 'env: { default: "prod" }'
+
+[[scorer.checks]]
+id = "logging-block-untouched"
+kind = "file"
+path = "src/config.js"
+expect_contains = 'logging: { default: "dev" }'
+
+[[scorer.checks]]
+id = "exactly-one-edit"
+kind = "trace"
+assert = "edit_file_count_eq_1"
+
+[[scorer.checks]]
+id = "no-repeated-failed-edit"
+kind = "trace"
+assert = "no_consecutive_identical_failed_toolcall"

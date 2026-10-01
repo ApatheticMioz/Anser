@@ -1,0 +1,50 @@
+id = "multi-step-refactor"
+prompt = """Refactor src/legacy.js: it has one 40-line function `process` that
+mixes parsing, validation, and formatting. Split it into three small exported
+functions — `parse`, `validate`, `format` — and make `process` a thin
+composition of them. Keep the public behavior identical: `process(input)` must
+return the same string it does today for the inputs in test/legacy.test.js.
+Do not change the test file."""
+setup = "setup.sh"
+timeout_s = 180
+tags = ["tier-a", "F3", "F4"]
+
+[[scorer.checks]]
+id = "tests-green"
+kind = "exec"
+cmd = "node --test \"test/*.test.js\""
+expect_exit = 0
+
+[[scorer.checks]]
+id = "three-functions-exported"
+kind = "file"
+path = "src/legacy.js"
+expect_contains = "export function parse"
+
+[[scorer.checks]]
+id = "validate-exported"
+kind = "file"
+path = "src/legacy.js"
+expect_contains = "export function validate"
+
+[[scorer.checks]]
+id = "format-exported"
+kind = "file"
+path = "src/legacy.js"
+expect_contains = "export function format"
+
+[[scorer.checks]]
+id = "process-is-thin"
+kind = "file"
+path = "src/legacy.js"
+expect_contains = "return format(validate(parse(input)))"
+
+[[scorer.checks]]
+id = "no-degenerate-final"
+kind = "trace"
+assert = "final_message_nonempty"
+
+[[scorer.checks]]
+id = "no-context-bloat"
+kind = "trace"
+assert = "no_tool_output_spilled"

@@ -1,0 +1,40 @@
+id = "tool-call-sequence"
+prompt = """Add a `version` field to the JSON config. You MUST: (1) read
+config.json first, (2) edit it to add `"version": "1.0.0"`, (3) run
+`node -e "JSON.parse(require('fs').readFileSync('config.json','utf8'))"` to
+prove the JSON is still valid. Do the steps in that order."""
+setup = "setup.sh"
+timeout_s = 120
+tags = ["tier-a", "F6", "F1"]
+
+[[scorer.checks]]
+id = "read-before-edit"
+kind = "trace"
+assert = "read_file_before_edit_file"
+
+[[scorer.checks]]
+id = "edit-before-verify"
+kind = "trace"
+assert = "edit_file_before_bash_verify"
+
+[[scorer.checks]]
+id = "verify-ran"
+kind = "trace"
+assert = "bash_verify_present"
+
+[[scorer.checks]]
+id = "no-dropped-toolcall"
+kind = "trace"
+assert = "every_tool_call_has_result"
+
+[[scorer.checks]]
+id = "json-valid"
+kind = "exec"
+cmd = "node -e \"JSON.parse(require('fs').readFileSync('config.json','utf8'))\""
+expect_exit = 0
+
+[[scorer.checks]]
+id = "version-added"
+kind = "file"
+path = "config.json"
+expect_contains = '"version": "1.0.0"'

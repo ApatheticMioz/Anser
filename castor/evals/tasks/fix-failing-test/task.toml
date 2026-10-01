@@ -1,0 +1,25 @@
+id = "fix-failing-test"
+prompt = """The test suite is failing. Fix the bug in src/sum.js so that
+`node --test "test/*.test.js"` passes. Do NOT modify the test file."""
+setup = "setup.sh"
+timeout_s = 120
+tags = ["tier-a", "F2"]
+
+# Deterministic scorer. kind=exec runs in the post-run workdir;
+# kind=file asserts on a workdir file; kind=trace asserts on trace.jsonl.
+[[scorer.checks]]
+id = "tests-green"
+kind = "exec"
+cmd = "node --test \"test/*.test.js\""
+expect_exit = 0
+
+[[scorer.checks]]
+id = "test-file-untouched"
+kind = "file"
+path = "test/sum.test.js"
+expect_sha256 = "930ebcff787da87f151e01a63294b69d868139695fe1474af6ae50908e75836a"
+
+[[scorer.checks]]
+id = "no-dropped-toolcall"
+kind = "trace"
+assert = "every_tool_call_has_result"
