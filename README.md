@@ -92,43 +92,41 @@ Anser implements a **5-layer defense-in-depth boundary** ensuring neither the co
 
 ---
 
-## Quickstart & CLI Management
+## Quickstart (1-Command Install)
 
-### 1. Install & Build
+### Automatic 1-Command Setup (Zero Clone)
+No git clone or repository building required. Run via `npx` to automatically configure your environment and register the MCP server with both Google Antigravity and Claude Code:
+
+```bash
+# 1-Command Install: registers with Antigravity IDE and Claude Code automatically
+npx -y mcp-anser install
+
+# (Optional) Configure engine endpoint or model name
+npx -y mcp-anser config set baseURL "http://localhost:18020/v1"
+npx -y mcp-anser config set model "qwen3.8-27b"
+
+# Prune stale session files anytime
+npx -y mcp-anser clean
+```
+
+Or install globally:
+```bash
+npm install -g mcp-anser
+anser install
+```
+
+---
+
+### Development & Contributing from Source
+If you are modifying Anser's microkernel or contributing upstream:
+
 ```bash
 git clone https://github.com/ApatheticMioz/Anser.git
 cd Anser/mcp-qwen
 npm ci
-```
-
-### 2. Verify the Offline Test Gate
-```bash
-# Instant canary gate (~4s, 9 critical suites)
-npm test
-
-# Full authoritative gate (66 suites; offline & deterministic)
-npm run test:all
-```
-
-### 3. Register with Your Cloud Orchestrator
-```bash
-# For Claude Code:
-claude mcp add --scope user qwen-anser node <repo-path>/mcp-qwen/index.js
-
-# For Google Antigravity IDE:
-python <repo-path>/mcp-qwen/update_schemas.py
-```
-
-### 4. Configuration & Maintenance CLI
-```bash
-# View or edit configuration
-node bin/anser.js config list
-node bin/anser.js config set model "qwen3.8-27b"
-node bin/anser.js config set baseURL "http://localhost:18020/v1"
-
-# Prune stale session files and reclaim disk space
-node bin/anser.js clean --dry-run
-node bin/anser.js clean
+npm test             # Fast canary gate (~4s, 9 critical suites)
+npm run test:all     # Authoritative offline test gate (66 suites)
+node bin/anser.js install --dev
 ```
 
 ---
