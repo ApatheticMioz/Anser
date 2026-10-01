@@ -10,7 +10,7 @@ name = "castor"
 path = "src/main.rs"
 
 [dependencies]
-rmcp = { version = "3.5.0", features = ["server", "client", "transport-child-process"] }
+rmcp = { version = "3.5.0", features = ["server", "client", "transport-child-process", "transport-io"] }
 tokio = { version = "1.53.1", features = ["full"] }
 axum = "0.8.9"
 serde = { version = "1.0.229", features = ["derive"] }

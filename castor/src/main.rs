@@ -48,7 +48,10 @@ enum Command {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Mcp) {
-        Command::Mcp => unimplemented!("castor mcp"),
+        Command::Mcp => {
+            let loaded = config::load().map_err(|e| format!("config: {e}"))?;
+            mcp::serve(&loaded.config.tool_prefix).await?;
+        }
         Command::Proxy => unimplemented!("castor proxy"),
         Command::Status => unimplemented!("castor status"),
         Command::Server => unimplemented!("castor server"),
