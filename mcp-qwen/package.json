@@ -1,6 +1,6 @@
 {
   "name": "mcp-anser",
-  "version": "2026.2.0",
+  "version": "2026.2.0-1",
   "description": "Universal 245K local Qwen3.8-27B Anser agent microkernel & MCP server: collaborative Socratic pair-programming, native multi-provider research (Brave, Tavily, Context7 docs, SearXNG, DuckDuckGo), cooperative landing turn ceiling preservation, in-process structural AST surgery (@ast-grep/napi), in-memory syntax gates (JS/TS, Python, JSON, LaTeX, BibTeX), 137-vector zero-trust sandbox, closed-loop evolutionary optimization (.evo/lineage.json), vLLM + DFlash2 + KVarN @ 245K context, and zero-turn reactive OS wait @18021.",
   "main": "index.js",
   "bin": {
