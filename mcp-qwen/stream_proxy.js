@@ -3,7 +3,7 @@
  * Universal Stateful UTF-8, SSE Stream Sanitizer & Inbound Multimodal Guard Proxy
  *
  * Architecture:
- * - Listens on: 0.0.0.0:18022 (VLLM_PROXY_PORT)
+ * - Listens on: 127.0.0.1:18022 (STREAM_PROXY_PORT or VLLM_PROXY_PORT)
  * - Upstream:   127.0.0.1:18020 (vLLM Engine)
  *
  * Capabilities:
@@ -30,7 +30,11 @@ import { RepetitionDetector, GUARD_MARKER_TEMPLATE } from "./src/repetition_dete
 import { PROXY_MAX_BODY_BYTES } from "./src/config.js";
 
 const UPSTREAM_PORT = parseInt(process.env.VLLM_PORT || "18020", 10);
-const PROXY_PORT = parseInt(process.env.VLLM_PROXY_PORT || "18022", 10);
+// Accept either STREAM_PROXY_PORT (preferred) or VLLM_PROXY_PORT (legacy).
+const PROXY_PORT = parseInt(
+  process.env.STREAM_PROXY_PORT || process.env.VLLM_PROXY_PORT || "18022",
+  10
+);
 // P15: bind loopback only — a LAN-reachable proxy lets any remote client
 // drive the MAX_SEQS=1 GPU queue and wedge the engine for local clients.
 // WSL2 localhost-forwarding keeps it reachable from the Windows host.

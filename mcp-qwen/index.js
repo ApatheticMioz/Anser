@@ -40,6 +40,7 @@ import {
 import { registerTools } from "./src/tools.js";
 import { shutdownSearxng } from "./src/harness/services/searxng_lifecycle.js";
 import { disposeAllBridges } from "./src/harness/services/mcp_bridge.js";
+import { cleanStateDir } from "./src/state_pruner.js";
 
 const require = createRequire(import.meta.url);
 const { name: pkgName, version: pkgVersion } = require("./package.json");
@@ -148,6 +149,31 @@ setMcpServerFactory(createMcpServer);
 export async function startMcpServer() {
   setupProcessLifecycleHandlers();
   initStatusServer();
+
+  // Opportunistic state-dir hygiene: prune old sessions / orphan .tmp_* files.
+  // Throttled to at most once per 24h via the .last_prune timestamp, and
+  // best-effort — a failure here must never prevent the MCP server from
+  // starting. Stdio purity: diagnostics go to stderr only.
+  try {
+    const pruneResult = cleanStateDir({ throttled: true });
+    if (!pruneResult.skipped) {
+      const reclaimedMb =
+        (pruneResult.bytesReclaimed + pruneResult.tmpBytesReclaimed) /
+        (1024 * 1024);
+      process.stderr.write(
+        `[state-pruner] pruned ${pruneResult.sessionsPruned} session(s), ` +
+          `${pruneResult.tmpFilesCleaned} orphan .tmp_* file(s) ` +
+          `(${reclaimedMb.toFixed(2)} MB); ` +
+          `${pruneResult.protected} protected\n`
+      );
+    }
+  } catch (err) {
+    process.stderr.write(
+      `[state-pruner] startup cleanup failed (non-fatal): ${
+        err && err.message ? err.message : err
+      }\n`
+    );
+  }
 
   const server = createMcpServer();
   const transport = new StdioServerTransport();

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // dispatch-scorecard.mjs — standing dispatch-discipline scorecard (2026-09 usage audit).
 //
-// Reads the Anser state dir (~/.qwen by default) and emits per-session and
+// Reads the Anser state dir (QWEN_STATE_DIR from src/config.js) and emits per-session and
 // per-task metrics that quantify orchestrator/coworker balance:
 //   - prompt-size distribution + failures           (from tasks/*.json)
 //   - premature/late cancels                        (from tasks/*.json)
@@ -11,11 +11,11 @@
 // Usage:  node scripts/dispatch-scorecard.mjs [--days N] [--json] [--state-dir PATH]
 //   --days N        only sessions/tasks active in the last N days (default: 7)
 //   --json          machine-readable output instead of the human table
-//   --state-dir     override state dir (default: ~/.qwen)
+//   --state-dir     override state dir (default: QWEN_STATE_DIR from src/config.js)
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { QWEN_STATE_DIR } from "../src/config.js";
 
 const args = process.argv.slice(2);
 const flag = (name) => {
@@ -24,7 +24,7 @@ const flag = (name) => {
 };
 const DAYS = Number(flag("--days") ?? 7);
 const AS_JSON = args.includes("--json");
-const STATE_DIR = flag("--state-dir") ?? path.join(os.homedir(), ".qwen");
+const STATE_DIR = flag("--state-dir") ?? QWEN_STATE_DIR;
 
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions");
 const TASKS_DIR = path.join(STATE_DIR, "tasks");

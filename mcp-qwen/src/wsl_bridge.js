@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { IS_WINDOWS, BOOT_TIMEOUT_MS, ALLOW_ENGINE_INTERRUPT, IS_TEST_ENV } from "./config.js";
+import { IS_WINDOWS, BOOT_TIMEOUT_MS, ALLOW_ENGINE_INTERRUPT, IS_TEST_ENV, API_KEY } from "./config.js";
 import { wslDistro, wslHome, winHome, apiKeyCandidates } from "./platform.js";
 import { pidAlive } from "./semaphore.js";
 
@@ -211,10 +211,29 @@ export function canonicalizePath(p) {
 }
 
 let cachedApiKey = null;
+export function _resetCachedApiKeyForTesting() {
+  cachedApiKey = null;
+}
+
 export function getApiKeySync() {
   if (cachedApiKey) return cachedApiKey;
-  const candidatePaths = apiKeyCandidates();
 
+  // 1. Environment variables take highest priority (QWEN_API_KEY).
+  const envKey = process.env.QWEN_API_KEY;
+  if (envKey) {
+    cachedApiKey = envKey.trim();
+    return cachedApiKey;
+  }
+
+  // 2. Config file api_key (resolved via config.js API_KEY which checks
+  //    QWEN_API_KEY env and ~/.anser/config.json `api_key`).
+  if (API_KEY) {
+    cachedApiKey = API_KEY.trim();
+    return cachedApiKey;
+  }
+
+  // 3. Fall back to scanning candidate file paths.
+  const candidatePaths = apiKeyCandidates();
   for (const cp of candidatePaths) {
     try {
       if (existsSync(cp)) {

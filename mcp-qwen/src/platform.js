@@ -249,6 +249,10 @@ export function launcherScriptPath() {
 /**
  * Candidate paths for the vLLM API-key file, routed through the resolvers.
  * (Previously a hardcoded list inside wsl_bridge.getApiKeySync.)
+ *
+ * Environment variables QWEN_API_KEY / OPENAI_API_KEY are checked by the
+ * caller (wsl_bridge.getApiKeySync) BEFORE this function is invoked, so
+ * this function only returns file-based candidates.
  */
 export function apiKeyCandidates() {
   const distro = wslDistro();

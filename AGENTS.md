@@ -95,7 +95,7 @@ python <repo>/mcp-qwen/update_schemas.py
 |---|---|---|
 | `QWEN_RACE_MS` | `15000` | Sync race window before yielding to the zero-turn long-poll wait. |
 | `QWEN_MAX_CONCURRENT` | `1` | Cross-process execution slots (disk-lease semaphore). |
-| `QWEN_STATE_DIR` | `~/.qwen` | Root for task JSON, slot leases, session logs, Evo lineage. |
+| `QWEN_STATE_DIR` | `~/.anser` | Root for task JSON, slot leases, session logs, Evo lineage. |
 | `VLLM_PORT` | `18020` | vLLM OpenAI-compatible API. |
 | `STATUS_PORT` | `18021` | Zero-turn long-poll HTTP wait/status server. |
 | `STREAM_PROXY_PORT` | `18022` | Universal SSE streaming proxy (loopback only). |

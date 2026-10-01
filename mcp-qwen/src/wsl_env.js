@@ -127,3 +127,45 @@ export function winHomeWsl() {
   }
   return "";
 }
+
+// ---------------------------------------------------------------------------
+// WSL availability probe
+// ---------------------------------------------------------------------------
+
+let _wslAvailable = null;
+
+/**
+ * Probe whether WSL is available on this host.
+ * - Non-Windows (Linux/macOS): always true (no WSL needed; commands run
+ *   directly via bash).
+ * - Windows: runs `wsl.exe --list --quiet` and checks for a non-empty
+ *   output (at least one installed distro). Result is cached.
+ *
+ * Never throws. Returns a boolean.
+ *
+ * @returns {boolean}
+ */
+export function wslAvailable() {
+  if (!IS_WINDOWS) return true;
+  if (_wslAvailable !== null) return _wslAvailable;
+  try {
+    const out = execFileSync("wsl.exe", ["--list", "--quiet"], {
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const lines = out
+      .toString()
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    _wslAvailable = lines.length > 0;
+  } catch {
+    _wslAvailable = false;
+  }
+  return _wslAvailable;
+}
+
+/** Clear the WSL availability cache. Test-only. */
+export function _resetWslAvailableCache() {
+  _wslAvailable = null;
+}

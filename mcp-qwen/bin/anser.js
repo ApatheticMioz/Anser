@@ -8,6 +8,7 @@
  *   anser install   Register the Anser MCP server with Antigravity / Claude Code.
  *   anser config    Show or edit configuration.
  *   anser status    Show engine / task status.
+ *   anser clean     Prune old sessions / orphan temp files from the state dir.
  *
  * Stdio purity: in MCP mode NOTHING is written to stdout except JSON-RPC
  * frames emitted by the MCP transport. All diagnostics go to stderr.
@@ -41,9 +42,17 @@ Commands:
     config path          Print path to config.json
     config get [key]     Print a config value (or full JSON if no key)
     config set <k> <v>   Set a config key (model, baseURL, max_context,
-                         launch_command, tool_prefix)
+                         launch_command, tool_prefix, api_key, engine_type,
+                         stop_command, engine_log_path, use_stream_proxy,
+                         stream_proxy_port, status_port, vllm_port, search)
     config edit          Open config in $EDITOR (or notepad/vi)
   status    Show engine and task status
+  clean     Prune old sessions and orphan .tmp_* files from the state dir
+    clean [--dry-run] [--max-age-days N] [--max-sessions N] [--max-size-mb N]
+      --dry-run          Report what would be reclaimed without deleting
+      --max-age-days N   Evict sessions older than N days (default: 14)
+      --max-sessions N   Keep at most N sessions (default: 200)
+      --max-size-mb N    Keep total session size under N MB (default: 50)
 
 Run 'anser mcp' (or just 'anser') to start the MCP server.
 `;
@@ -59,6 +68,15 @@ const VALID_KEYS = new Set([
   "max_context",
   "launch_command",
   "tool_prefix",
+  "api_key",
+  "engine_type",
+  "stop_command",
+  "engine_log_path",
+  "use_stream_proxy",
+  "stream_proxy_port",
+  "status_port",
+  "vllm_port",
+  "search",
 ]);
 
 function readConfig() {
@@ -109,22 +127,25 @@ function configSet(key, val) {
     process.exit(1);
   }
   const cfg = readConfig();
-  if (key === "max_context") {
+  if (key === "max_context" || key === "stream_proxy_port" || key === "status_port" || key === "vllm_port") {
     const num = Number(val);
     if (!Number.isFinite(num) || num <= 0) {
       process.stderr.write(
-        `Invalid value for max_context: ${val} (must be a positive number)\n`
+        `Invalid value for ${key}: ${val} (must be a positive number)\n`
       );
       process.exit(1);
     }
     cfg[key] = num;
+  } else if (key === "use_stream_proxy") {
+    cfg[key] = val === "true" || val === "1";
   } else {
     cfg[key] = val;
   }
   writeConfig(cfg);
-  process.stdout.write(
-    `Set ${key} = ${key === "max_context" ? cfg[key] : `"${cfg[key]}"`}\n`
-  );
+  const isNumeric = key === "max_context" || key === "stream_proxy_port" || key === "status_port" || key === "vllm_port";
+  const isBoolean = key === "use_stream_proxy";
+  const display = isNumeric || isBoolean ? String(cfg[key]) : `"${cfg[key]}"`;
+  process.stdout.write(`Set ${key} = ${display}\n`);
 }
 
 function configEdit() {
@@ -584,6 +605,60 @@ async function handleStatus() {
 }
 
 // ---------------------------------------------------------------------------
+// clean subcommand
+// ---------------------------------------------------------------------------
+
+async function handleClean(argv) {
+  const dryRun = argv.includes("--dry-run");
+  const flagVal = (name) => {
+    const i = argv.indexOf(name);
+    return i === -1 ? undefined : argv[i + 1];
+  };
+  const maxAgeDays = flagVal("--max-age-days");
+  const maxSessions = flagVal("--max-sessions");
+  const maxSizeMb = flagVal("--max-size-mb");
+
+  const opts = { dryRun };
+  if (maxAgeDays !== undefined) {
+    const n = Number(maxAgeDays);
+    if (!Number.isFinite(n) || n <= 0) {
+      process.stderr.write(`Invalid --max-age-days: ${maxAgeDays}\n`);
+      process.exit(1);
+    }
+    opts.maxAgeMs = n * 86_400_000;
+  }
+  if (maxSessions !== undefined) {
+    const n = Number(maxSessions);
+    if (!Number.isFinite(n) || n <= 0) {
+      process.stderr.write(`Invalid --max-sessions: ${maxSessions}\n`);
+      process.exit(1);
+    }
+    opts.maxCount = n;
+  }
+  if (maxSizeMb !== undefined) {
+    const n = Number(maxSizeMb);
+    if (!Number.isFinite(n) || n <= 0) {
+      process.stderr.write(`Invalid --max-size-mb: ${maxSizeMb}\n`);
+      process.exit(1);
+    }
+    opts.maxSizeMb = n;
+  }
+
+  const { cleanStateDir } = await import("../src/state_pruner.js");
+  const result = cleanStateDir(opts);
+
+  const mb = (b) => (b / (1024 * 1024)).toFixed(2);
+  const prefix = dryRun ? "[dry-run] would" : "";
+  process.stdout.write(
+    `${prefix} prune ${result.sessionsPruned} session(s) ` +
+      `(${mb(result.bytesReclaimed)} MB), ` +
+      `${prefix} clean ${result.tmpFilesCleaned} orphan .tmp_* file(s) ` +
+      `(${mb(result.tmpBytesReclaimed)} MB); ` +
+      `${result.protected} session(s) protected (active/incomplete)\n`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // main dispatch
 // ---------------------------------------------------------------------------
 
@@ -617,6 +692,11 @@ if (subcommand === undefined || subcommand === "mcp") {
 } else if (subcommand === "install") {
   handleInstall(process.argv.slice(3)).catch((err) => {
     process.stderr.write(`Install error: ${err.message}\n`);
+    process.exit(1);
+  });
+} else if (subcommand === "clean") {
+  handleClean(process.argv.slice(3)).catch((err) => {
+    process.stderr.write(`Clean error: ${err.message}\n`);
     process.exit(1);
   });
 } else {

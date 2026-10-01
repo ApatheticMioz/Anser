@@ -41,7 +41,12 @@ export REQ_METRICS=1
 # accuracy lift over off, without xhigh's verbosity tax on simple delegated tasks.
 export EXTRA_ARGS='--default-chat-template-kwargs {"reasoning_effort":"medium"}'
 # Universal Stateful UTF-8 & SSE Stream Sanitizer Proxy (port 18022 -> 18020)
-STREAM_PROXY_SCRIPT="${STREAM_PROXY_PATH:-/mnt/d/LLM_Ecosystem/mcp-qwen/stream_proxy.js}"
+# Derive the proxy script path from this script's own location so the repo is
+# portable (no hardcoded /mnt/d/ drive mount). This script lives at
+# <ecosystem>/scripts/wsl/start_huge.sh; the proxy at <ecosystem>/mcp-qwen/stream_proxy.js.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ECOSYSTEM_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+STREAM_PROXY_SCRIPT="${STREAM_PROXY_PATH:-${ECOSYSTEM_ROOT}/mcp-qwen/stream_proxy.js}"
 if [ ! -f "$STREAM_PROXY_SCRIPT" ] && [ -f ~/qwen-serving/stream_proxy.js ]; then
   STREAM_PROXY_SCRIPT=~/qwen-serving/stream_proxy.js
 fi

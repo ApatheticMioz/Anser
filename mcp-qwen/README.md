@@ -122,7 +122,7 @@ All variables are read at process start (module-level) unless noted.
 | `STREAM_PROXY_PORT` | `18022` | Stream proxy port (used by `src/config.js` for the provider) |
 | `VLLM_PROXY_PORT` | `18022` | Stream proxy listen port (used by `stream_proxy.js`) |
 | `VLLM_PROXY_HOST` | `127.0.0.1` | Stream proxy bind address (loopback only; WSL2 forwards it to the Windows host) |
-| `QWEN_STATE_DIR` | `~/.qwen` (or WSL-mapped Windows home) | Root for task JSON, slot leases, session logs, wedge counter |
+| `QWEN_STATE_DIR` | `~/.anser` (or WSL-mapped Windows home; auto-migrates from legacy `~/.qwen`) | Root for task JSON, slot leases, session logs, wedge counter |
 | `QWEN_MAX_TOKENS` | `49152` | Per-turn output token budget |
 | `QWEN_MAX_REASONING_TOKENS` | `32768` | Per-turn reasoning (thinking) token ceiling; hit → `finish_reason: "length"` |
 | `QWEN_STREAM_IDLE_TIMEOUT_MS` | `1200000` (20 min) | SSE stream idle watchdog (first-byte + inter-chunk) |

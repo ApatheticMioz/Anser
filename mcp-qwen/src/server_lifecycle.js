@@ -6,6 +6,9 @@ import {
   BOOT_TIMEOUT_MS,
   BOOT_POLL_MS,
   STREAM_PROXY_PORT,
+  STREAM_PROXY_PORT_RESOLVED,
+  USE_STREAM_PROXY,
+  USE_STREAM_PROXY_RESOLVED,
   IS_WINDOWS,
   TASK_DIR,
   WEDGE_STATS_SILENCE_S,
@@ -18,9 +21,12 @@ import {
   WEDGE_COUNTER_FILE,
   ALLOW_ENGINE_INTERRUPT,
   IS_TEST_ENV,
+  MODEL,
+  LAUNCH_COMMAND,
 } from "./config.js";
 import { getApiKeySync, runWslCommand } from "./wsl_bridge.js";
 import { streamProxyPath, launcherScriptPath } from "./platform.js";
+import { wslAvailable } from "./wsl_env.js";
 
 // Indirection for the WSL command runner; tests inject a stub to run offline.
 let wslRun = runWslCommand;
@@ -201,7 +207,7 @@ export async function canaryProbe(force = false) {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: "qwen3.8-27b",
+        model: MODEL,
         // Cap on total generated tokens (content + reasoning).
         max_tokens: 512,
         messages: [{ role: "user", content: "Reply with: ok" }],
@@ -431,7 +437,7 @@ async function warmEngine() {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: "qwen3.8-27b",
+        model: MODEL,
         messages: [{ role: "user", content: "ping" }],
         max_tokens: 1,
         temperature: 0.0,
@@ -484,9 +490,10 @@ async function realSpawnStreamProxy() {
  *   is found. Never throws.
  */
 async function findStreamProxyListenerPid() {
+  const port = STREAM_PROXY_PORT_RESOLVED;
   // 1. Probe /health for a verified pid.
   try {
-    const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
       signal: AbortSignal.timeout(1000),
     });
     if (res.ok) {
@@ -499,7 +506,7 @@ async function findStreamProxyListenerPid() {
   // 2. Fall back to `ss -ltnp` filtered to the port.
   try {
     const { stdout } = await runWslCommand(
-      `ss -ltnp 'sport = :${STREAM_PROXY_PORT}' 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true`
+      `ss -ltnp 'sport = :${port}' 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true`
     );
     const pid = parseInt(stdout.trim(), 10);
     if (Number.isFinite(pid) && pid > 0) {
@@ -528,10 +535,31 @@ async function findStreamProxyListenerPid() {
  *   the message includes the captured spawn failure when present.
  */
 export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
+  // 0a. If the stream proxy is disabled by configuration, skip cleanly.
+  //     The engine is reached directly (no proxy hop).
+  if (!USE_STREAM_PROXY_RESOLVED) {
+    process.stderr.write(
+      `[stream-proxy] disabled by configuration (USE_STREAM_PROXY=false); using direct engine connection\n`
+    );
+    return true;
+  }
+
+  // 0b. On Windows without WSL, the proxy (which runs inside WSL) cannot be
+  //     spawned. Do NOT crash the whole task: warn and allow a direct engine
+  //     connection so the task can still proceed.
+  if (IS_WINDOWS && !wslAvailable()) {
+    process.stderr.write(
+      `[stream-proxy] WSL is not available on this Windows host; skipping proxy and using direct engine connection\n`
+    );
+    return true;
+  }
+
+  const port = STREAM_PROXY_PORT_RESOLVED;
+
   // 1. Is the proxy already healthy? (two quick probes)
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
         signal: AbortSignal.timeout(1000),
       });
       if (res.ok) return true;
@@ -544,7 +572,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
   if (listenerInfo) {
     if (!listenerInfo.verified) {
       throw new Error(
-        `PortConflictError: Port ${STREAM_PROXY_PORT} is occupied by unverified process pid ${listenerInfo.pid}. Refusing to kill non-proxy process.`
+        `PortConflictError: Port ${port} is occupied by unverified process pid ${listenerInfo.pid}. Refusing to kill non-proxy process.`
       );
     }
     const listenerPid = listenerInfo.pid;
@@ -557,7 +585,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
         } catch {}
       }
       process.stderr.write(
-        `[stream-proxy] pre-spawn cleanup: killed verified listener pid ${listenerPid} on port ${STREAM_PROXY_PORT}\n`
+        `[stream-proxy] pre-spawn cleanup: killed verified listener pid ${listenerPid} on port ${port}\n`
       );
       await new Promise((r) => setTimeout(r, 300));
     } catch (err) {
@@ -567,7 +595,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
     }
   } else {
     process.stderr.write(
-      `[stream-proxy] pre-spawn cleanup: no listener found on port ${STREAM_PROXY_PORT}\n`
+      `[stream-proxy] pre-spawn cleanup: no listener found on port ${port}\n`
     );
   }
 
@@ -589,7 +617,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
   for (let i = 0; i < healthPolls; i++) {
     await new Promise((r) => setTimeout(r, 200));
     try {
-      const res = await fetch(`http://127.0.0.1:${STREAM_PROXY_PORT}/health`, {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
         signal: AbortSignal.timeout(1000),
       });
       if (res.ok) return true;
@@ -599,7 +627,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
   const seconds = Math.round((healthPolls * 200) / 1000);
   const spawnNote = spawnFailure ? ` (spawn failure: ${spawnFailure.message})` : "";
   throw new Error(
-    `Stream proxy failed to become healthy on port ${STREAM_PROXY_PORT} after ${seconds}s${spawnNote}`
+    `Stream proxy failed to become healthy on port ${port} after ${seconds}s${spawnNote}`
   );
 }
 
@@ -647,10 +675,20 @@ export async function ensureServerRunning() {
   }
 
   try {
-    const launcher = launcherScriptPath();
-    await wslRun(
-      `cd ~/qwen-serving && if [ -f "${launcher}" ]; then nohup bash "${launcher}"; elif [ -f launchers/start_huge.sh ]; then nohup bash launchers/start_huge.sh; else nohup bash single-user/start_qwen.sh; fi > ${ENGINE_LOG_PATH} 2>&1 < /dev/null & disown; sleep 1; true`
-    );
+    if (LAUNCH_COMMAND) {
+      // Use the configured launch command (from QWEN_LAUNCH_COMMAND or
+      // ~/.anser/config.json `launch_command`). This is the portable path:
+      // the user controls exactly how the engine is started.
+      await wslRun(
+        `nohup bash -c '${LAUNCH_COMMAND.replace(/'/g, "'\\''")}' > ${ENGINE_LOG_PATH} 2>&1 < /dev/null & disown; sleep 1; true`
+      );
+    } else {
+      // Fall back to the repo's launcher script.
+      const launcher = launcherScriptPath();
+      await wslRun(
+        `cd ~/qwen-serving && if [ -f "${launcher}" ]; then nohup bash "${launcher}"; elif [ -f launchers/start_huge.sh ]; then nohup bash launchers/start_huge.sh; else nohup bash single-user/start_qwen.sh; fi > ${ENGINE_LOG_PATH} 2>&1 < /dev/null & disown; sleep 1; true`
+      );
+    }
     const deadline = Date.now() + BOOT_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, BOOT_POLL_MS));

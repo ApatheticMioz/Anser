@@ -33,10 +33,26 @@ export const STATUS_PORT = parseInt(process.env.STATUS_PORT || "18021", 10);
  * Port for the local SSE stream sanitizer proxy.
  * - Unit: port number
  * - Default: 18022
- * - Override: STREAM_PROXY_PORT
+ * - Override: STREAM_PROXY_PORT (preferred) or VLLM_PROXY_PORT (legacy)
+ * - Config-file override: `stream_proxy_port` in ~/.anser/config.json
+ *   (resolved in STREAM_PROXY_PORT_RESOLVED at the bottom of this file)
  * @type {number}
  */
-export const STREAM_PROXY_PORT = parseInt(process.env.STREAM_PROXY_PORT || "18022", 10);
+export const STREAM_PROXY_PORT = parseInt(
+  process.env.STREAM_PROXY_PORT || process.env.VLLM_PROXY_PORT || "18022",
+  10
+);
+
+/**
+ * Whether to use the stream proxy.
+ * - Default: true
+ * - Override: USE_STREAM_PROXY ("false" or "0" disables)
+ * - Config-file override: `use_stream_proxy` in ~/.anser/config.json
+ *   (resolved in USE_STREAM_PROXY_RESOLVED at the bottom of this file)
+ * @type {boolean}
+ */
+export const USE_STREAM_PROXY =
+  process.env.USE_STREAM_PROXY !== "false" && process.env.USE_STREAM_PROXY !== "0";
 
 /**
  * Base URL for vLLM API completions.
@@ -381,6 +397,14 @@ const GLOBAL_ENV_FILE = path.join(QWEN_STATE_DIR, ".env");
  *   - max_context: nominal context window in tokens (env: QWEN_MAX_CONTEXT)
  *   - launch_command: shell command used to (re)start the engine (env: QWEN_LAUNCH_COMMAND)
  *   - tool_prefix: prefix applied to registered MCP tool names (env: MCP_TOOL_PREFIX)
+ *   - api_key: engine API key (env: QWEN_API_KEY / OPENAI_API_KEY)
+ *   - engine_type: engine type tag (env: QWEN_ENGINE_TYPE)
+ *   - stop_command: shell command used to stop the engine (env: QWEN_STOP_COMMAND)
+ *   - engine_log_path: path to the engine log (env: QWEN_LOG_PATH)
+ *   - use_stream_proxy: enable/disable the stream proxy (env: USE_STREAM_PROXY)
+ *   - stream_proxy_port: stream proxy port (env: STREAM_PROXY_PORT / VLLM_PROXY_PORT)
+ *   - status_port: status server port (env: STATUS_PORT)
+ *   - vllm_port: vLLM engine port (env: VLLM_PORT)
  *   - search: { provider, brave_api_key, tavily_api_key, context7_api_key, searxng_url }
  *
  * @returns {{
@@ -389,6 +413,14 @@ const GLOBAL_ENV_FILE = path.join(QWEN_STATE_DIR, ".env");
  *   max_context?: number,
  *   launch_command?: string,
  *   tool_prefix?: string,
+ *   api_key?: string,
+ *   engine_type?: string,
+ *   stop_command?: string,
+ *   engine_log_path?: string,
+ *   use_stream_proxy?: boolean,
+ *   stream_proxy_port?: number,
+ *   status_port?: number,
+ *   vllm_port?: number,
  *   search: { provider?: string, brave_api_key?: string, tavily_api_key?: string, context7_api_key?: string, searxng_url?: string }
  * }}
  */
@@ -409,6 +441,30 @@ export function loadGlobalConfig() {
         }
         if (typeof parsed.tool_prefix === "string" && parsed.tool_prefix) {
           config.tool_prefix = parsed.tool_prefix;
+        }
+        if (typeof parsed.api_key === "string" && parsed.api_key) {
+          config.api_key = parsed.api_key;
+        }
+        if (typeof parsed.engine_type === "string" && parsed.engine_type) {
+          config.engine_type = parsed.engine_type;
+        }
+        if (typeof parsed.stop_command === "string" && parsed.stop_command) {
+          config.stop_command = parsed.stop_command;
+        }
+        if (typeof parsed.engine_log_path === "string" && parsed.engine_log_path) {
+          config.engine_log_path = parsed.engine_log_path;
+        }
+        if (typeof parsed.use_stream_proxy === "boolean") {
+          config.use_stream_proxy = parsed.use_stream_proxy;
+        }
+        if (typeof parsed.stream_proxy_port === "number" && parsed.stream_proxy_port > 0) {
+          config.stream_proxy_port = parsed.stream_proxy_port;
+        }
+        if (typeof parsed.status_port === "number" && parsed.status_port > 0) {
+          config.status_port = parsed.status_port;
+        }
+        if (typeof parsed.vllm_port === "number" && parsed.vllm_port > 0) {
+          config.vllm_port = parsed.vllm_port;
         }
         if (parsed.search && typeof parsed.search === "object") {
           Object.assign(config.search, parsed.search);
@@ -433,6 +489,21 @@ export function loadGlobalConfig() {
           else if (k === "CONTEXT7_API_KEY") config.search.context7_api_key = config.search.context7_api_key || v;
           else if (k === "SEARXNG_URL") config.search.searxng_url = config.search.searxng_url || v;
           else if (k === "SEARCH_PROVIDER") config.search.provider = config.search.provider || v;
+          else if (k === "QWEN_API_KEY") config.api_key = config.api_key || v;
+          else if (k === "QWEN_ENGINE_TYPE") config.engine_type = config.engine_type || v;
+          else if (k === "QWEN_STOP_COMMAND") config.stop_command = config.stop_command || v;
+          else if (k === "QWEN_LOG_PATH") config.engine_log_path = config.engine_log_path || v;
+          else if (k === "USE_STREAM_PROXY") config.use_stream_proxy = config.use_stream_proxy ?? (v !== "false" && v !== "0");
+          else if (k === "STREAM_PROXY_PORT" || k === "VLLM_PROXY_PORT") {
+            const p = parseInt(v, 10);
+            if (Number.isFinite(p) && p > 0) config.stream_proxy_port = config.stream_proxy_port ?? p;
+          } else if (k === "STATUS_PORT") {
+            const p = parseInt(v, 10);
+            if (Number.isFinite(p) && p > 0) config.status_port = config.status_port ?? p;
+          } else if (k === "VLLM_PORT") {
+            const p = parseInt(v, 10);
+            if (Number.isFinite(p) && p > 0) config.vllm_port = config.vllm_port ?? p;
+          }
         }
       }
     }
@@ -550,7 +621,10 @@ export const ENGINE_BOOT_LOCK_TTL_MS = BOOT_TIMEOUT_MS;
  * - Override: QWEN_LOG_PATH
  * @type {string}
  */
-export const ENGINE_LOG_PATH = process.env.QWEN_LOG_PATH || "/tmp/mcp_launch_huge.log";
+export const ENGINE_LOG_PATH = (() => {
+  const cfg = loadGlobalConfig();
+  return process.env.QWEN_LOG_PATH || cfg.engine_log_path || "/tmp/mcp_launch_huge.log";
+})();
 
 /**
  * Counter ledger tracking cumulative engine wedge and restart events.
@@ -975,6 +1049,106 @@ export const LAUNCH_COMMAND = getEngineConfig().launch_command;
  * @type {string}
  */
 export const TOOL_PREFIX = getEngineConfig().tool_prefix;
+
+// ---------------------------------------------------------------------------
+// Config-file-aware resolved values.
+//
+// These are the "effective" values that honor ~/.anser/config.json in addition
+// to environment variables. They are defined at the bottom of the file (after
+// GLOBAL_CONFIG_FILE / GLOBAL_ENV_FILE are initialized) so that calling
+// loadGlobalConfig() here is safe (no TDZ).
+//
+// Precedence: environment variable > config.json > built-in default.
+// ---------------------------------------------------------------------------
+
+/**
+ * Effective stream proxy port (env > config.json > default 18022).
+ * @type {number}
+ */
+export const STREAM_PROXY_PORT_RESOLVED = (() => {
+  const envPort = process.env.STREAM_PROXY_PORT || process.env.VLLM_PROXY_PORT;
+  if (envPort) {
+    const p = parseInt(envPort, 10);
+    if (Number.isFinite(p) && p > 0) return p;
+  }
+  const cfg = loadGlobalConfig();
+  if (typeof cfg.stream_proxy_port === "number" && cfg.stream_proxy_port > 0) {
+    return cfg.stream_proxy_port;
+  }
+  return 18022;
+})();
+
+/**
+ * Effective use-stream-proxy flag (env > config.json > default true).
+ * @type {boolean}
+ */
+export const USE_STREAM_PROXY_RESOLVED = (() => {
+  if (process.env.USE_STREAM_PROXY !== undefined) {
+    return process.env.USE_STREAM_PROXY !== "false" && process.env.USE_STREAM_PROXY !== "0";
+  }
+  const cfg = loadGlobalConfig();
+  if (typeof cfg.use_stream_proxy === "boolean") return cfg.use_stream_proxy;
+  return true;
+})();
+
+/**
+ * Effective status port (env > config.json > default 18021).
+ * @type {number}
+ */
+export const STATUS_PORT_RESOLVED = (() => {
+  const envPort = process.env.STATUS_PORT;
+  if (envPort) {
+    const p = parseInt(envPort, 10);
+    if (Number.isFinite(p) && p > 0) return p;
+  }
+  const cfg = loadGlobalConfig();
+  if (typeof cfg.status_port === "number" && cfg.status_port > 0) return cfg.status_port;
+  return 18021;
+})();
+
+/**
+ * Effective vLLM port (env > config.json > default 18020).
+ * @type {number}
+ */
+export const VLLM_PORT_RESOLVED = (() => {
+  const envPort = process.env.VLLM_PORT;
+  if (envPort) {
+    const p = parseInt(envPort, 10);
+    if (Number.isFinite(p) && p > 0) return p;
+  }
+  const cfg = loadGlobalConfig();
+  if (typeof cfg.vllm_port === "number" && cfg.vllm_port > 0) return cfg.vllm_port;
+  return 18020;
+})();
+
+/**
+ * Engine API key (env > config.json > empty string).
+ * @type {string}
+ */
+export const API_KEY = (() => {
+  const cfg = loadGlobalConfig();
+  return process.env.QWEN_API_KEY || cfg.api_key || "";
+})();
+
+/**
+ * Engine type tag (env > config.json > "vllm").
+ * @type {string}
+ */
+export const ENGINE_TYPE = (() => {
+  const cfg = loadGlobalConfig();
+  return process.env.QWEN_ENGINE_TYPE || cfg.engine_type || "vllm";
+})();
+
+/**
+ * Shell command used to stop the inference engine (env > config.json > "").
+ * @type {string}
+ */
+export const STOP_COMMAND = (() => {
+  const cfg = loadGlobalConfig();
+  return process.env.QWEN_STOP_COMMAND || cfg.stop_command || "";
+})();
+
+
 
 
 
