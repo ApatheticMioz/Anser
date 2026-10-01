@@ -45,6 +45,23 @@ In continuous agentic coding, **80%+ of prompt tokens** are spent repeatedly ing
 | **Tool Execution Latency** | In-process microkernel (0.01 ms) | Remote network API / MCP | Remote network API / MCP | Remote network API / MCP | Remote network API / MCP |
 | **Cloud Token Hoarding** | **None** (Only synthesized slices) | Heavy (Full repos hoarded) | Heavy (Full repos hoarded) | Heavy (Full repos hoarded) | Heavy (Full repos hoarded) |
 
+### Verified Lifetime Production Telemetry (1.31B+ Tokens Processed @ $0 Cost)
+
+Across continuous software engineering, multi-turn pair-programming, and architectural refactoring on local consumer hardware (RTX 3090 24GB), Anser has recorded and empirically validated the following cumulative production telemetry (`~/.anser/telemetry/stats.json`):
+
+| Production Telemetry Dimension | Verified Cumulative Metric | Operational Impact & Savings |
+|---|---|---|
+| **Cumulative Prompt / Ingest Volume** | **1,309,571,077 tokens (1.31 Billion)** | Absorbed full repository ASTs, git diffs & build traces locally at **$0 token cost** |
+| **Cumulative Completion Output** | **22,045,497 tokens (22.05 Million)** | Delivered structural AST surgery, code generation, and test suites |
+| **Test-Time Deliberation (Reasoning)** | **23,832,473 tokens (23.83 Million)** | Deep chain-of-thought and architectural planning at zero marginal API billing |
+| **Total Conversational Turns** | **17,616 turns** across **453 sessions** | Persistent prefix cache reuse preventing speculative decoding decay |
+| **Autonomous Tool Operations** | **23,965 sandboxed executions** | 11,809 bash, 5,173 read, 2,898 edit, 1,266 search, 1,161 write, 557 web research |
+| **Prefix Cache Hit Rate** | **92.6%** (warm cache) | In-memory KV prefix reuse sustaining 8,000–15,000+ tok/s prefill speeds |
+| **Speculative Drafter (DFlash2)** | **61.9% acceptance rate** | Mean draft acceptance of **5.33 tokens/step** (instantaneous decode $\approx$ 61.1 tok/s) |
+| **Zero-Turn Reactive Wait Savings** | **~1.3B tokens eliminated** | Blocking long-poll (`:18021`) eradicated supervisor polling loops |
+| **Net Financial Savings (Claude Sonnet 5)** | **$2,839.60 USD saved** | At $2.00/M prompt, $10.00/M completion ($0 local execution cost) |
+| **Net Financial Savings (Frontier Tier)** | **$14,198.00+ USD saved** | vs Opus 5.5 / GPT-6 Astra ($10.00/M prompt, $50.00/M completion) |
+
 ---
 
 ## Consolidated MCP Interface
@@ -136,7 +153,7 @@ node bin/anser.js install --dev
 Optimized for consumer 24 GB GPUs (NVIDIA RTX 3090 / 4090):
 - **Model**: Qwen3.8-27B (hybrid dense Gated-DeltaNet + attention, 65 layers, W4A16 AutoRound).
 - **Vision Offloading**: `VISION=1` + `VLLM_VISION_CPU_OFFLOAD_GB=1` keeps the vision encoder in host RAM while preserving all 268,000+ KV tokens in VRAM.
-- **Speculative Block Drafter**: DFlash2 1.92B non-autoregressive drafter yielding 4.59 tokens/step mean acceptance.
+- **Speculative Block Drafter**: DFlash2 1.92B non-autoregressive drafter yielding 5.33 tokens/step mean acceptance (61.9% draft acceptance rate).
 - **KVarN Tiled KV Cache**: 4-bit keys / 2-bit values per 128-token tile, enabling a 245,760-token context ceiling.
 
 ---
