@@ -1,0 +1,1 @@
+//! Stream proxy implementation (stub).
