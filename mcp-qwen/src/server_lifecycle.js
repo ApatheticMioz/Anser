@@ -547,7 +547,7 @@ export async function ensureStreamProxyRunning({ healthPolls = 75 } = {}) {
   // 0b. On Windows without WSL, the proxy (which runs inside WSL) cannot be
   //     spawned. Do NOT crash the whole task: warn and allow a direct engine
   //     connection so the task can still proceed.
-  if (IS_WINDOWS && !wslAvailable()) {
+  if (!spawnStreamProxy && IS_WINDOWS && !wslAvailable()) {
     process.stderr.write(
       `[stream-proxy] WSL is not available on this Windows host; skipping proxy and using direct engine connection\n`
     );
