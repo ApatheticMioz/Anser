@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 echo =======================================================
-echo [kill_all_tasks] Emergency Qwen ^& Anser Task Killer
+echo [kill_all_tasks] Emergency Qwen ^& Castor Task Killer
 echo =======================================================
 
 :: Derive the WSL /mnt/<drive>/... equivalent of the repo root from this script's location.

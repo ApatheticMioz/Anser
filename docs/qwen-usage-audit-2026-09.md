@@ -1,8 +1,8 @@
 # Qwen Usage Audit — Balancing Cloud/Local Orchestration (2026-09)
 
-**Scope:** Forensic cross-analysis of how cloud orchestrators (Antigravity/Gemini planner, Claude Code) drive the local Qwen3.8-27B execution harness (Anser, `mcp-qwen`), and how Anser serves them. Anchored on the 26-hour Antigravity session `38daaf48` (2026-09-11 08:36Z → 09-12 10:53Z, project `d:\Work\dataPecedes\ai-assistant`) whose opening instruction — *"use very scoped, small prompts to qwen — don't specify too much, but don't be too broad"* — was nonetheless followed by monolithic prompts, babysitting, and cancellations. Evidence: the session transcript (950 steps, 35 qwen calls), Anser telemetry (259 sessions, 5,520 assistant turns since 09-05), task-state files, MCP client logs, Antigravity crash markers, three comparison sessions, the serving recipe ([syv-ai/qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)), and field research on effort economics.
+**Scope:** Forensic cross-analysis of how cloud orchestrators (Antigravity/Gemini planner, Claude Code) drive the local Qwen3.8-27B execution harness (Castor, `mcp-qwen`), and how Castor serves them. Anchored on the 26-hour Antigravity session `38daaf48` (2026-09-11 08:36Z → 09-12 10:53Z, project `d:\Work\dataPecedes\ai-assistant`) whose opening instruction — *"use very scoped, small prompts to qwen — don't specify too much, but don't be too broad"* — was nonetheless followed by monolithic prompts, babysitting, and cancellations. Evidence: the session transcript (950 steps, 35 qwen calls), Castor telemetry (259 sessions, 5,520 assistant turns since 09-05), task-state files, MCP client logs, Antigravity crash markers, three comparison sessions, the serving recipe ([syv-ai/qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)), and field research on effort economics.
 
-**Outcome:** a balanced-usage architecture (§2), empirically grounded dispatch policy (§3, now codified in CLAUDE.md/GEMINI.md §3), Anser hardening fixes (§6), and a standing dispatch scorecard (`mcp-qwen/scripts/dispatch-scorecard.mjs`).
+**Outcome:** a balanced-usage architecture (§2), empirically grounded dispatch policy (§3, now codified in CLAUDE.md/GEMINI.md §3), Castor hardening fixes (§6), and a standing dispatch scorecard (`mcp-qwen/scripts/dispatch-scorecard.mjs`).
 
 ---
 
@@ -59,7 +59,7 @@ The session-level evidence behind each rule:
 4. **Day-2 relapse (09-12 08:48Z):** `whatsapp_context_slice1`, 1,877 chars, feature-sized → 77 min, exactly 100 turns, `turn_limit_reached`, isError → 2,255-char remediation (40 min, 111 calls). One feature ≈ 2 h engine time + rework that proper slicing avoids.
 5. **Cross-session spectrum** (three comparison sessions, §3 table): under-polling + server-stop nukes (a113a65d) → babysitting + "model unreachable" (b40569e1) → clean minimalism (b6ea6061). The audited session sits at the noisy end.
 
-## 5. Infra findings (Anser + Antigravity)
+## 5. Infra findings (Castor + Antigravity)
 
 1. **Silent task death — traceability gap (fixed):** external process-tree kills leave no `session_error`, no task-state trace. Fix: kill/orphan event emission on runner death.
 2. **Task telemetry self-destructs at 4.5 h (fixed):** `TASK_RETENTION_MS = DEFAULT_TIMEOUT_MS + 30 min` (`config.js:94`) — invariant "retention must outlive the longest legal task" doubles as "audit evidence evaporates overnight." The sweeper (`cleanOldTasks` → `listTasksFromDisk`, every 300 s + on every list/status/cancel) unlinks `*.json` older than 4.5 h by mtime. Fix: env-configurable retention, 7-day default.
@@ -74,7 +74,7 @@ The session-level evidence behind each rule:
 
 **Protocol (repo `CLAUDE.md` / `GEMINI.md`, §3 + §4.2; globals symlink to these):** the §3 policy table above, distilled into the dispatch contract; §4.2 supervision hardened with telemetry-before-kill and the healthy-work cancellation ban. Tool description of `qwen_coworker` mirrors the policy and documents the new parameter.
 
-**Anser code (`mcp-qwen`), one concern per slice:**
+**Castor code (`mcp-qwen`), one concern per slice:**
 1. `reasoning_effort` per-dispatch parameter on `qwen_coworker` (`ac212be`; tiers corrected against the live template in `f956c00` — engine accepts exactly {xhigh, medium, low}).
 2. Retention: `TASK_RETENTION_MS` env-configurable, default 7 days (`c0ebd32`).
 3. `.tmp_*` orphan sweep (age-gated) + rename-failure logging (`c0ebd32`).
@@ -89,7 +89,7 @@ The session-level evidence behind each rule:
 
 **Scorecard:** `mcp-qwen/scripts/dispatch-scorecard.mjs` — reads `~/.qwen/sessions/*/events.jsonl` + `tasks/*.json`, emits per-orchestrator: prompt-size distribution, turns/task, cancels, babysit events (status/cancel <120 s post-dispatch), continuation/retry counts, decay flags. Run it after any heavy orchestration day to check balance compliance.
 
-**Deleted after absorption:** `qwen38_local_tool_ledger.md`, `anser_knob_inventory.md`, `mcp-qwen/docs/task-state-persistence-analysis.md` (raw working ledgers; this document is the synthesis).
+**Deleted after absorption:** `qwen38_local_tool_ledger.md`, `castor_knob_inventory.md`, `mcp-qwen/docs/task-state-persistence-analysis.md` (raw working ledgers; this document is the synthesis).
 
 ## 7. Open items
 

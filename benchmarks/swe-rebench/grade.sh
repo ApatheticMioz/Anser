@@ -12,7 +12,7 @@
 # container - no Docker image build step needed, just `docker pull` of the
 # already-built per-instance image.
 #
-# Usage: bash grade.sh predictions/goose_qwen_2026_03_50.jsonl
+# Usage: bash grade.sh predictions/castor_qwen_2026_03_50.jsonl
 set -e
 PRED_FILE="${1:?usage: grade.sh <predictions.jsonl>}"
 RUN_ID="$(basename "$PRED_FILE" .jsonl)"

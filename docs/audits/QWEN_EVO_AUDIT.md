@@ -1,6 +1,6 @@
 # Qwen / DeepSeek AVO — Stress-Review & Audit Report
 
-> **Archival note (2026-09-06):** Renamed from its pre-Anser working filename; content preserved verbatim as history. The project now ships as **Anser**.
+> **Archival note (2026-09-06):** Renamed from its pre-Castor working filename; content preserved verbatim as history. The project now ships as **Castor**.
 
 **Branch under review:** `feat/deepseek-avo`
 **Commits:** `7ad481f` (microkernel core + sandboxed services), `90ae613` (AVO operators + lineage DAG), `6221c94` (runner + dual-engine dispatch), `91f6f25` (validation suite + benchmarks)
@@ -263,7 +263,7 @@ Nothing in the operator or runner calls them, so the "token velocity decay / KV 
 
 ---
 
-## 7. Recommendations for Merging `feat/deepseek-avo` → `main` and Deprecating Legacy Goose
+## 7. Recommendations for Merging `feat/deepseek-avo` → `main` and Deprecating Legacy Castor
 
 **Merge posture:** The branch is **mergeable now** for supervised use — the demonstrated functionality (reversible microkernel, closed-loop AVO, deterministic edit-rollback, 6× sandbox traversal speedup, live vLLM streaming) is real and verified. Treat the HIGH/MED items as a fast-follow hardening sprint rather than merge blockers, **except** the two items below which I recommend fixing *before* any unattended autonomous run.
 
@@ -279,14 +279,14 @@ Nothing in the operator or runner calls them, so the "token velocity decay / KV 
 **Fast-follow (post-merge hardening):**
 6. H2 (shell-quote `cwd`), H3 (cap buffers), H4 (report signal kills), S2 (bounded read), S3 (reject empty target), S4 (atomic writes), K4 (no unhandled rejections), A4/A6/A7 (revert guard, snapshot GC, unique ids), E1 (normalize fitness), L2 (real branching or rename), W1/W2 (enforce the breaker, wire velocity), R2/R3 (context windowing, 5xx fallback).
 
-**Deprecating legacy Goose:**
-- The new `DeepSeekAvoRunner` is a **drop-in replacement** for the Goose CLI path: same `run({prompt, cwd, ...})` contract, same tool surface, plus AVO. The dual-engine dispatch in `6221c94` already lets you A/B them.
+**Deprecating legacy Castor:**
+- The new `DeepSeekAvoRunner` is a **drop-in replacement** for the Castor CLI path: same `run({prompt, cwd, ...})` contract, same tool surface, plus AVO. The dual-engine dispatch in `6221c94` already lets you A/B them.
 - **Recommended deprecation sequence:**
-  1. Keep `goose_runner.js` as the fallback engine behind a config flag (`engine: "avo" | "goose"`), defaulting to `avo`.
+  1. Keep `castor_runner.js` as the fallback engine behind a config flag (`engine: "avo" | "castor"`), defaulting to `avo`.
   2. Run a shadow period: dispatch a fraction of real tasks to both engines, compare `finalText`/`status`/`durationMs`/`totalCompletionTokens` from the JSONL ledgers (the new append-only `events.jsonl` makes this auditable in a way the old `sessions.db` did not).
-  3. Once the shadow period shows parity or better on the head-to-head metrics (the Benchmark 1–3 suite is the acceptance gate), flip the default to `avo` and mark `goose_runner.js` `@deprecated`.
-  4. Remove the Goose binary dependency (`getGooseExecutable`, the `pkill -f "goose run"` branches in `wsl_bridge.js`) in a follow-up commit once no config path references it.
-- **One caveat to close before full cutover:** `wsl_bridge.js` still hard-codes `goose` in `killProcessTree*` and `getGooseExecutable`. Those are legacy-only; they are harmless while the flag exists but should be removed with the deprecation to avoid a dangling dependency.
+  3. Once the shadow period shows parity or better on the head-to-head metrics (the Benchmark 1–3 suite is the acceptance gate), flip the default to `avo` and mark `castor_runner.js` `@deprecated`.
+  4. Remove the Castor binary dependency (`getCastorExecutable`, the `pkill -f "castor run"` branches in `wsl_bridge.js`) in a follow-up commit once no config path references it.
+- **One caveat to close before full cutover:** `wsl_bridge.js` still hard-codes `castor` in `killProcessTree*` and `getCastorExecutable`. Those are legacy-only; they are harmless while the flag exists but should be removed with the deprecation to avoid a dangling dependency.
 
 ---
 
@@ -334,7 +334,7 @@ All seven pre-merge must-fixes and recommended hardening items from the audit ar
 **Sign-off: I approve merging `feat/deepseek-avo` into `main`.**
 
 **Merge conditions / follow-ups (non-blocking):**
-1. Proceed with the 4-step Goose deprecation sequence in §7 (flag → shadow A/B via JSONL ledgers → flip default → remove `goose`-specific `wsl_bridge` branches).
+1. Proceed with the 4-step Castor deprecation sequence in §7 (flag → shadow A/B via JSONL ledgers → flip default → remove `castor`-specific `wsl_bridge` branches).
 2. Track **H1** (reliable process-tree kill: `detached:true` + POSIX group kill; WSL kill-by-session-tag) as the top item of the post-merge hardening backlog before enabling long-running unattended mutation.
 3. Remaining low-severity backlog (H2 cwd shell-quoting, S2 bounded read, S4 atomic writes, E1 fitness normalization, L2 real branching, W1/W2 watchdog enforcement, R2/R3) can be addressed incrementally.
 

@@ -1,8 +1,8 @@
 # Security Policy
 
-**Anser** — The Universal 245K Agent Microkernel for Local LLMs.
+**Castor** — The Universal 245K Agent Microkernel for Local LLMs.
 
-This document describes how to report a security vulnerability in Anser
+This document describes how to report a security vulnerability in Castor
 responsibly, what we consider in-scope, and how we handle reports.
 
 ## Supported Versions
@@ -43,12 +43,12 @@ the flaw before a fix ships.
 
 - ✅ Include: repro steps, error output, affected code paths, version.
 - ❌ **Redact**: API keys, tokens, private keys, personal home-directory
-  paths, and any other credentials. Anser is a *local-first* tool — your
+  paths, and any other credentials. Castor is a *local-first* tool — your
   machine paths and keys are yours, not ours.
 
 ## What We Consider a Security Vulnerability
 
-Anser is a **local-first, zero-trust** agent harness. The following are
+Castor is a **local-first, zero-trust** agent harness. The following are
 in-scope and treated as security issues:
 
 - **Sandbox escape** — a tool call, patch, or shell command writing or
@@ -80,7 +80,7 @@ in-scope and treated as security issues:
   deployment.
 - Vulnerabilities in **upstream** projects (Node.js, vLLM, the LLM
   weights, `@ast-grep`, the MCP SDK) — please report those to the
-  respective maintainers; we will coordinate if it affects Anser.
+  respective maintainers; we will coordinate if it affects Castor.
 
 ## Our Commitments
 
@@ -111,5 +111,5 @@ pin / patch on our side. We track dependencies via `package-lock.json` and
 
 ---
 
-**Thank you for helping keep Anser safe.** Responsible disclosure makes the
+**Thank you for helping keep Castor safe.** Responsible disclosure makes the
 local-first, zero-trust model actually hold up in the wild.

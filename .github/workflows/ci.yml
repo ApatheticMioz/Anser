@@ -1,7 +1,7 @@
 # ============================================================================
-# Anser — Continuous Integration
+# Castor — Continuous Integration
 # ============================================================================
-# Cross-platform test gate for the mcp-qwen (Anser) microkernel.
+# Cross-platform test gate for the mcp-castor microkernel.
 #
 # Matrix: Node 22 & 24 (Active LTS) × ubuntu-latest & windows-latest (4 jobs).
 #
@@ -49,12 +49,12 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-          # The lock file lives in the mcp-qwen/ subdirectory (no root
+          # The lock file lives in the mcp-castor/ subdirectory (no root
           # package.json), so point the cache at that path explicitly.
-          cache-dependency-path: mcp-qwen/package-lock.json
+          cache-dependency-path: mcp-castor/package-lock.json
 
       - name: Install dependencies (npm ci)
-        working-directory: mcp-qwen
+        working-directory: mcp-castor
         run: npm ci
 
       - name: Report environment
@@ -67,8 +67,8 @@ jobs:
           echo "   platform:  $(node -p 'process.platform')"
           echo "=============================================="
 
-      - name: Run test:all (59-suite authoritative gate)
-        working-directory: mcp-qwen
+      - name: Run test:all (authoritative gate)
+        working-directory: mcp-castor
         env:
           TEST_OFFLINE: "1"
         run: npm run test:all
@@ -77,5 +77,5 @@ jobs:
         if: always()
         run: |
           echo "=============================================="
-          echo " Anser test gate complete on ${{ runner.os }} / Node ${{ matrix.node-version }}"
+          echo " Castor test gate complete on ${{ runner.os }} / Node ${{ matrix.node-version }}"
           echo "=============================================="

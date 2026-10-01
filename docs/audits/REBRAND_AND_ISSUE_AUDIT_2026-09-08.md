@@ -1,6 +1,6 @@
-# Rebrand & Issue Adjudication Audit — Open-Source Readiness (Anser)
+# Rebrand & Issue Adjudication Audit — Open-Source Readiness (Castor)
 
-- **Scope**: Naming/identity scan (`LLM_Ecosystem` → `Anser`), private-machine-path & obsolete-artifact leak check, Issue #8 & #9 adjudication, and adversarial open-source-readiness critique.
+- **Scope**: Naming/identity scan (`LLM_Ecosystem` → `Castor`), private-machine-path & obsolete-artifact leak check, Issue #8 & #9 adjudication, and adversarial open-source-readiness critique.
 - **Method**: Ground truth via `git grep` / `git ls-files` / `git log` / `gh issue view` / direct file reads, plus a **live `npm test` run** (exit 0). No source file was mutated this turn; this report is the sole new artifact.
 - **Repo state at audit**: `origin = https://github.com/ApatheticMioz/LLM_Ecosystem.git` (**PRIVATE**), branch `main`, working tree **clean**.
 - **Severity scale**: `BLOCKER` > `HIGH` > `MEDIUM` > `LOW` > `NOTE`.
@@ -11,7 +11,7 @@
 
 | Area | Verdict |
 |---|---|
-| **Naming** | `LLM_Ecosystem` appears in **25 tracked files**. ~10 are true *identity* references that must become `Anser`; ~15 are *local-folder / GitHub-URL* artifacts (machine-specific absolute paths) that must be **parameterized or removed**, not renamed. |
+| **Naming** | `LLM_Ecosystem` appears in **25 tracked files**. ~10 are true *identity* references that must become `Castor`; ~15 are *local-folder / GitHub-URL* artifacts (machine-specific absolute paths) that must be **parameterized or removed**, not renamed. |
 | **Private-path leaks** | **Confirmed** in tracked files: `C:\Users\Apath`, `/home/apath`, full `PATH` env dumps (benchmark JSON), and a **hardcoded `SUDO_PASS = "1234"`** in `benchmarks/wedge-repro/repro.py`. Must be scrubbed before public. |
 | **Obsolete temp artifacts** | `.evo/`, `.avo/`, `mcp-qwen/.evo/`, `mcp-qwen/.avo/`, `mcp-qwen/.t1.log`, `mcp-qwen/.t_security.log`, `.webui_secret_key`, `scripts/__pycache__/` are all **untracked + gitignored** (not a leak). One **dangling reference**: `benchmarks/wedge-repro/ISSUE_DRAFT.md` is cited in `NOTES.md:979` but does not exist. |
 | **Test-gate truth** | On-disk `.test.js` = **36**. `npm test` = **31** (verified **green**, exit 0). `npm run test:all` = **33**. README claims "26/26 / 26-suite / 23 offline" and mcp-qwen/README claims "33-suite / 28 (25+3)" — **all stale**. The two *newest* guard suites (`search_code_guard`, `protocol_sync`) are in `npm test` but **not** in `test:all`. |
@@ -27,26 +27,26 @@
 
 `git grep -l "LLM_Ecosystem"` returns exactly these 25 tracked files. They fall into three distinct classes with **different** remediation:
 
-#### Class A — True identity / branding (rename → `Anser`)
-These name the *product* and must become `Anser`:
+#### Class A — True identity / branding (rename → `Castor`)
+These name the *product* and must become `Castor`:
 
 | File:Line | Current text | Action |
 |---|---|---|
-| `README.md:1` | `# LLM_Ecosystem & Anser Harness` | → `# Anser` (or `# Anser — Universal 245K Local Agent Microkernel & Harness`) |
-| `README.md:14` | `**LLM_Ecosystem** is a production-grade, local-first multi-agent…` | → `**Anser** is …` |
+| `README.md:1` | `# LLM_Ecosystem & Castor Harness` | → `# Castor` (or `# Castor — Universal 245K Local Agent Microkernel & Harness`) |
+| `README.md:14` | `**LLM_Ecosystem** is a production-grade, local-first multi-agent…` | → `**Castor** is …` |
 | `README.md:3` | release badge `…/ApatheticMioz/LLM_Ecosystem?label=release` | → new repo name (post-rename) |
-| `README.md:19` | legacy-goose branch URL `…/LLM_Ecosystem/tree/archive/legacy-goose` | → new repo name |
-| `README.md:92` | repo tree root `LLM_Ecosystem/` | → `Anser/` |
-| `CONTRIBUTING.md:1` | `# Contributing to LLM_Ecosystem` | → `# Contributing to Anser` |
-| `CONTRIBUTING.md:3` | `contributing to **LLM_Ecosystem** and the **Anser** agent harness` | → `**Anser**` (drop the dual name) |
-| `LICENSE:3` | `Copyright (c) 2026 LLM_Ecosystem Contributors` | → `Anser Contributors` |
-| `docs/README.md:3` | `…for the **LLM_Ecosystem** and the **Anser** harness` | → `**Anser**` |
-| `.gitignore:2` | `# LLM_Ecosystem .gitignore` (comment) | → `# Anser .gitignore` |
+| `README.md:19` | legacy-castor branch URL `…/LLM_Ecosystem/tree/archive/legacy-castor` | → new repo name |
+| `README.md:92` | repo tree root `LLM_Ecosystem/` | → `Castor/` |
+| `CONTRIBUTING.md:1` | `# Contributing to LLM_Ecosystem` | → `# Contributing to Castor` |
+| `CONTRIBUTING.md:3` | `contributing to **LLM_Ecosystem** and the **Castor** agent harness` | → `**Castor**` (drop the dual name) |
+| `LICENSE:3` | `Copyright (c) 2026 LLM_Ecosystem Contributors` | → `Castor Contributors` |
+| `docs/README.md:3` | `…for the **LLM_Ecosystem** and the **Castor** harness` | → `**Castor**` |
+| `.gitignore:2` | `# LLM_Ecosystem .gitignore` (comment) | → `# Castor .gitignore` |
 
-> **Note:** `CLAUDE.md`, `GEMINI.md`, `mcp-qwen/package.json`, `mcp-qwen/index.js`, `mcp-qwen/docs/DESIGN.md`, `docs/audits/PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md`, `docs/audits/ANSER_PROGRESS.md`, `docs/audits/QWEN_EVO_AUDIT.md` are **already clean** (0 occurrences) — the `5d4ab2e "rebrand to Anser"` commit already did the deep rebrand; only the top-level identity strings above were missed.
+> **Note:** `CLAUDE.md`, `GEMINI.md`, `mcp-qwen/package.json`, `mcp-qwen/index.js`, `mcp-qwen/docs/DESIGN.md`, `docs/audits/PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05.md`, `docs/audits/CASTOR_PROGRESS.md`, `docs/audits/QWEN_EVO_AUDIT.md` are **already clean** (0 occurrences) — the `5d4ab2e "rebrand to Castor"` commit already did the deep rebrand; only the top-level identity strings above were missed.
 
 #### Class B — Local-folder / GitHub-URL artifacts (parameterize or remove — do NOT rename)
-These are **machine-specific absolute paths** that happen to contain the old folder name. Renaming them to `Anser` would be *wrong* (they'd still be non-portable). They must become **relative / env-driven** or be removed:
+These are **machine-specific absolute paths** that happen to contain the old folder name. Renaming them to `Castor` would be *wrong* (they'd still be non-portable). They must become **relative / env-driven** or be removed:
 
 | File:Line | Current text | Problem |
 |---|---|---|
@@ -84,7 +84,7 @@ These are **machine-specific absolute paths** that happen to contain the old fol
 | `benchmarks/wedge-repro/repro.py:37` | `SUDO_PASS = "1234"` (hardcoded sudo password, used at `:144` `echo {SUDO_PASS} \| sudo -S …`) | **HIGH** (credential in a public file) |
 | `benchmarks/swe-rebench/results/session_20260824/server_config.json:80` | full `PATH=` env dump: `/mnt/c/Users/Apath/…`, `/home/apath/…`, Claude session UUIDs, plugin paths | **HIGH** (identity + machine fingerprint) |
 | `benchmarks/swe-rebench/results/session_20260825/server_config.json:80` | same `PATH=` dump | **HIGH** |
-| `benchmarks/swe-rebench/run_goose_solve.py:39` | `GOOSE_EXE = r"C:\Users\Apath\.local\bin\goose.exe"` | MEDIUM |
+| `benchmarks/swe-rebench/run_castor_solve.py:39` | `CASTOR_EXE = r"C:\Users\Apath\.local\bin\castor.exe"` | MEDIUM |
 | `benchmarks/sessions/session_20260907/{server_config.json,vllm_engine.log,vllm_models.json}` | `/home/apath/qwen-serving/…` throughout | MEDIUM |
 | `benchmarks/wedge-repro/logs/full/*.txt` (3 files) | `/home/apath/qwen-serving/venv/…` stack traces | MEDIUM |
 | `mcp-qwen/NOTES.md:543,653-694,992` | `C:\Users\Apath\…`, `/home/apath/…` (Claude config, gemini config, node wrapper) | MEDIUM |
@@ -148,7 +148,7 @@ Both issues are **OPEN** with **no comments**. Both were filed 2026-09-08 (07:44
 6. **Design questions (OQ1–OQ7)** — carried.
 
 **Proposed close comment (Issue #9)**:
-> **CLOSED — superseded & re-scoped.** The 4-slice adversarial audit (`a7c75dd` + `a8f0d7a`, 2026-09-08) is the final verification pass: **15/15 findings resolved and verified** (`AUDIT_MANIFEST.md`), **31-suite gate green** (exit 0). This subsumes the earlier 7-commit fix ledger. The two original conditions are re-tracked in `docs/audits/REBRAND_AND_ISSUE_AUDIT_2026-09-08.md`: **(a) live smoke** (needs a running vLLM — deferred to release), and **(b) owner go** (blocked on the rebrand: repo must be renamed `LLM_Ecosystem → Anser`, private paths/`SUDO_PASS` scrubbed, stale test counts fixed, and a CI gate added before it is pushed + made public). No blocking *code* defects remain; the remaining work is *release hygiene*.
+> **CLOSED — superseded & re-scoped.** The 4-slice adversarial audit (`a7c75dd` + `a8f0d7a`, 2026-09-08) is the final verification pass: **15/15 findings resolved and verified** (`AUDIT_MANIFEST.md`), **31-suite gate green** (exit 0). This subsumes the earlier 7-commit fix ledger. The two original conditions are re-tracked in `docs/audits/REBRAND_AND_ISSUE_AUDIT_2026-09-08.md`: **(a) live smoke** (needs a running vLLM — deferred to release), and **(b) owner go** (blocked on the rebrand: repo must be renamed `LLM_Ecosystem → Castor`, private paths/`SUDO_PASS` scrubbed, stale test counts fixed, and a CI gate added before it is pushed + made public). No blocking *code* defects remain; the remaining work is *release hygiene*.
 
 ---
 
@@ -176,7 +176,7 @@ Both issues are **OPEN** with **no comments**. Both were filed 2026-09-08 (07:44
 
 Ranked by friction to a first-time external contributor:
 
-1. **`BLOCKER` — Repo is PRIVATE and misnamed.** `origin` is `…/ApatheticMioz/LLM_Ecosystem.git` with `visibility: PRIVATE`. No external contributor can clone at all until it is renamed to `Anser` **and** made public. Every clone URL in the docs points at the private name.
+1. **`BLOCKER` — Repo is PRIVATE and misnamed.** `origin` is `…/ApatheticMioz/LLM_Ecosystem.git` with `visibility: PRIVATE`. No external contributor can clone at all until it is renamed to `Castor` **and** made public. Every clone URL in the docs points at the private name.
 2. **`HIGH` — Non-portable hardcoded paths in every quickstart.** `README.md` §9, `CONTRIBUTING.md`, `mcp-qwen/README.md`, `scripts/**`, and `update_schemas.py` all hardcode `D:\LLM_Ecosystem`, `/mnt/d/LLM_Ecosystem`, `C:\Users\Apath`, `/home/apath`. A contributor on a different drive/user/OS must hand-edit a dozen files before `npm install` even makes sense. There is no `QWEN_REPO_ROOT`-style indirection.
 3. **`HIGH` — Private-identity & credential leaks in tracked files** (§1.2): `SUDO_PASS = "1234"`, two full `PATH=` env dumps with the author's username + Claude session UUIDs, and `C:\Users\Apath`/`/home/apath` across scripts, `update_schemas.py`, `NOTES.md`, and benchmark logs. Publishing as-is leaks the author's machine identity (and a password).
 4. **`HIGH` — Windows-only onboarding.** The entire "Getting Started" is Windows 11 + WSL2 + D: drive. The project markets "dual platform (Windows & WSL2)" but there is **no Linux/macOS path**, and the WSL steps assume the author's exact distro/user.
@@ -207,9 +207,9 @@ Ranked by friction to a first-time external contributor:
 
 ## 5. Recommended Action Plan (for the next, mutating turn)
 
-**Phase 1 — Identity (rename to `Anser`)**
-1. Rename the 10 Class-A identity strings (§1.1) to `Anser` (`README.md`, `CONTRIBUTING.md`, `LICENSE`, `docs/README.md`, `.gitignore`).
-2. Rename the GitHub repo `LLM_Ecosystem → Anser` (owner action) and update the 3 URL references (`README.md:3,19`, `CONTRIBUTING.md:31`) + `git remote set-url`.
+**Phase 1 — Identity (rename to `Castor`)**
+1. Rename the 10 Class-A identity strings (§1.1) to `Castor` (`README.md`, `CONTRIBUTING.md`, `LICENSE`, `docs/README.md`, `.gitignore`).
+2. Rename the GitHub repo `LLM_Ecosystem → Castor` (owner action) and update the 3 URL references (`README.md:3,19`, `CONTRIBUTING.md:31`) + `git remote set-url`.
 
 **Phase 2 — Portability (de-hardcode paths)**
 3. Introduce a `QWEN_REPO_ROOT` env / `import.meta.url`-derived root; rewrite `scripts/**`, `update_schemas.py`, `mcp-qwen/README.md`, `README.md` §9, `CONTRIBUTING.md` to relative/env forms.
@@ -218,7 +218,7 @@ Ranked by friction to a first-time external contributor:
 
 **Phase 3 — Privacy scrub (before public)**
 6. Remove `SUDO_PASS` from `repro.py` (env-driven or drop the sudo step).
-7. Redact the two `PATH=` dumps in `benchmarks/swe-rebench/results/session_2026082{4,5}/server_config.json`; replace `Apath`/`apath` with `<user>`/`alice` across `NOTES.md`, `update_schemas.py`, `scripts/wsl/setup_links.sh`, `run_goose_solve.py`, benchmark logs, `schema_parity.test.js`.
+7. Redact the two `PATH=` dumps in `benchmarks/swe-rebench/results/session_2026082{4,5}/server_config.json`; replace `Apath`/`apath` with `<user>`/`alice` across `NOTES.md`, `update_schemas.py`, `scripts/wsl/setup_links.sh`, `run_castor_solve.py`, benchmark logs, `schema_parity.test.js`.
 8. Decide `NOTES.md` disposition (move to `docs/audits/` + scrub, or split public/private).
 9. Delete stale scratch: `mcp-qwen/.t1.log`, `mcp-qwen/.t_security.log`, `scripts/__pycache__/`; fix or remove the `ISSUE_DRAFT.md` reference; create or de-reference `implementation_plan.md`.
 
@@ -230,7 +230,7 @@ Ranked by friction to a first-time external contributor:
 
 **Phase 5 — Close issues & go public**
 14. Post the close comments in §2.1 (Issue #8) and §2.2 (Issue #9) via `gh issue close 8 --comment …` / `gh issue close 9 --comment …`.
-15. Owner's explicit go → push `main` → set repo **public** under `Anser`.
+15. Owner's explicit go → push `main` → set repo **public** under `Castor`.
 
 ---
 
@@ -239,7 +239,7 @@ Ranked by friction to a first-time external contributor:
 **25 tracked files containing `LLM_Ecosystem`** (from `git grep -l`):
 `.gitignore`, `CONTRIBUTING.md`, `LICENSE`, `README.md`, `benchmarks/swe-rebench/README.md`, `docs/README.md`, `docs/audits/AUDIT_2026-09-05.md`, `mcp-qwen/NOTES.md`, `mcp-qwen/README.md`, `mcp-qwen/src/harness/services/sandbox_fs.js`, `mcp-qwen/src/tools.js`, `mcp-qwen/src/wsl_bridge.js`, `mcp-qwen/tests/canary.test.js`, `mcp-qwen/tests/fifo_queue.test.js`, `mcp-qwen/tests/platform.test.js`, `mcp-qwen/tests/posix_routing.test.js`, `mcp-qwen/tests/reaping.test.js`, `mcp-qwen/tests/security.test.js`, `mcp-qwen/update_schemas.py`, `scripts/main/kill_all_tasks.bat`, `scripts/setup_links.ps1`, `scripts/uncensored/download_model.sh`, `scripts/uncensored/start.bat`, `scripts/uncensored/start_noreason.bat`, `scripts/wsl/setup_links.sh`.
 
-**Clean (0 occurrences, already rebranded):** `CLAUDE.md`, `GEMINI.md`, `mcp-qwen/package.json`, `mcp-qwen/index.js`, `mcp-qwen/docs/DESIGN.md`, `docs/audits/{ANSER_PROGRESS,PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05,QWEN_EVO_AUDIT}.md`, `.gitattributes`, `.editorconfig`.
+**Clean (0 occurrences, already rebranded):** `CLAUDE.md`, `GEMINI.md`, `mcp-qwen/package.json`, `mcp-qwen/index.js`, `mcp-qwen/docs/DESIGN.md`, `docs/audits/{CASTOR_PROGRESS,PATCHWORK_ADVERSARIAL_AUDIT_2026-09-05,QWEN_EVO_AUDIT}.md`, `.gitattributes`, `.editorconfig`.
 
 **4-slice audit commits:** `a7c75dd` (adopt `apply_patch`, auto-normalize `edit_file`) + `a8f0d7a` (harden search/edit/patch guards + `protocol_sync` gate; authored `AUDIT_MANIFEST.md`, 15/15 resolved).
 

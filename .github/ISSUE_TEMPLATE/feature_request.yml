@@ -1,8 +1,8 @@
 # ============================================================================
-# Feature Request — Anser (The Universal 245K Agent Microkernel for Local LLMs)
+# Feature Request — Castor (The Universal 245K Agent Microkernel for Local LLMs)
 # ============================================================================
 name: "✨ Feature Request"
-description: "Propose a new capability, improvement, or change to the Anser microkernel."
+description: "Propose a new capability, improvement, or change to the Castor microkernel."
 title: "[Feature] "
 labels: ["enhancement", "triage"]
 assignees: []
@@ -49,7 +49,7 @@ body:
     attributes:
       label: Scope & Impact
       description: |
-        Which part of Anser does this touch? (e.g. microkernel, MCP server,
+        Which part of Castor does this touch? (e.g. microkernel, MCP server,
         sandbox, evo lineage, stream proxy, platform/WSL bridge, CI)
         Is it a breaking change? Does it affect the 245K context budget or
         the zero-trust sandbox model?

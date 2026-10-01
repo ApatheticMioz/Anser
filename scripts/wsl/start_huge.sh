@@ -28,7 +28,7 @@ export VLLM_DFLASH2_LOOKUP_ADAPTIVE=0  # A/B tested 2026-08-23: pins verify bloc
 # above. 2026-09-12: user-authorized raise to 2. 2026-09-25: user-authorized revert
 # to 1 based on empirical proof that multi-stream agent concurrency degrades TTFT by 10x
 # without raising aggregate throughput. Reclaims ~800+ MiB VRAM headroom on RTX 3090.
-# Harness side must stay 1:1: MAX_CONCURRENT_TASKS in mcp-qwen/src/config.js.)
+# Harness side must stay 1:1: MAX_CONCURRENT_TASKS in mcp-castor/src/config.js.)
 export MAX_SEQS=1
 # Maximum Intelligence: Pristine W4A16 (unquantized activations). Retains 96.5% GSM8K
 # reasoning with zero perplexity degradation (+4.1% PPL / -1.5% GSM8K avoided).
@@ -43,10 +43,10 @@ export EXTRA_ARGS='--default-chat-template-kwargs {"reasoning_effort":"medium"}'
 # Universal Stateful UTF-8 & SSE Stream Sanitizer Proxy (port 18022 -> 18020)
 # Derive the proxy script path from this script's own location so the repo is
 # portable (no hardcoded /mnt/d/ drive mount). This script lives at
-# <ecosystem>/scripts/wsl/start_huge.sh; the proxy at <ecosystem>/mcp-qwen/stream_proxy.js.
+# <ecosystem>/scripts/wsl/start_huge.sh; the proxy at <ecosystem>/mcp-castor/stream_proxy.js.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ECOSYSTEM_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-STREAM_PROXY_SCRIPT="${STREAM_PROXY_PATH:-${ECOSYSTEM_ROOT}/mcp-qwen/stream_proxy.js}"
+STREAM_PROXY_SCRIPT="${STREAM_PROXY_PATH:-${ECOSYSTEM_ROOT}/mcp-castor/stream_proxy.js}"
 if [ ! -f "$STREAM_PROXY_SCRIPT" ] && [ -f ~/qwen-serving/stream_proxy.js ]; then
   STREAM_PROXY_SCRIPT=~/qwen-serving/stream_proxy.js
 fi

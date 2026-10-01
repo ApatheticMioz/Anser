@@ -1,0 +1,997 @@
+import { z } from "zod";
+import http from "node:http";
+import path from "node:path";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { normalizeObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
+import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
+import {
+  BASE_URL,
+  STATUS_PORT,
+  MAX_LEN_HUGE,
+  RACE_MS,
+  IS_WINDOWS,
+  MAX_CONCURRENT_TASKS,
+  QWEN_STATE_DIR,
+  TASK_DIR,
+  AUTO_HEAL,
+  WEDGE_STATS_SILENCE_S,
+  REASONING_EFFORT_TIERS,
+  TASK_RETENTION_MS,
+  PROMPT_BUDGET_CHARS,
+  ALLOW_ENGINE_INTERRUPT,
+  BASE_TURN_BUDGET,
+  MAX_ELASTIC_TURNS,
+  IS_TEST_ENV,
+  MODEL,
+  TOOL_PREFIX,
+} from "./config.js";
+import {
+  normalizeWorkspacePath,
+  canonicalizePath,
+  isIdeAppDirectory,
+  killProcessTree,
+  killSessionProcessTree,
+  toPosixWslPath,
+  toWindowsPath,
+} from "./wsl_bridge.js";
+import {
+  serverInfo,
+  readEngineMetrics,
+  ensureServerRunning,
+  stopServer,
+  resetEngineHealthCache,
+  engineWedgeState,
+  healWedgedEngine,
+  readWedgeCounter,
+  setHealGatekeeper,
+} from "./server_lifecycle.js";
+import { listTaskSlots, releaseTaskSlot, getSlotStatus } from "./semaphore.js";
+import {
+  tasks,
+  listTasksFromDisk,
+  readTaskFromDisk,
+  saveTaskToDisk,
+  notifyWaiters,
+  cancelAllTasks,
+  extendTaskBudget,
+  statusServerOwned,
+  hasLiveWork,
+} from "./task_registry.js";
+import { startCastorTask, resolveSessionId } from "./castor_runner.js";
+import { formatTelemetrySummary, recordTaskResult } from "./telemetry.js";
+
+export function registerTools(server, options = {}) {
+  // Effective tool-name prefix: explicit option > MCP_TOOL_PREFIX env /
+  // ~/.castor/config.json tool_prefix > "qwen". An empty string yields the
+  // canonical unprefixed names (coworker, task, server).
+  const prefix = options.prefix ?? TOOL_PREFIX;
+  const toolName = (base) => (prefix ? `${prefix}_${base}` : base);
+
+  // Wire the heal backstop: refuse to stop/reboot the engine while live work
+  // is in flight. Uses the injection hook so server_lifecycle.js stays free of
+  // a hard dependency on task_registry.js (which has import-time side effects).
+  setHealGatekeeper(hasLiveWork);
+
+  // Tool 1: coworker (Primary Hybrid Agent Interface)
+  server.registerTool(
+    toolName("coworker"),
+    {
+      title: "Autonomous Senior Coworker (Castor Microkernel)",
+      description:
+        `Primary autonomous execution coworker for ${MODEL} via Castor microkernel harness ($0 execution). ` +
+        `Has full native access to Filesystem, Shell, and Git across Windows and WSL. Context window nominal ceiling: ${MAX_LEN_HUGE.toLocaleString()} tokens. ` +
+        "Executes codebase exploration, refactoring, implementation, diagnostics, live web/docs research, and git operations.\n\n" +
+        "ORCHESTRATION RULES:\n" +
+        "  - Single Logical Concern: Scope each prompt to ONE cohesive subsystem, architectural layer, or target AST slice. Do not bundle disparate subsystems or cross-cutting concerns into a single dispatch.\n" +
+        "  - Full Objective Fulfillment: Do not instruct the coworker to limit its tool calls or artificially restrict its execution. The coworker operates autonomously with full tool depth once dispatched with a focused objective.\n" +
+        "  - Session Lifecycle: Maintain a persistent `session_id` across a cohesive milestone to maximize KV prefix caching. Roll to a fresh session_id (e.g. '<milestone>_stage2') upon milestone boundaries, session drift, or ~60–80 cumulative turns.\n" +
+        "  - Zero-Turn Execution Contract: Tasks completing within ~45s return results synchronously. Long-running tasks yield a `taskId` and a `wait_command`. Execute the `wait_command` immediately in your shell to block at $0 cost and wake on completion. Do not poll manually or execute parallel exploratory tools while waiting.\n" +
+        "  - Reasoning Effort: optional `reasoning_effort` param (xhigh | medium | low) tunes per-dispatch thinking depth; omit to use the CASTOR_REASONING_EFFORT / QWEN_REASONING_EFFORT env default (medium).\n\n" +
+        "BUILT-IN CAPABILITIES:\n" +
+        "  - Built-in live Web Search & Article Extraction ('web_search', 'web_fetch' with Mozilla Readability & Turndown)\n" +
+        "  - Transparent AST & Syntax Validation on edits ('edit_file' validates JS, TS, Python, JSON, LaTeX, BibTeX)\n" +
+        "  - AST Search ('ast_search') and Git Unified Diffs ('apply_patch' with --unidiff-zero)\n" +
+        "  - Shell Execution ('bash') with process group cleanup and git CLI integration",
+      inputSchema: {
+        prompt: z
+          .string()
+          .describe(
+            "Task, inquiry, or architectural instruction for Qwen (pure text-only; images must be inspected natively by Lead Architect and summarized into text)"
+          ),
+        session_id: z
+          .string()
+          .optional()
+          .describe(
+            "Named persistent session ID (maintains KV-cache and conversation context across turns)"
+          ),
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            "Working directory for filesystem and shell tools (defaults to current workspace)"
+          ),
+        extensions: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Optional stdio extensions (e.g. ['uvx free-search-mcp'], ['npx -y @upstash/context7-mcp'])"
+          ),
+        hypothesis: z.string().optional().describe("Optional Evo hypothesis being tested"),
+        test_command: z
+          .string()
+          .optional()
+          .describe("Optional verification test/benchmark command (e.g. 'pytest tests/test_core.py')"),
+        metric_name: z
+          .string()
+          .optional()
+          .describe("Target metric name in benchmark output (e.g. 'throughput', 'accuracy')"),
+        higher_is_better: z
+          .boolean()
+          .optional()
+          .describe("Whether higher metric values represent improvement (default true)"),
+        timeout_ms: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Task timeout in ms (default 14,400,000ms (4 hours), minimum 600,000ms (10 min) - budgets are floored because a 27B model on consumer silicon routinely needs tens of minutes)"
+          ),
+        skills: z
+          .array(z.string())
+          .optional()
+          .describe("Explicit list of skill names to inject (bypasses keyword auto-matching)"),
+        reasoning_effort: z
+          .enum(REASONING_EFFORT_TIERS)
+          .optional()
+          .describe(
+            "Per-dispatch reasoning-effort tier forwarded to the engine chat template (xhigh = maximal deliberation, medium = balanced, low = brief). Omit to use the QWEN_REASONING_EFFORT env default (medium). Only the engine's supported tiers are accepted; invalid values are rejected."
+          ),
+        allow_large_prompt: z
+          .boolean()
+          .optional()
+          .describe(
+            "Explicit override allowing a prompt up to 2,500 chars when a detailed specification for a single slice is genuinely unavoidable. Prompts > 1,500 chars without this flag are rejected fail-fast to prevent monolithic runaway sessions."
+          ),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async ({
+      prompt,
+      session_id,
+      cwd,
+      extensions,
+      hypothesis,
+      test_command,
+      metric_name,
+      higher_is_better,
+      timeout_ms,
+      skills,
+      reasoning_effort,
+      allow_large_prompt,
+    }) => {
+      let raceHandle;
+      try {
+      // Canonicalize working directory through OS symlink/junction layer to ensure realpath consistency.
+      if (!cwd && isIdeAppDirectory(process.cwd())) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${toolName("coworker")}: 'cwd' parameter is required. The MCP server process was started from an IDE application directory (\`${process.cwd()}\`), which cannot be used as a project workspace. Please provide the target repository or directory path in 'cwd'.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const isLargePromptAllowed = Boolean(allow_large_prompt);
+      const effectiveBudget = isLargePromptAllowed ? 2500 : PROMPT_BUDGET_CHARS;
+
+      if (typeof prompt === "string" && prompt.length > effectiveBudget) {
+        const errorDetail = isLargePromptAllowed
+          ? `Prompt is ${prompt.length} chars, exceeding the absolute maximum cap of 2,500 chars even with 'allow_large_prompt: true'. Point to files on disk and AST coordinates instead of inlining large content. DO NOT spoon-feed or paste verbatim code.`
+          : `Prompt is ${prompt.length} chars (budget: ${PROMPT_BUDGET_CHARS}). Your dispatch is oversized. ` +
+            `Per AGENTS.md / CLAUDE.md / GEMINI.md protocol rules (§3.1), you are strictly required to decompose tasks into single-concern slices rather than monolithic multi-milestone dumps. ` +
+            `DO NOT spoon-feed or paste verbatim code implementations—Qwen authors code locally. Point to files and AST coordinates. ` +
+            `(If a detailed specification is genuinely unavoidable for this single slice, pass 'allow_large_prompt: true' up to 2,500 chars).`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `MonolithicDispatchRejected: ${errorDetail}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const workingDir = canonicalizePath(normalizeWorkspacePath(cwd ?? process.cwd()));
+
+      if (isIdeAppDirectory(workingDir)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${toolName("coworker")}: Refusing to use IDE application directory (\`${workingDir}\`) as workspace. Please specify a valid project directory in 'cwd'.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      const resolvedSession = resolveSessionId(workingDir, session_id);
+
+      if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && IS_TEST_ENV)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `[offline_protected] task dispatch accepted without engine execution for prompt (${prompt.length} chars)`,
+            },
+          ],
+          isError: false,
+        };
+      }
+
+      const { taskId, taskEntry, executionPromise, totalTimeoutMs } = startCastorTask({
+        cwd: workingDir,
+        prompt,
+        sessionId: resolvedSession,
+        extensions,
+        timeoutMs: timeout_ms,
+        hypothesis,
+        testCommand: test_command,
+        metricName: metric_name,
+        higherIsBetter: higher_is_better,
+        skills,
+        reasoningEffort: reasoning_effort,
+      });
+
+      const raceTimer = new Promise((resolve) => {
+        raceHandle = setTimeout(() => resolve({ timedOutOnClientRace: true }), RACE_MS);
+      });
+      const winner = await Promise.race([executionPromise, raceTimer]);
+      clearTimeout(raceHandle);
+
+      if (!winner.timedOutOnClientRace) {
+        return {
+          content: [{ type: "text", text: winner.text }],
+          isError: winner.isError,
+        };
+      }
+
+      const waitCmdWin = `curl.exe -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
+      const waitCmdWsl = `curl -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${taskId}/wait`;
+      const elapsedSec = Math.round(RACE_MS / 1000);
+      const sessionEventsWin = path.join(QWEN_STATE_DIR, "sessions", resolvedSession, "events.jsonl");
+      const sessionEventsWsl = toPosixWslPath(sessionEventsWin);
+      const taskFileWin = path.join(TASK_DIR, `${taskId}.json`);
+      const taskFileWsl = toPosixWslPath(taskFileWin);
+
+      const slotStatus = getSlotStatus(process.pid);
+      const taskStatus = taskEntry.status;
+
+      let statusCallout = "";
+      if (taskStatus === "queued") {
+        if (slotStatus.isAlienActive) {
+          const alienPids = [...new Set(slotStatus.alienHolders.map((h) => h.pid))].join(", ");
+          const alienTasks = slotStatus.alienHolders.map((h) => `\`${h.taskId}\``).join(", ");
+          statusCallout = [
+            `> [!IMPORTANT]`,
+            `> **Qwen Engine Status: IN USE BY ANOTHER SESSION (QUEUED)**`,
+            `> Qwen is currently executing tasks for another active session (tenant PID: ${alienPids}; active task: ${alienTasks}).`,
+            `> **DO NOT PANIC, CANCEL, OR RETRY.** The engine enforces single-tenant multi-slot exclusivity (up to 2 concurrent slots for the active session) to protect GPU KV cache and preserve speculative decoding throughput.`,
+            `> Your task \`${taskId}\` is safely queued at $0 cost and will execute automatically the instant the other session yields. Run the wait command below to block until complete.`,
+          ].join("\n");
+        } else if (slotStatus.isSameActive && slotStatus.isFullyOccupied) {
+          const sameTasks = slotStatus.sameHolders.map((h) => `\`${h.taskId}\``).join(", ");
+          statusCallout = [
+            `> [!NOTE]`,
+            `> **Qwen Engine Status: SESSION CAPACITY REACHED (QUEUED)**`,
+            `> Both concurrent execution slots are actively running tasks from this session (${sameTasks}).`,
+            `> Your task \`${taskId}\` is safely queued and will start as soon as an active task finishes. Run the wait command below to block until complete.`,
+          ].join("\n");
+        } else {
+          statusCallout = [
+            `> [!NOTE]`,
+            `> **Qwen Engine Status: QUEUED FOR EXECUTION**`,
+            `> Task \`${taskId}\` is queued and awaiting slot grant. Run the wait command below to block until complete.`,
+          ].join("\n");
+        }
+      } else {
+        statusCallout = [
+          `> [!TIP]`,
+          `> **Qwen Engine Status: ACTIVELY EXECUTING**`,
+          `> Task \`${taskId}\` is actively running on the local ${MODEL} engine with full 245K context.`,
+        ].join("\n");
+      }
+
+      const responseText = [
+        `### Qwen Task Dispatched (Background Execution)`,
+        `- **Task ID**: \`${taskId}\` | **Session**: \`${resolvedSession}\` | **Status**: \`${taskStatus}\``,
+        `- **Working Directory**: \`${workingDir}\``,
+        statusCallout ? `${statusCallout}` : null,
+        `- **Wait Command**: \`${waitCmdWin}\` (WSL: \`${waitCmdWsl}\`)`,
+        `- **Status Command**: \`${toolName("task")}(action: "status", task_id: "${taskId}")\``,
+      ].filter(Boolean);
+
+      return {
+        content: [{ type: "text", text: responseText.join("\n") }],
+        isError: false,
+      };
+      } catch (err) {
+        // Return MCP tool-execution failure response with isError: true.
+        return {
+          content: [{ type: "text", text: `${toolName("coworker")}: ${err && err.message ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 2: task (Unified Background Task Management)
+  server.registerTool(
+    toolName("task"),
+    {
+      title: "Manage Background Qwen Tasks",
+      description: "Check status, retrieve output, cancel, or list background Qwen coworker tasks.",
+      inputSchema: {
+        action: z
+          .enum(["status", "cancel", "cancel_all", "list", "kill", "stats", "extend_lease"])
+          .describe("Action to perform on background tasks (status, cancel, list, stats, or extend_lease to grant additional execution turns)"),
+        task_id: z
+          .string()
+          .optional()
+          .describe(
+            "Task ID (required for 'status' and 'extend_lease', optional for 'cancel'/'cancel_all'/'kill' to cancel all tasks)"
+          ),
+        turns: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Additional turns to grant for 'extend_lease' (default 25)"),
+        reason: z
+          .string()
+          .optional()
+          .describe("Optional reason for supervisor lease extension"),
+        since: z
+          .string()
+          .optional()
+          .describe("Optional ISO-8601 start timestamp for time-sliced stats (e.g. '2026-09-28T00:00:00Z')"),
+        until: z
+          .string()
+          .optional()
+          .describe("Optional ISO-8601 end timestamp for time-sliced stats"),
+        window: z
+          .enum(["1h", "24h", "today", "yesterday", "all"])
+          .optional()
+          .describe("Optional relative time window for time-sliced stats"),
+        date: z
+          .string()
+          .optional()
+          .describe("Optional calendar date for time-sliced stats (YYYY-MM-DD)"),
+        hour: z
+          .number()
+          .int()
+          .min(0)
+          .max(23)
+          .optional()
+          .describe("Optional hour of the day (0-23) for time-sliced stats"),
+        minute: z
+          .number()
+          .int()
+          .min(0)
+          .max(59)
+          .optional()
+          .describe("Optional minute of the hour (0-59) for time-sliced stats"),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async ({ action, task_id, turns, reason, since, until, window, date, hour, minute }) => {
+      try {
+      if (action === "kill") {
+        action = "cancel";
+      }
+      if (action === "stats") {
+        const filter = {};
+        if (since !== undefined) filter.since = since;
+        if (until !== undefined) filter.until = until;
+        if (window !== undefined) filter.window = window;
+        if (date !== undefined) filter.date = date;
+        if (hour !== undefined) filter.hour = hour;
+        if (minute !== undefined) filter.minute = minute;
+        const { summary } = formatTelemetrySummary(filter);
+        return {
+          content: [
+            {
+              type: "text",
+              text: summary,
+            },
+          ],
+        };
+      }
+      if (action === "list") {
+        const merged = new Map();
+        for (const dt of listTasksFromDisk()) {
+          merged.set(dt.id, {
+            id: dt.id,
+            sessionId: dt.sessionId,
+            status: dt.status,
+            createdAt: dt.createdAt,
+            elapsed_s: Math.round(((dt.finishedAt || Date.now()) - dt.createdAt) / 1000),
+            done: dt.done,
+            isError: dt.isError,
+          });
+        }
+        for (const t of tasks.values()) {
+          merged.set(t.id, {
+            id: t.id,
+            sessionId: t.sessionId,
+            status: t.status,
+            createdAt: t.createdAt,
+            elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
+            done: t.done,
+            isError: t.isError,
+          });
+        }
+        const all = Array.from(merged.values());
+        const active = all.filter((t) => !t.done);
+        const completed = all.filter((t) => t.done);
+        completed.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        // Keep active tasks + 5 most recent completed tasks to prevent massive context bloat
+        const recentCompleted = completed.slice(0, 5);
+        const payloadTasks = [...active, ...recentCompleted].map(({ createdAt, ...rest }) => rest);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  tasks: payloadTasks,
+                  active_count: active.length,
+                  total_tasks: all.length,
+                  archived_completed: Math.max(0, completed.length - recentCompleted.length),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      if (action === "extend_lease") {
+        if (!task_id) {
+          return {
+            content: [{ type: "text", text: "Error: `task_id` parameter is required for action: 'extend_lease'." }],
+            isError: true,
+          };
+        }
+        const extResult = extendTaskBudget(task_id, turns || 25, reason);
+        if (!extResult.success) {
+          return {
+            content: [{ type: "text", text: `Failed to extend lease for task \`${task_id}\`: ${extResult.error}` }],
+            isError: true,
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Granted ${turns || 25} additional turns to task \`${task_id}\` (budget: ${extResult.previousBudget} -> ${extResult.budgetTurns} turns, extension #${extResult.leaseExtensionsCount}).`,
+            },
+          ],
+          isError: false,
+        };
+      }
+
+      if (
+        action === "cancel_all" ||
+        (action === "cancel" && (!task_id || task_id.toLowerCase() === "all"))
+      ) {
+        const count = await cancelAllTasks("cancelled by caller");
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Cancelled ${count} active/queued task(s), stopped execution, and cleared slot leases.`,
+            },
+          ],
+        };
+      }
+
+      if (!task_id) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: \`task_id\` parameter is required for action: '${action}'.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      let task = tasks.get(task_id) || readTaskFromDisk(task_id);
+      if (task && task.corrupted) {
+        // Report corrupt task state with error details.
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Task \`${task_id}\` file is CORRUPT (quarantined to ${task.file}): ${task.error}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      if (!task) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Task \`${task_id}\` not found in memory or disk (retention is ${Math.round(TASK_RETENTION_MS / 3_600_000)}h).`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (action === "status") {
+        // Compute elapsed execution or queued duration.
+        const elapsedS = Math.round(
+          ((task.finishedAt || Date.now()) - (task.startedAt || task.createdAt)) / 1000
+        );
+        if (task.done) {
+          const header = `[qwen task] id=${task.id} status=${task.status} elapsed_s=${elapsedS} isError=${task.isError}`;
+          return {
+            content: [{ type: "text", text: `${header}\n${task.result?.text || "Task completed."}` }],
+            isError: task.isError,
+          };
+        }
+        const waitCmdWin = `curl.exe -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait`;
+        const waitCmdWsl = `curl -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:${STATUS_PORT}/task/${task_id}/wait`;
+        const hint = `\n\nWait: \`${waitCmdWin}\` (WSL: \`${waitCmdWsl}\`)`;
+
+        if (task.status === "queued") {
+          const slotStatus = getSlotStatus(process.pid);
+          let queueDiagnosis = "";
+          if (slotStatus.isAlienActive) {
+            const alienPids = [...new Set(slotStatus.alienHolders.map((h) => h.pid))].join(", ");
+            const alienTasks = slotStatus.alienHolders.map((h) => `\`${h.taskId}\``).join(", ");
+            queueDiagnosis = ` Qwen is currently executing tasks for another active session (tenant PID: ${alienPids}; active task: ${alienTasks}). Your task is queued and will execute automatically when the slot yields.`;
+          } else if (slotStatus.isSameActive && slotStatus.isFullyOccupied) {
+            const sameTasks = slotStatus.sameHolders.map((h) => `\`${h.taskId}\``).join(", ");
+            queueDiagnosis = ` Both execution slots are actively running tasks from this session (${sameTasks}). Your task will run as soon as one completes.`;
+          } else {
+            queueDiagnosis = ` Awaiting execution slot grant (MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS} machine-wide).`;
+          }
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Task \`${task_id}\` is QUEUED (${elapsedS}s waiting).${queueDiagnosis}${hint}`,
+              },
+            ],
+            isError: false,
+          };
+        }
+        const lastActiveSec = task.lastHeartbeatAt
+          ? Math.max(0, Math.round((Date.now() - task.lastHeartbeatAt) / 1000))
+          : null;
+        const livenessStr = lastActiveSec !== null ? `${lastActiveSec}s ago` : "active";
+
+        const ops = task.toolOpsSummary || {
+          reads: 0,
+          mutations: 0,
+          commands: 0,
+          web: 0,
+        };
+        const opsSummary = `reads: ${ops.reads}, mutations: ${ops.mutations}, commands: ${ops.commands}${ops.web > 0 ? `, web: ${ops.web}` : ""}`;
+
+        let lastActionDetail = "";
+        if (task.lastTool?.name) {
+          lastActionDetail = `\n- Last action: \`${task.lastTool.name}\`${task.lastTool.summary ? ` (\`${task.lastTool.summary}\`)` : ""} (${livenessStr})`;
+        } else {
+          lastActionDetail = `\n- Last heartbeat: ${livenessStr}`;
+        }
+
+        const budgetInfo = `budget: ${task.budgetTurns || BASE_TURN_BUDGET} turns (extensions: ${task.leaseExtensionsCount || 0})`;
+        let activityBlock = "";
+        if (task.lastActivityPreview) {
+          const previewClean = String(task.lastActivityPreview)
+            .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text|exitCode|timedOut|latencyMs/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(-150);
+          if (previewClean) {
+            activityBlock = `\n- Activity: > ${previewClean}`;
+          }
+        }
+
+        let steeringAdvisory = "";
+        if (ops.commands >= 4 && ops.mutations === 0) {
+          steeringAdvisory = `\n\n> [!NOTE]\n> Consecutive shell commands observed without mutations. The coworker may be running exploration, diagnostics, or test suites.`;
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Task \`${task_id}\` is actively EXECUTING (${elapsedS}s elapsed, ${task.toolCallsCount || 0} tool calls made [${opsSummary}], ${budgetInfo}).${lastActionDetail}${activityBlock}${steeringAdvisory}${hint}`,
+            },
+          ],
+          isError: false,
+        };
+      }
+
+      if (action === "cancel") {
+        const memTask = tasks.get(task_id);
+        if (memTask && !memTask.done) {
+          killProcessTree(memTask.child, memTask.sessionId);
+          // Signal abort to stop in-flight execution and clean up bridged tools.
+          if (memTask.abortController) {
+            try {
+              memTask.abortController.abort();
+            } catch {}
+          }
+          // Release task slot lease immediately upon cancellation.
+          if (memTask.slot) {
+            releaseTaskSlot(memTask.slot);
+            memTask.slot = null;
+          }
+          memTask.status = "cancelled";
+          memTask.done = true;
+          memTask.isError = true;
+          memTask.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
+          try {
+            recordTaskResult({ isSuccess: false, isCancelled: true, effort: memTask.reasoningEffort });
+          } catch {}
+          saveTaskToDisk(memTask);
+          notifyWaiters(memTask);
+          return {
+            content: [{ type: "text", text: `Task \`${task_id}\` cancelled and process tree killed.` }],
+          };
+        }
+
+        // Delegate cancellation to the status coordinator process if not owned locally
+        try {
+          const httpCancel = await new Promise((resolve) => {
+            const postReq = http.request(
+              {
+                hostname: "127.0.0.1",
+                port: STATUS_PORT,
+                path: `/task/${encodeURIComponent(task_id)}/cancel`,
+                method: "POST",
+                timeout: 4000,
+              },
+              (res) => {
+                let data = "";
+                res.on("data", (chunk) => (data += chunk));
+                res.on("end", () => {
+                  try {
+                    resolve(JSON.parse(data));
+                  } catch {
+                    resolve(null);
+                  }
+                });
+              }
+            );
+            postReq.on("error", () => resolve(null));
+            postReq.on("timeout", () => {
+              postReq.destroy();
+              resolve(null);
+            });
+            postReq.end();
+          });
+          if (httpCancel?.cancelled) {
+            return {
+              content: [
+                { type: "text", text: `Task \`${task_id}\` cancelled via status coordinator.` },
+              ],
+            };
+          }
+        } catch {}
+
+        const diskTask = readTaskFromDisk(task_id);
+        if (diskTask && diskTask.corrupted) {
+        // Report corrupt task state with error details.
+          // "already finished".
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Task \`${task_id}\` file is CORRUPT (quarantined to ${diskTask.file}): ${diskTask.error}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        if (diskTask && !diskTask.done) {
+          if (diskTask.sessionId) {
+            // Terminate child processes matching exact session ID boundaries.
+            try {
+              await killSessionProcessTree(diskTask.sessionId);
+            } catch {}
+          }
+          diskTask.status = "cancelled";
+          diskTask.done = true;
+          diskTask.isError = true;
+          diskTask.result = { isError: true, text: `Task ${task_id} was cancelled by caller.` };
+          saveTaskToDisk(diskTask);
+          return {
+            content: [{ type: "text", text: `Task \`${task_id}\` marked as cancelled.` }],
+          };
+        }
+        return {
+          content: [{ type: "text", text: `Task \`${task_id}\` was already finished.` }],
+        };
+      }
+      } catch (err) {
+        // Return MCP tool-execution failure response with isError: true.
+        return {
+          content: [{ type: "text", text: `${toolName("task")}: ${err && err.message ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 3: server (Unified Server Lifecycle)
+  server.registerTool(
+    toolName("server"),
+    {
+      title: `Manage Local ${MODEL} vLLM Instance Lifecycle`,
+      description:
+        "Check status, start, or stop the universal 245K context vLLM server in WSL Ubuntu. Status includes live engine gauges from /metrics (running/waiting requests, KV cache %, prefix-cache hit ratio, spec-decode acceptance) and an end-to-end canary completion - the port answering is NOT proof of health. Note: during active task execution, canary latency will be higher due to GPU batch contention; this is normal under load and is NOT a wedge. Only stop the server if the engine is idle or if the human user explicitly commands it.",
+      inputSchema: {
+        action: z.enum(["status", "start", "stop"]).describe("Lifecycle action to perform"),
+        force: z
+          .boolean()
+          .optional()
+          .describe(
+            "Force stop even if a task is actively executing. ONLY permitted if the human USER explicitly requested stopping/rebooting the server or cancelling all tasks. Prohibited for autonomous agent decisions."
+          ),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async ({ action, force }) => {
+      try {
+      if (action === "status") {
+        if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && process.env.NODE_ENV === "test")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "stopped",
+                    endpoint: BASE_URL,
+                    max_model_len: null,
+                    context_window_nominal: MAX_LEN_HUGE,
+                    stack: "vLLM + DFlash2 + KVarN (Universal 245K)",
+                    engine: null,
+                    status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
+                    status_endpoint_owned_by_this_instance: statusServerOwned,
+                    wedge_counter: readWedgeCounter(),
+                    offline_protected: true,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+        const info = await serverInfo();
+        const running = !!info;
+        const wedge = running ? await engineWedgeState() : { wedged: false, stats: null };
+        let autoHeal = null;
+        if (running && wedge.wedged && AUTO_HEAL) {
+          try {
+            autoHeal = await healWedgedEngine(wedge.stats?.ageSec ?? null);
+          } catch (err) {
+            autoHeal = { healed: false, error: err.message };
+          }
+        }
+        const statusLabel = !running
+          ? "stopped"
+          : wedge.wedged
+          ? autoHeal?.healed
+            ? "wedged_restarted"
+            : "wedged"
+          : "running";
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  status: statusLabel,
+                  endpoint: BASE_URL,
+                  max_model_len: running ? info.maxModelLen : null,
+                  context_window_nominal: MAX_LEN_HUGE,
+                  stack: "vLLM + DFlash2 + KVarN (Universal 245K)",
+                  engine: running
+                    ? {
+                        running_requests: wedge.gauges?.running_requests ?? null,
+                        waiting_requests: wedge.gauges?.waiting_requests ?? null,
+                        kv_cache_pct: wedge.gauges?.kv_cache_pct ?? null,
+                        prefix_cache_hit_ratio: wedge.gauges?.prefix_cache_hit_ratio ?? null,
+                        spec_decode_acceptance: wedge.gauges?.spec_decode_acceptance ?? null,
+                        // BUSY-GATE: when the engine is busy (MAX_SEQS=1), the canary
+                        // is intentionally NOT fired (it would queue behind the active
+                        // generation and time out, measuring queue depth not health).
+                        // Surface that honestly; wedge is then derived from stats
+                        // silence only.
+                        engine_busy: wedge.engineBusy ?? null,
+                        canary_skipped: wedge.canary?.skipped ?? null,
+                        canary: wedge.canary,
+                        engine_stats_age_seconds: wedge.stats?.ageSec ?? null,
+                        wedge_detected: wedge.wedged,
+                        wedge_threshold_seconds: WEDGE_STATS_SILENCE_S,
+                        auto_heal: autoHeal,
+                      }
+                    : null,
+                  status_endpoint: `http://127.0.0.1:${STATUS_PORT}`,
+                  status_endpoint_owned_by_this_instance: statusServerOwned,
+                  wedge_counter: readWedgeCounter(),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+      if (action === "start") {
+        if (process.env.TEST_OFFLINE === "1" || (!ALLOW_ENGINE_INTERRUPT && process.env.NODE_ENV === "test")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  { status: "stopped", switched: false, note: "offline_protected: start refused without ALLOW_ENGINE_INTERRUPT=1" },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+        const res = await ensureServerRunning();
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { status: "running", result: res.status, endpoint: BASE_URL, context: MAX_LEN_HUGE },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+      if (action === "stop") {
+        if (process.env.TEST_OFFLINE === "1" || (IS_TEST_ENV && !ALLOW_ENGINE_INTERRUPT)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  { stopped: false, reason: "stop_refused_offline_protected", note: "stop refused: engine interruption disabled by default (requires ALLOW_ENGINE_INTERRUPT=1 and explicit user approval)" },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+        const activeTasks = listTasksFromDisk().filter((t) => !t.done && t.status === "executing");
+        if (activeTasks.length > 0 && !force) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "rejected",
+                    error: `Refusing to stop vLLM server: task '${activeTasks[0].id}' is actively executing.`,
+                    guidance:
+                      `To cancel the active task without rebooting vLLM, call ${toolName("task")}(action: 'cancel', task_id: '` +
+                      activeTasks[0].id +
+                      "'). Only pass force: true to stop the server if the human USER explicitly commanded stopping the server or cancelling all tasks.",
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+        await cancelAllTasks("server stopped by user");
+        // Surface actual stop operation status and diagnostics.
+        const stopRes = await stopServer();
+        resetEngineHealthCache();
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                stopRes.stopped
+                  ? {
+                      status: "stopped",
+                      message: "vLLM server stopped and all active/queued tasks cancelled.",
+                      forced: !!force,
+                    }
+                  : {
+                      status: "stop_failed",
+                      message:
+                        "All active/queued tasks were cancelled, but the vLLM engine is still responding after the stop grace window.",
+                      reason: stopRes.reason,
+                      forced: !!force,
+                    },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: !stopRes.stopped,
+        };
+      }
+      } catch (err) {
+        // Return MCP tool-execution failure response with isError: true.
+        return {
+          content: [{ type: "text", text: `${toolName("server")}: ${err && err.message ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+}
+
+/**
+ * getToolManifest() — read-only introspection of the registered tool surface.
+ *
+ * Builds a throwaway McpServer, registers the real tools against it, and
+ * converts each registered tool's zod `inputSchema` into a JSON Schema using
+ * the EXACT same code path the SDK uses when it serves `tools/list`
+ * (normalizeObjectSchema -> toJsonSchemaCompat with strictUnions/pipeStrategy
+ * 'input'). This guarantees the manifest is byte-identical to what a client
+ * receives over the wire, without touching or mutating any live registration.
+ *
+ * @param {object} [options]
+ * @param {string} [options.prefix] Tool-name prefix override (defaults to
+ *   TOOL_PREFIX, i.e. MCP_TOOL_PREFIX env / ~/.castor/config.json tool_prefix /
+ *   "qwen"). An empty string yields the canonical unprefixed names.
+ * @returns {Array<{ name: string, description: string, inputSchema: object }>}
+ */
+export function getToolManifest(options = {}) {
+  const server = new McpServer({ name: "manifest-probe", version: "0.0.0" });
+  registerTools(server, options);
+
+  return Object.entries(server._registeredTools)
+    .filter(([, tool]) => tool.enabled)
+    .map(([name, tool]) => {
+      const obj = normalizeObjectSchema(tool.inputSchema);
+      const inputSchema = obj
+        ? toJsonSchemaCompat(obj, { strictUnions: true, pipeStrategy: "input" })
+        : { type: "object", properties: {} };
+      return {
+        name,
+        description: tool.description,
+        inputSchema,
+      };
+    });
+}

@@ -51,12 +51,12 @@ The milestone delivered four outcomes:
 |---|---|
 | `2572510` (E1) | FS-as-context tool-output spillover: large tool results written in full to a scratch file; the context receives a bounded preview + path, eliminating context blowouts. |
 | `65382c8` (E2) | Deliberation-ceiling salvage pass on budget exhaustion: one final salvage turn before `reasoning_budget_exhausted`. |
-| `2698d9d` (E3) | Context headroom and prompt tokens exposed in task telemetry (`task_registry`, `runner`, `anser_runner`). |
+| `2698d9d` (E3) | Context headroom and prompt tokens exposed in task telemetry (`task_registry`, `runner`, `castor_runner`). |
 | `58ae821` (E4) | Adaptive read-size governor in `sandbox_fs`: read size shrinks under high context pressure. |
 | `e7d542e` (E5) | Session-end orphan reaping: on every task termination path (success, error, cancel) a bounded, idempotent sweep runs — anchored per-session process-tree kill (pgrep → `/proc/<pid>/cmdline` boundary verify → kill, so a session id that is a substring of another's is never over-killed) plus stale slot-lease cleanup (dead-owner or terminal-task leases only; a live owner's active lease is never touched). |
 
 ### SWE documentation refactor (14 commits)
-`d367485` codified the canonical SWE JSDoc / present-state-truth standard in `AGENTS.md`; `b5cea6b` and 12 per-module commits (`06ebe8f`, `2c782ca`, `12a8da1`, `f313f28`, `8ccb4a9`, `3279e14`, `2406c03`, `1095325`, `d37e895`, `48706d7`, `734fa76`, `9a1720b`) standardized comments/docstrings across **18 source files**: `config.js`, `anser_runner.js`, `task_registry.js`, `runner.js`, `tools.js`, `semaphore.js`, `server_lifecycle.js`, `repetition_detector.js`, `evo_engine.js`, `telemetry.js`, `harness/evo/{evo_operator,lineage_dag}.js`, `harness/services/{mcp_bridge,provider_vllm,sandbox_fs,shell_executor,web_service}.js`.
+`d367485` codified the canonical SWE JSDoc / present-state-truth standard in `AGENTS.md`; `b5cea6b` and 12 per-module commits (`06ebe8f`, `2c782ca`, `12a8da1`, `f313f28`, `8ccb4a9`, `3279e14`, `2406c03`, `1095325`, `d37e895`, `48706d7`, `734fa76`, `9a1720b`) standardized comments/docstrings across **18 source files**: `config.js`, `castor_runner.js`, `task_registry.js`, `runner.js`, `tools.js`, `semaphore.js`, `server_lifecycle.js`, `repetition_detector.js`, `evo_engine.js`, `telemetry.js`, `harness/evo/{evo_operator,lineage_dag}.js`, `harness/services/{mcp_bridge,provider_vllm,sandbox_fs,shell_executor,web_service}.js`.
 
 ### Batch F — Verification closeout
 - New canary `mcp-qwen/tests/session_end_reap.test.js` (22 assertions) covering the E5 pathways; wired into `test:all`.

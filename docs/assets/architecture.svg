@@ -109,11 +109,11 @@
   <rect x="335" y="221" width="230" height="18" rx="4" fill="#090d16" stroke="#0369a1" stroke-width="0.8"/>
   <text x="450" y="234" fill="#7dd3fc" font-size="10" font-weight="600" text-anchor="middle">In-Process V8 Tool Calls (0.01 ms)</text>
 
-  <!-- ================= LAYER 3: ANSER MICROKERNEL ================= -->
+  <!-- ================= LAYER 3: CASTOR MICROKERNEL ================= -->
   <g transform="translate(30, 246)">
     <rect width="840" height="110" rx="10" fill="url(#coreGrad)" stroke="#059669" stroke-width="1.2"/>
     
-    <text x="24" y="28" fill="#f8fafc" font-size="15" font-weight="700" letter-spacing="0.3">ANSER IN-PROCESS AGENT MICROKERNEL (:18021)</text>
+    <text x="24" y="28" fill="#f8fafc" font-size="15" font-weight="700" letter-spacing="0.3">CASTOR IN-PROCESS AGENT MICROKERNEL (:18021)</text>
     <text x="24" y="45" fill="#a7f3d0" font-size="11.5">Zero Subprocess Spawning Overhead · Self-Contained Execution &amp; Security Boundary</text>
 
     <!-- 4 Clean Cards -->

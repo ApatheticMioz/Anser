@@ -1,4 +1,4 @@
-# Anser
+# Castor
 
 **The Universal 245K Agent Microkernel & MCP Pair-Programming Harness.**
 
@@ -10,7 +10,7 @@
 [![Engine](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#model-serving--speculative-decoding)
 [![Security](https://img.shields.io/badge/Security-137%20Containment%20Vectors-success.svg)](#zero-trust-sandboxed-file-operations)
 
-> **Anser** is a model-agnostic serving harness and in-process agent microkernel exposed as a standard Model Context Protocol (MCP) server. It pairs high-reasoning cloud orchestrators (Google Antigravity, Gemini 3.8 Flash, Claude Code) with locally-served execution models (**Qwen3.8-27B**, Ollama, vLLM) across any repository.
+> **Castor** is a model-agnostic serving harness and in-process agent microkernel exposed as a standard Model Context Protocol (MCP) server. It pairs high-reasoning cloud orchestrators (Google Antigravity, Gemini 3.8 Flash, Claude Code) with locally-served execution models (**Qwen3.8-27B**, Ollama, vLLM) across any repository.
 > 
 > **The Ultimate API Bill Cutter:** The cloud orchestrator handles high-level architecture, task decomposition, and supervisory steering. The local coworker ingests repository context, executes structural AST refactoring, runs test loops, and mutates code at **$0 token cost**. **Zero cloud token hoarding. 90%+ API cost reduction.**
 
@@ -19,12 +19,12 @@
 ## System Architecture
 
 <p align="center">
-  <img src="docs/assets/architecture.svg" alt="Anser Architecture &amp; MCP Delegation Workflow" width="100%" />
+  <img src="docs/assets/architecture.svg" alt="Castor Architecture &amp; MCP Delegation Workflow" width="100%" />
 </p>
 
 ### The Asymmetric Division of Labor
 - **Cloud Orchestrator (Lead Architect)**: Focuses strictly on architecture, formal interface specification, multimodal vision review, and supervisory steering. Never hoards raw codebase files into paid prompt context.
-- **Local Coworker (Hands-on Execution @ $0)**: Ingests repositories, analyzes traces, performs AST surgery (`@ast-grep`), and verifies code locally inside the in-process Anser microkernel.
+- **Local Coworker (Hands-on Execution @ $0)**: Ingests repositories, analyzes traces, performs AST surgery (`@ast-grep`), and verifies code locally inside the in-process Castor microkernel.
 - **Zero-Turn Reactive Wait**: Long-running background dispatches yield an OS-level wait hook (`curl :18021/task/<id>/wait`). The cloud orchestrator blocks at **$0 token cost** and wakes reactively the moment the coworker completes.
 
 ---
@@ -33,9 +33,9 @@
 
 In continuous agentic coding, **80%+ of prompt tokens** are spent repeatedly ingesting repository context, compiler logs, and AST search results. Pumping those tokens through paid cloud frontier models costs $50–$250 in API bills every afternoon.
 
-**Qwen3.8-27B** via Anser provides dense, high-reasoning execution on a single consumer **24 GB VRAM GPU** (RTX 3090 / 4090) with a **Universal 245K context window**.
+**Qwen3.8-27B** via Castor provides dense, high-reasoning execution on a single consumer **24 GB VRAM GPU** (RTX 3090 / 4090) with a **Universal 245K context window**.
 
-| Evaluation Dimension | Qwen3.8-27B (via Anser) | Claude Sonnet 5 | Claude Opus 5.5 | GPT-6 Astra | GLM-5.3 |
+| Evaluation Dimension | Qwen3.8-27B (via Castor) | Claude Sonnet 5 | Claude Opus 5.5 | GPT-6 Astra | GLM-5.3 |
 |---|---|---|---|---|---|
 | **Inference Location** | **100% Local (24GB GPU)** | Managed Cloud API | Managed Cloud API | Managed Cloud API | Managed Cloud API |
 | **AA Coding Profile / Role** | Dense local execution & AST surgery | High-efficiency cloud standard | Deep reasoning & formal verification | Frontier coding leader | Cloud tool-calling champion |
@@ -47,7 +47,7 @@ In continuous agentic coding, **80%+ of prompt tokens** are spent repeatedly ing
 
 ### Verified Lifetime Production Telemetry (1.31B+ Tokens Processed @ $0 Cost)
 
-Across continuous software engineering, multi-turn pair-programming, and architectural refactoring on local consumer hardware (RTX 3090 24GB), Anser has recorded and empirically validated the following cumulative production telemetry (`~/.anser/telemetry/stats.json`):
+Across continuous software engineering, multi-turn pair-programming, and architectural refactoring on local consumer hardware (RTX 3090 24GB), Castor has recorded and empirically validated the following cumulative production telemetry (`~/.castor/telemetry/stats.json`):
 
 | Production Telemetry Dimension | Verified Cumulative Metric | Operational Impact & Savings |
 |---|---|---|
@@ -66,7 +66,7 @@ Across continuous software engineering, multi-turn pair-programming, and archite
 
 ## Consolidated MCP Interface
 
-Anser exposes three stdio-pure MCP tools to any client:
+Castor exposes three stdio-pure MCP tools to any client:
 
 1. **`qwen_coworker`**: Primary execution interface.
    - Accepts `prompt`, `cwd`, `session_id`, `reasoning_effort` (`xhigh` | `medium` | `low`), and optional MCP `extensions`.
@@ -86,14 +86,14 @@ Anser exposes three stdio-pure MCP tools to any client:
 - **In-Memory Syntax Gates**: Pre-validates modifications in-memory (TypeScript, JavaScript, Python, JSON, LaTeX, BibTeX) before committing to disk, preventing corrupted files.
 - **Dual Multimodal Vision Authority**: Cloud orchestrators (Gemini 3.8 Flash) and local Qwen both support image inputs. Vision-tower CPU offload retains the complete 268K+ KV cache in GPU VRAM.
 - **Multi-Provider Web Research**: Native, dependency-free `web_search` and `web_fetch` routing across Brave Search, Tavily, Context7, SearXNG, and DuckDuckGo.
-- **Automated State Pruning (`anser clean`)**: Automatic retention policy over `~/.anser/` (14-day max age, 200-session count, 50MB ceiling, `.tmp_*` cleanup) with active session immunity and 24-hour startup throttling.
+- **Automated State Pruning (`castor clean`)**: Automatic retention policy over `~/.castor/` (14-day max age, 200-session count, 50MB ceiling, `.tmp_*` cleanup) with active session immunity and 24-hour startup throttling.
 - **Cooperative Landing**: Dispatches reaching their turn budget conclude gracefully with mandatory deliverable synthesis under `completed_budget_exhausted` instead of arbitrary process kills.
 
 ---
 
 ## Zero-Trust Sandboxed File Operations
 
-Anser implements a **5-layer defense-in-depth boundary** ensuring neither the coworker nor external agents can escape the workspace root:
+Castor implements a **5-layer defense-in-depth boundary** ensuring neither the coworker nor external agents can escape the workspace root:
 
 <p align="center">
   <img src="docs/assets/security_sandbox.svg" alt="5-Layer Zero-Trust Sandbox Pipeline" width="100%" />
@@ -116,34 +116,34 @@ No git clone or repository building required. Run via `npx` to automatically con
 
 ```bash
 # 1-Command Install: registers with Antigravity IDE and Claude Code automatically
-npx -y mcp-anser install
+npx -y mcp-castor install
 
 # (Optional) Configure engine endpoint or model name
-npx -y mcp-anser config set baseURL "http://localhost:18020/v1"
-npx -y mcp-anser config set model "qwen3.8-27b"
+npx -y mcp-castor config set baseURL "http://localhost:18020/v1"
+npx -y mcp-castor config set model "qwen3.8-27b"
 
 # Prune stale session files anytime
-npx -y mcp-anser clean
+npx -y mcp-castor clean
 ```
 
 Or install globally:
 ```bash
-npm install -g mcp-anser
-anser install
+npm install -g mcp-castor
+castor install
 ```
 
 ---
 
 ### Development & Contributing from Source
-If you are modifying Anser's microkernel or contributing upstream:
+If you are modifying Castor's microkernel or contributing upstream:
 
 ```bash
-git clone https://github.com/ApatheticMioz/Anser.git
-cd Anser/mcp-qwen
+git clone https://github.com/ApatheticMioz/Castor.git
+cd Castor/mcp-castor
 npm ci
 npm test             # Fast canary gate (~4s, 9 critical suites)
 npm run test:all     # Authoritative offline test gate (66 suites)
-node bin/anser.js install --dev
+node bin/castor.js install --dev
 ```
 
 ---
@@ -161,7 +161,7 @@ Optimized for consumer 24 GB GPUs (NVIDIA RTX 3090 / 4090):
 ## Repository Structure
 
 ```
-Anser/
+Castor/
   README.md                 # Architecture, benchmarks, and quickstart
   AGENTS.md                 # Canonical machine-readable operating contract
   CONTRIBUTING.md           # Contributor workflow and PR guidelines
@@ -169,17 +169,17 @@ Anser/
   LICENSE                   # GNU AGPLv3
   docs/assets/              # Vector architecture and security SVG diagrams
   scripts/wsl/              # Serving launch & lifecycle scripts (vLLM, KVarN, DFlash2)
-  mcp-qwen/                 # Core Anser microkernel & MCP server
+  mcp-castor/               # Core Castor microkernel & MCP server
     index.js                # MCP server entry point (3 consolidated tools)
     stream_proxy.js         # :18022 universal SSE streaming proxy
-    bin/anser.js            # CLI management tool (init, config, clean, mcp)
+    bin/castor.js            # CLI management tool (init, config, clean, mcp)
     src/
       config.js             # Configuration, state directories & port defaults
       state_pruner.js       # Session retention & task log pruner
       server_lifecycle.js   # Serving engine boot, canary, & health checks
       wsl_bridge.js         # Cross-platform execution & process tree management
       telemetry.js          # Cross-platform token & financial savings tracker
-      harness/              # In-process Anser microkernel
+      harness/              # In-process Castor microkernel
         runner.js           # Multi-turn execution loop & watchdog guards
         core/               # Kernel plugin registry & event system
         services/           # Sandboxed FS, AST, Shell, Web research services
@@ -191,7 +191,7 @@ Anser/
 
 ## License & Commercial Dual-Licensing
 
-Licensed under the **[GNU Affero General Public License v3 (AGPL-3.0)](LICENSE)** — **Anser Contributors**.
+Licensed under the **[GNU Affero General Public License v3 (AGPL-3.0)](LICENSE)** — **Castor Contributors**.
 
 - **Open Source & Copyleft**: Free and open-source software under AGPLv3. Network use requires complete source distribution of modified versions.
 - **Commercial Dual-Licensing**: Available for proprietary embedding without copyleft obligations. Inquiries: [`ApatheticMioz@gmail.com`](mailto:ApatheticMioz@gmail.com).

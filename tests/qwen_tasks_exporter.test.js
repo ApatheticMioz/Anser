@@ -4,8 +4,8 @@
  * (M8, F17/F18).
  *
  * The exporter is a repo-level tool (lives in the repo-root `scripts/`, OUTSIDE
- * the self-contained mcp-qwen npm package). mcp-qwen's tests import only from
- * `../src/` and never reach the repo root, so wiring this into mcp-qwen's
+ * the self-contained mcp-castor npm package). mcp-castor's tests import only from
+ * `../src/` and never reach the repo root, so wiring this into mcp-castor's
  * `npm test` chain would cross the package boundary. Per the M8 instruction,
  * this is therefore a STANDALONE test, run directly:
  *
@@ -61,7 +61,7 @@ const EVENTS = [
     timestamp: "2026-09-12T10:00:00.000Z",
     sessionId: "shared-s1",
     type: "session_start",
-    harness: "Anser",
+    harness: "Castor",
     version: "2026.1",
     cwd: "D:\\LLM_Ecosystem",
     prompt: "dispatch one prompt",

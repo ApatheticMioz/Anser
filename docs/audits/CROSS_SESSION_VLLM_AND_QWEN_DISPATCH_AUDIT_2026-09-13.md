@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-13  
 **Auditor:** Gemini 3.8 Flash (Lead Architect & Meta-Supervisor)  
-**Execution Subject:** Qwen3.8-27B running locally via Anser 2026.1 (`qwen38-local`, vLLM + DFlash2 + KVarN @ 245K context, RTX 3090 24GB)  
+**Execution Subject:** Qwen3.8-27B running locally via Castor 2026.1 (`qwen38-local`, vLLM + DFlash2 + KVarN @ 245K context, RTX 3090 24GB)  
 **Orchestration Clients:** Claude Code (WSL2) & Google Antigravity IDE (Windows)  
 **Artifact Datasets:**  
 - Engine Prometheus Dump: [`docs/audits/telemetry/vllm_metrics_2026-09-13.prom`](file:///d:/LLM_Ecosystem/docs/audits/telemetry/vllm_metrics_2026-09-13.prom)  
@@ -13,9 +13,9 @@
 
 ## 1. Executive Verdict & Operational Context
 
-Over the 28-hour window from **2026-09-12 12:28 UTC to 2026-09-13 19:43 UTC**, the local Anser execution harness served two intense, simultaneous production workstreams across WSL and Windows:
+Over the 28-hour window from **2026-09-12 12:28 UTC to 2026-09-13 19:43 UTC**, the local Castor execution harness served two intense, simultaneous production workstreams across WSL and Windows:
 1. **The Q1 Paper Revision Marathon (Claude Code / WSL2)**: 35 sequential dispatches across `/home/apath/Work/temp/final` (`paper/q1-revision`), conducting deep LaTeX AST rewrites, end-to-end Python/matplotlib figure pipeline construction (Figs 1–8, graphical abstract), statistical forest plots, table compaction, and full submission formalities for *Computers in Biology and Medicine* (resulting in the clean compilation of `all_dice_no_slice.pdf`).
-2. **Anser Core Hardening & Legacy Debt Purge (Antigravity IDE / Windows)**: 10 dispatches in `d:\LLM_Ecosystem`, implementing per-dispatch `reasoning_effort`, 7-day retention persistence, `.tmp_*` crash-orphan sweeping, real prompt token telemetry, terminal orphan events, and a total purge of legacy `goose` terminology into clean `anser` primitives with zero backwards-compatibility debt.
+2. **Castor Core Hardening & Legacy Debt Purge (Antigravity IDE / Windows)**: 10 dispatches in `d:\LLM_Ecosystem`, implementing per-dispatch `reasoning_effort`, 7-day retention persistence, `.tmp_*` crash-orphan sweeping, real prompt token telemetry, terminal orphan events, and a total purge of legacy `castor` terminology into clean `castor` primitives with zero backwards-compatibility debt.
 
 ### Core Fleet Metrics at a Glance
 - **Total Local GPU Execution Time**: **23.29 wall-clock hours** on local RTX 3090 ($0 token cost).
@@ -82,7 +82,7 @@ The telemetry confirms that speculative decoding via DFlash2 delivered massive r
 
 ## 3. Qwen Trace Analysis: Environment Usage & Behaviors
 
-Across the 45 recorded tasks, Qwen demonstrated deep autonomy inside the Anser microkernel.
+Across the 45 recorded tasks, Qwen demonstrated deep autonomy inside the Castor microkernel.
 
 ### 3.1 Tool Invocation Profile
 ```
@@ -245,7 +245,7 @@ Compile the paper and verify that the layout does not produce bad hbox warnings.
 | Orchestrator | Primary Scope | Dispatches | Median Prompt Chars | Total Turns | Key Failure Mode Observed |
 |---|---|---|---|---|---|
 | **Claude Code (WSL2)** | Q1 Paper Revision (`/home/apath/...`) | 35 | 1,820 chars | 3,618 | Prompt bloat (>2,000 chars) & session over-retention (214 turns). |
-| **Antigravity (IDE)** | Anser Hardening & Goose Purge | 10 | 1,182 chars | 379 | Premature polling / testing while Qwen active (caught and corrected by user). |
+| **Antigravity (IDE)** | Castor Hardening & Castor Purge | 10 | 1,182 chars | 379 | Premature polling / testing while Qwen active (caught and corrected by user). |
 
 ### 5.1 The PC Crash Event & Resumption Integrity
 At **2026-09-12 17:37 UTC**, a host PC crash terminated the active WSL runner processes during `task_paper_inventory` and `task_paper_history`.
@@ -275,7 +275,7 @@ Three tasks encountered `engine_empty_response` status:
    - Mandate that figure modification dispatches must provide deterministic numeric tuples for `figsize`, `gridspec`, and `dpi`, forbidding open-ended "tweak until it looks right" visual prompts that induce 90-minute iterative loops.
 4. **Codebase Status**:
    - All 31 offline suites and 36 total suites in `mcp-qwen` pass with 100% green tests.
-   - The legacy `goose` technical debt has been completely purged; all runners, docs, and test suites now uniformly reference `anser`.
+   - The legacy `castor` technical debt has been completely purged; all runners, docs, and test suites now uniformly reference `castor`.
 
 ---
 

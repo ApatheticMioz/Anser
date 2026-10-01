@@ -1,8 +1,8 @@
-# [OLD / HISTORICAL ARCHIVE] SWE-rebench eval: Goose + Qwen3.8-27B, CTX=huge
+# [OLD / HISTORICAL ARCHIVE] SWE-rebench eval: Castor + Qwen3.8-27B, CTX=huge
 
 > [!WARNING]
-> **[OLD / HISTORICAL ARCHIVE — Legacy Goose Runner]**:
-> This benchmark was conducted using the **legacy Goose runner** (`goose.exe`) on an early prototype configuration. It does NOT reflect the current Anser microkernel or its native pair-programming protocol. It is archived here strictly for historical reference.
+> **[OLD / HISTORICAL ARCHIVE — Legacy Castor Runner]**:
+> This benchmark was conducted using the **legacy Castor runner** (`castor.exe`) on an early prototype configuration. It does NOT reflect the current Castor microkernel or its native pair-programming protocol. It is archived here strictly for historical reference.
 
 Validates the actual served, quantized model (not the self-reported 61.7
 SWE-bench Pro figure, which was almost certainly measured on a different
@@ -45,7 +45,7 @@ just not as fresh as the site implies. Re-check for a newer split
 
 ## What this measures, and what it doesn't
 
-- **Goose + Qwen alone, best-of-1.** Per your scope: no Sonnet in the loop
+- **Castor + Qwen alone, best-of-1.** Per your scope: no Sonnet in the loop
   (no delegation-architecture question here, just "is the model any good"),
   single attempt per task (SWE-rebench's own leaderboard protocol is 5 runs
   per problem, best-of-5 Resolved Rate - our number is **not** directly
@@ -73,7 +73,7 @@ small files - venvs, HF dataset cache, Docker layers):
 | Harness venv (`swebench`, `datasets`) | WSL: `~/swe-rebench-eval/venv` | Isolated from `~/qwen-serving`'s venv (different, potentially conflicting pins); native ext4 for venv perf |
 | HF dataset cache | WSL: `~/.cache/huggingface` (default) | Native fs |
 | Docker images (grading step only) | WSL Docker's own storage (default) | Native fs; Docker already installed (29.5.3), 641 GB free on `/` |
-| Solve-step scratch clones (Goose+Qwen step) | Windows: `%LOCALAPPDATA%\Temp\swe-rebench-scratch` (default, `--workdir` to override) | Goose itself is Windows-native (`goose.exe`), same as `mcp-qwen/index.js` |
+| Solve-step scratch clones (Castor+Qwen step) | Windows: `%LOCALAPPDATA%\Temp\swe-rebench-scratch` (default, `--workdir` to override) | Castor itself is Windows-native (`castor.exe`), same as `mcp-qwen/index.js` |
 
 ### 1. Sample tasks (done - non-GPU, already run)
 
@@ -90,10 +90,10 @@ Output: `predictions/sample_2026_03_50.jsonl` - 50 tasks, `problem_statement`
 
 ```powershell
 # Windows, from this directory
-py -3.11 run_goose_solve.py --tasks predictions\sample_2026_03_50.jsonl --out predictions\goose_qwen_2026_03_50.jsonl
+py -3.11 run_castor_solve.py --tasks predictions\sample_2026_03_50.jsonl --out predictions\castor_qwen_2026_03_50.jsonl
 ```
-One fresh `goose.exe run --no-session` per task (no cross-task memory),
-same `GOOSE_PROVIDER=openai` / `GOOSE_MODEL=qwen3.8-27b` / `OPENAI_HOST` /
+One fresh `castor.exe run --no-session` per task (no cross-task memory),
+same `CASTOR_PROVIDER=openai` / `CASTOR_MODEL=qwen3.8-27b` / `OPENAI_HOST` /
 `OPENAI_BASE_PATH` env pattern `mcp-qwen/index.js` uses for
 `delegate_coding_task` - kept in sync with it deliberately; if that env
 setup changes there, mirror it here. Resumable (skips `instance_id`s already
@@ -101,7 +101,7 @@ in `--out`), so a killed run just re-invokes cleanly. Took several hours in
 practice - 22/50 tasks genuinely exhausted the 900s per-task budget without
 producing a patch (real signal about task difficulty in unfamiliar large
 repos, not a bug - see results/results.md). Two real script bugs were found
-and fixed mid-run (Windows codepage crash on Goose's UTF-8 output; a locked
+and fixed mid-run (Windows codepage crash on Castor's UTF-8 output; a locked
 leftover scratch dir colliding with a fresh `mkdir`) - both fixes are in
 the current version of this script.
 
@@ -109,7 +109,7 @@ the current version of this script.
 
 ```bash
 # WSL
-bash grade.sh predictions/goose_qwen_2026_03_50.jsonl
+bash grade.sh predictions/castor_qwen_2026_03_50.jsonl
 ```
 Uses SWE-rebench's own `scripts/eval.py` (cloned from
 `SWE-rebench/SWE-rebench-V2` to `~/swe-rebench-eval/repo`, patched - see

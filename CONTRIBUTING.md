@@ -1,6 +1,6 @@
-# Contributing to Anser
+# Contributing to Castor
 
-Thank you for your interest in contributing to **Anser** — the Universal 245K
+Thank you for your interest in contributing to **Castor** — the Universal 245K
 Agent Microkernel for Local LLMs. This guide gives you a frictionless path from
 clone to merged pull request.
 
@@ -21,16 +21,17 @@ clone to merged pull request.
 
 ### Clone & install
 ```bash
-git clone https://github.com/ApatheticMioz/Anser.git
-cd Anser/mcp-qwen
+git clone https://github.com/ApatheticMioz/Castor.git
+cd Castor/mcp-castor
 npm ci        # deterministic; resolves the correct @ast-grep native binary
 ```
-> There is **no root `package.json`** — the only one lives in `mcp-qwen/`.
-> Always run `npm` from inside `mcp-qwen/` (or with `--prefix mcp-qwen`).
+> There is **no root `package.json`** — the only one lives in `mcp-castor/`.
+> Always run `npm` from inside `mcp-castor/` (or with `--prefix mcp-castor`).
 
-### Optional: full live stack (GPU + vLLM)
-To run the 4 *live* suites (or to actually drive the model), stand up a vLLM
-serving of Qwen3.8-27B on `:18020` per the [README](README.md) quickstart.
+### Optional: full live stack (GPU + serving engine)
+To run the 4 *live* suites (or to actually drive the model), stand up an
+OpenAI-compatible serving engine (vLLM, Ollama, LM Studio, etc.; Qwen3.8-27B on `:18020` by default)
+per the [README](README.md) quickstart.
 Everything else works without it.
 
 ---
@@ -40,7 +41,7 @@ Everything else works without it.
 The test gate is the single source of truth. Run it **before** opening a PR.
 
 ```bash
-cd mcp-qwen
+cd mcp-castor
 
 # Fast offline gate - 9 critical suites. Run this FIRST.
 npm test
@@ -54,7 +55,7 @@ TEST_OFFLINE=1 npm run test:all
 
 **Suite truth:** `npm test` = **9** critical suites; `npm run test:all` = **63**
 suites; 63 `.test.js` files on disk. The 4 *live* suites (`evo`,
-`mcp_client`, `fifo_queue`, `benchmark`) need a running vLLM on `:18020` + a
+`mcp_client`, `fifo_queue`, `benchmark`) need a running serving engine on `:18020` + a
 24 GB GPU; they **skip honestly** when `TEST_OFFLINE=1` or the engine is
 offline. A skip is a pass, not a failure.
 
@@ -78,14 +79,14 @@ The gate runs identically on **Windows 11** and **WSL2 / Linux**. Verify on
 both when you touch path handling:
 ```bash
 # From a Windows host, into WSL:
-wsl -e bash -c "cd <repo>/mcp-qwen && npm test"
+wsl -e bash -c "cd <repo>/mcp-castor && npm test"
 ```
 
 ---
 
 ## 3. Architecture Overview
 
-Anser is a **microkernel** with a small set of well-bounded services. New
+Castor is a **microkernel** with a small set of well-bounded services. New
 capabilities slot into the existing layout rather than adding new top-level
 pieces.
 
@@ -93,14 +94,14 @@ pieces.
 Lead Architect (cloud: Claude / Gemini / Antigravity)
         |  MCP over stdio - 3 consolidated tools
         v
-mcp-qwen/  (Node.js MCP server + Anser microkernel)
-  index.js            # entry: registers qwen_coworker / qwen_task / qwen_server
+mcp-castor/  (Node.js MCP server + Castor microkernel)
+  index.js            # entry: registers castor_coworker / castor_task / castor_server
   src/config.js       # ALL constants + env parsing (single source of truth)
   src/platform.js     # WSL/Windows path translation, spawn profiles
   src/wsl_bridge.js   # path canonicalization, process-tree kill
   src/semaphore.js    # cross-process O_EXCL disk-lease (MAX_CONCURRENT=1)
   src/task_registry.js# :18021 zero-turn long-poll wait, cancel, orphans
-  src/server_lifecycle.js # vLLM boot, wedge detection, auto-heal
+  src/server_lifecycle.js # serving engine boot, wedge detection, auto-heal
   src/tools.js        # zod schemas + dispatch
   src/harness/
     runner.js         # agent loop, continuation, empty-stream guard
@@ -113,18 +114,18 @@ mcp-qwen/  (Node.js MCP server + Anser microkernel)
   tests/              # 66 suites
         |
         v
-vLLM engine (WSL2 / Linux, :18020)  ->  Qwen3.8-27B @ 245K
+Serving Engine (WSL2 / Linux, :18020)  ->  Serving Provider (Qwen3.8-27B default)
 ```
 
 **The four pillars:**
-- **Microkernel (`mcp-qwen`)** — in-process V8 tool execution (0.01 ms),
+- **Microkernel (`mcp-castor`)** — in-process V8 tool execution (0.01 ms),
   structural AST surgery via `@ast-grep/napi`, bounded traceback condenser.
 - **Harness services** — the zero-trust sandboxed filesystem, shell executor,
   and provider client under `src/harness/services/`.
 - **Stream proxy** — `:18022` universal SSE proxy (UTF-8 reassembly,
   keep-alive, repetition breaker).
 - **Guards** — the 5-layer zero-trust containment boundary, the cross-process
-  semaphore, and the vLLM wedge detector + auto-heal.
+  semaphore, and the engine wedge detector + auto-heal.
 
 **Where new code goes:** new tools are in-process microkernel plugins under
 `src/harness/services/` — never external CLI subprocesses. New constants go in
@@ -149,7 +150,7 @@ Example: `feat(harness): harden search, edit, patch guards and establish protoco
 
 ### PR checklist
 Before requesting review, confirm:
-- [ ] `npm run test:all --prefix mcp-qwen` is green (or `TEST_OFFLINE=1` for
+- [ ] `npm run test:all --prefix mcp-castor` is green (or `TEST_OFFLINE=1` for
       GPU-less runs) — **zero skipped canaries you introduced**.
 - [ ] CI (`.github/workflows/ci.yml`) is green across the Node 22/24 x
       ubuntu/windows matrix.

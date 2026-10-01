@@ -5,13 +5,13 @@ Not auto-loaded into any session's context. Read this on demand when debugging
 not the "what to do now" (that's `<workspace_root>\CLAUDE.md` and
 `~/.claude/CLAUDE.md`, kept short deliberately).
 
-## Goose subprocess design (initial)
+## Castor subprocess design (initial)
 
-Chose `goose.exe` (block/goose) over the earlier `pi`-CLI design because Goose
+Chose `castor.exe` (block/castor) over the earlier `pi`-CLI design because Castor
 is MCP-native (`--with-extension` attaches any stdio MCP server per task); `pi`
 explicitly doesn't support MCP/sub-agents. Subprocess spawn pitfalls learned
 from the `pi` attempt and avoided here: `stdio: ["ignore", "pipe", "pipe"]`
-(unset stdin hangs some CLIs indefinitely), `goose.exe` is a real PE binary not
+(unset stdin hangs some CLIs indefinitely), `castor.exe` is a real PE binary not
 an npm `.cmd` shim (no EINVAL-on-batch-file issue), and timeout kills go through
 `taskkill /PID <pid> /T /F` (a bare `child.kill()` doesn't cascade to child
 processes on Windows, which can orphan a long-running verification command).
@@ -25,25 +25,25 @@ client can wait for.
 
 ## Bug: fabricated file path (2026-08-23, session 1)
 
-A real run wrote to `<user_home>\goose\...` — not this machine's user, not
-anywhere in the given `cwd`. Root cause, confirmed via Goose's own
-`llm_request.*.jsonl` log (`%APPDATA%\Block\goose\data\logs\`): Goose's
+A real run wrote to `<user_home>\castor\...` — not this machine's user, not
+anywhere in the given `cwd`. Root cause, confirmed via Castor's own
+`llm_request.*.jsonl` log (`%APPDATA%\Block\castor\data\logs\`): Castor's
 `developer` extension resolves its working directory from the process-wide
-`GOOSE_WORKING_DIR` env var, not `std::env::current_dir()`
-([block/goose#6610](https://github.com/block/goose/issues/6610),
-[#6909](https://github.com/block/goose/issues/6909)). The spawn set `cwd` on
+`CASTOR_WORKING_DIR` env var, not `std::env::current_dir()`
+([block/castor#6610](https://github.com/block/castor/issues/6610),
+[#6909](https://github.com/block/castor/issues/6909)). The spawn set `cwd` on
 the child process but never set that env var, so the model's turn-context
 claimed the right directory while the extension's actual file-tool root
 diverged — the model guessed a plausible path rather than surfacing the
-contradiction. Fix: set `GOOSE_WORKING_DIR: cwd` in the spawn env, and restate
+contradiction. Fix: set `CASTOR_WORKING_DIR: cwd` in the spawn env, and restate
 the absolute `cwd` as the first line of the task prompt as defense in depth.
 
 ## Bug: shell mismatch (2026-08-23, session 1, recurred on retry)
 
-`'Get-Content' is not recognized...` (exit 255). Goose has no shell-selection
+`'Get-Content' is not recognized...` (exit 255). Castor has no shell-selection
 config on Windows and defaults to `cmd.exe`, while its own baked-in
 developer-extension system prompt tells the model to use PowerShell-only
-cmdlets ([block/goose#7837](https://github.com/block/goose/issues/7837), open,
+cmdlets ([block/castor#7837](https://github.com/block/castor/issues/7837), open,
 no upstream workaround). Mitigated (not fixed — no config exists) by prepending
 a one-line counter-instruction to the task prompt.
 
@@ -64,7 +64,7 @@ Two gaps found by live-testing the above fix:
   `execStartedAt`/`queuePositionAtEnqueue` tracked separately; status messages
   distinguish "queued" from "executing."
 - **Cold boot had no taskId to poll.** `ensureMode`'s boot wait (up to 180s)
-  was awaited *before* `startGooseTask` registered a taskId — a cold first
+  was awaited *before* `startCastorTask` registered a taskId — a cold first
   call could blow through the client timeout with nothing to check (confirmed:
   a cold call returned a bare timeout; the edit had actually landed, only
   discovered minutes later via an unrelated follow-up call). Fixed: taskId
@@ -72,7 +72,7 @@ Two gaps found by live-testing the above fix:
   queued task itself, tracked via a `booting` flag.
 
 Also added `qwen_cancel_task` (taskkill-based, same tree-kill as the timeout
-path) — session 1 had 8 abandoned Goose runs kept executing in the background
+path) — session 1 had 8 abandoned Castor runs kept executing in the background
 after the caller gave up and redid the work by hand, with nothing to stop a
 late write from clobbering the hand-fix. No evidence it happened that night,
 but nothing prevented it either.
@@ -110,7 +110,7 @@ fraction of its work redoing things by hand, for two *new* root causes:
 feature got verified visually by the caller doing its own browser-tool calls
 by hand (131 in session 2 alone) instead of Qwen doing it via an attached
 Playwright MCP server (`npx -y @playwright/mcp@latest`,
-[goose-docs.ai/docs/mcp/playwright-mcp](https://goose-docs.ai/docs/mcp/playwright-mcp/)).
+[castor-docs.ai/docs/mcp/playwright-mcp](https://castor-docs.ai/docs/mcp/playwright-mcp/)).
 Tool description now names this pattern explicitly for UI-facing tasks.
 
 **Token cost mechanism identified:** session 2 carried 570M cache-read tokens
@@ -145,34 +145,34 @@ of the expected 60-150s case, not a measured figure. Telemetry since:
   task and threaded through the kill timer and all status messages via
   `entry.timeoutMs`.
 
-## Bug: Goose stderr never captured (2026-08-23)
+## Bug: Castor stderr never captured (2026-08-23)
 
 Root-caused the "no diagnostic info" problem from the Playwright extension
-test above. `spawn(GOOSE_EXE, args, { stdio: ["ignore", "pipe", "pipe"] })`
+test above. `spawn(CASTOR_EXE, args, { stdio: ["ignore", "pipe", "pipe"] })`
 pipes stderr as a file descriptor, but nothing ever attached a `.on("data")`
-listener to `child.stderr` - every Goose-level error message (crash, extension
+listener to `child.stderr` - every Castor-level error message (crash, extension
 load failure) was captured by the OS pipe and then simply never read, which
 in Node means it's silently discarded, not buffered for later. This matters
-specifically because Goose's own documented error format for extension
+specifically because Castor's own documented error format for extension
 failures is literally `"process quit before initialization: stderr = ..."` -
 the actual cause was sitting in the one stream we weren't reading. Fixed:
 `entry.stderr` accumulates stderr chunks (capped at 8000 chars), threaded into
-`summarizeGooseRun` and surfaced in every status message when non-empty.
+`summarizeCastorRun` and surfaced in every status message when non-empty.
 
 Also checked while diagnosing the Playwright failure, both ruled out as causes
 on this box specifically:
-- Known Windows bug ([block/goose#6816](https://github.com/block/goose/issues/6816)):
+- Known Windows bug ([block/castor#6816](https://github.com/block/castor/issues/6816)):
   `@` in package names gets backslash-escaped when extensions are added via
-  Goose Desktop's UI, breaking npx path resolution. Fixed upstream via PR
+  Castor Desktop's UI, breaking npx path resolution. Fixed upstream via PR
   #7242. Scope unclear (Desktop UI config generation vs. CLI `--with-extension`
-  directly) - not confirmed as our cause, but installed Goose is v1.47.0;
+  directly) - not confirmed as our cause, but installed Castor is v1.47.0;
   worth checking if that predates the fix if the bug recurs after the stderr
   fix lands.
 - Known "Node.js installer script not found" issue: happens when Node is
   installed outside the standard `C:\Program Files\nodejs\` path. Checked:
   `where node` on this box returns exactly that standard path (v25.8.0). Not
   the cause here.
-- Confirmed our `--with-extension` syntax matches Goose's own documented
+- Confirmed our `--with-extension` syntax matches Castor's own documented
   format exactly (`[name:]ENV1=val1 command args...`) - not a syntax error on
   our side.
 
@@ -216,8 +216,8 @@ Live-tested directly: dispatched a task with that extension attached. Qwen's
 own final report: *"I don't see a browser/playwright tool in my current
 toolset... the available extensions (`summarize`, `chatrecall`,
 `code_execution`) don't include one."* The extension did not register in
-Goose's toolset - root cause not diagnosed (could be a silent npx failure, a
-Goose `--with-extension` bug, or something else). Qwen worked around it
+Castor's toolset - root cause not diagnosed (could be a silent npx failure, a
+Castor `--with-extension` bug, or something else). Qwen worked around it
 unprompted: launched real headless Chrome
 (`C:\Program Files\Google\Chrome\Application\chrome.exe`) via Python's
 `subprocess` module (cmd.exe mangles the space in `Program Files` if invoked
@@ -264,7 +264,7 @@ conversation context (the actual mechanism behind the 570M-cache-read-token
 finding earlier in this file). The endpoint is deliberately minimal: GET-only,
 read-only, `{found, done, booting, executing, isError}` - no result text
 (that still comes from `qwen_check_task`, once, after the wait resolves, to
-avoid duplicating `summarizeGooseRun`'s formatting in two places), no way to
+avoid duplicating `summarizeCastorRun`'s formatting in two places), no way to
 start or cancel work over HTTP, bound to `127.0.0.1` only.
 
 **Real incident, same day, caught from the user's own pasted MCP logs**: this
@@ -293,10 +293,10 @@ is already running" check this one initially skipped.
 **Not yet live-tested end-to-end** (a real background curl loop against a real
 in-flight task, now that the crash is fixed) - needs a restart to load.
 
-## Rejected (for now): Goose's own subagent dispatch (2026-08-23)
+## Rejected (for now): Castor's own subagent dispatch (2026-08-23)
 
 User's prior experience running Qwen via TabbyAPI got parallel subagents
-working sharing one KV cache pool, and asked whether Goose's built-in
+working sharing one KV cache pool, and asked whether Castor's built-in
 `delegate`/`summon` subagent mechanism (`qwen-worker`, seen in the tool
 listing during the harness audit) could do the same here. Checked the real
 infrastructure first: this server's CTX=huge config does run
@@ -309,14 +309,14 @@ Live-tested the actual subagent path: dispatched a task instructing Qwen to
 delegate three trivial one-sentence summarization subtasks via `qwen-worker`,
 async/parallel. Result: **failed outright on the first attempt** - the
 subagent's default LLM config requested a model named `"haiku"`, not
-inheriting this server's `GOOSE_MODEL=qwen3.8-27b` override (Goose's subagent
+inheriting this server's `CASTOR_MODEL=qwen3.8-27b` override (Castor's subagent
 system has its own model-selection defaults, apparently assuming Claude-style
 tiering). Qwen caught this itself and retried with an explicit override -
 that retry then **never completed**, hitting the full 400s timeout with zero
 of the three trivial subtasks finished.
 
 Conclusion: the underlying capacity is real (2-way concurrency, real
-prefix-cache sharing), but Goose's own subagent implementation is not
+prefix-cache sharing), but Castor's own subagent implementation is not
 currently reliable enough to route real work through. Not recommended as of
 this writing. If revisited: the model-override syntax needs to actually work
 end-to-end, and a clean fast run needs to be confirmed before trusting it,
@@ -393,7 +393,7 @@ cold-compile pass - the CUDA graph capture list grew from `[1,2,4,8,16]` to
 and confirmed the final numbers: **KV cache size: 268,169 tokens - identical
 to the MAX_SEQS=2 boot**, `max_num_scheduled_tokens` shifted from 2034 to
 2020 (config genuinely took effect), no new errors, no CUDA/OOM issues,
-`HTTP server started` reached cleanly. Matched `MAX_CONCURRENT_GOOSE` in
+`HTTP server started` reached cleanly. Matched `MAX_CONCURRENT_CASTOR` in
 `mcp-qwen/index.js` (2 -> 4) to the new ceiling. Room to raise both further
 toward upstream's tested 8 if 4 proves stable in real use - 4 was chosen as a
 verified floor, not asserted as the optimum.
@@ -402,13 +402,13 @@ verified floor, not asserted as the optimum.
 
 Given the subagent path above isn't ready, used the confirmed 2-slot engine
 capacity a different way: `runQueued` was previously a strict FIFO chain
-(exactly 1 Goose process at a time, always). Failure #1 in this file's first
+(exactly 1 Castor process at a time, always). Failure #1 in this file's first
 section ("3 of 4 concurrent calls timed out") was the historical reason for
 that - but re-read now with the actual `--max-num-seqs 2` figure in hand,
 that failure is 4 requests against a 2-slot engine, not evidence that any
 concurrency is unsafe. Replaced the FIFO chain with a small semaphore
-(`MAX_CONCURRENT_GOOSE = 2`, `activeGooseCount`/`gooseWaitQueue`) allowing up
-to 2 genuinely simultaneous Goose runs, a 3rd queuing until a slot frees -
+(`MAX_CONCURRENT_CASTOR = 2`, `activeCastorCount`/`castorWaitQueue`) allowing up
+to 2 genuinely simultaneous Castor runs, a 3rd queuing until a slot frees -
 matching the server's real ceiling exactly, not guessing at a new number.
 
 One real race this introduces and had to design around: two concurrent calls
@@ -418,7 +418,7 @@ corrupt each other's boot. Mode switches are rare (`huge` is the default and
 stays booted) but not impossible under real concurrency. Fixed by keeping the
 boot/mode-check step (`ensureMode` + `getApiKey`) serialized through a
 separate `bootMutex`, independent of the 2-way concurrency gate on the actual
-Goose subprocess execution - cheap in the common case (a single fast HTTP
+Castor subprocess execution - cheap in the common case (a single fast HTTP
 check when no switch is needed), and eliminates the race entirely rather than
 accepting the risk.
 
@@ -431,11 +431,11 @@ time (not just that neither errors).
 The stderr-capture fix (next entry, chronologically first) immediately
 revealed the actual cause on the very next live test: `Warning: Failed to
 start extension 'npx' (IO error: program not found), continuing without it`.
-Goose's Rust process spawner cannot execute `npx` directly on Windows because
+Castor's Rust process spawner cannot execute `npx` directly on Windows because
 `npx` resolves to `npx.cmd` (an npm shim), not a real `.exe` - the identical
-class of bug this project's own `startGooseTask` was specifically written to
-avoid for *our* spawn of `goose.exe` (see "Goose subprocess design" above),
-just occurring one level down, inside Goose's own spawning of the extension
+class of bug this project's own `startCastorTask` was specifically written to
+avoid for *our* spawn of `castor.exe` (see "Castor subprocess design" above),
+just occurring one level down, inside Castor's own spawning of the extension
 process.
 
 Fix confirmed live: `extensions: ['npx.cmd -y @playwright/mcp@latest']`
@@ -454,9 +454,9 @@ authenticated (repo/workflow/gist/read:org scopes) - Qwen can do real GitHub
 work directly via its `shell` tool with no extension needed at all, a
 capability that existed the whole time and was never documented or used.
 
-Also ran `goose update` (official self-update command, Sigstore-verified) -
+Also ran `castor update` (official self-update command, Sigstore-verified) -
 already on latest stable (1.47.0), so the update path itself carried no risk
-and ruled out "outdated Goose" as a contributing factor.
+and ruled out "outdated Castor" as a contributing factor.
 
 ## Architecture validated against external research (2026-08-23)
 
@@ -474,13 +474,13 @@ delegates to workers, assembles/judges results) is independently confirmed as
 the standard production pattern for this shape of problem, not a bespoke
 design here.
 
-## Considered and rejected (so far): Claude Code CLI instead of Goose
+## Considered and rejected (so far): Claude Code CLI instead of Castor
 
 Investigated spawning `claude -p --output-format stream-json
---dangerously-skip-permissions --mcp-config <file>` instead of `goose.exe`,
+--dangerously-skip-permissions --mcp-config <file>` instead of `castor.exe`,
 pointed at the local vLLM server via `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`
 in that subprocess's own env (Sonnet stays the orchestrating session,
-unaffected — same relationship Goose has today, just swapping the engine).
+unaffected — same relationship Castor has today, just swapping the engine).
 
 Architecturally plausible: vLLM documents native Anthropic Messages API
 support ([docs.vllm.ai](https://docs.vllm.ai/en/latest/serving/integrations/claude_code/)),
@@ -489,10 +489,10 @@ above. **Not attempted** — two open questions cut against it: (1) unverified
 against this box's actual vLLM launch flags (needs Anthropic-format tool-call
 parsing, not just the OpenAI-format `qwen3_coder` parser already configured),
 and (2) Claude Code's own system-prompt/tool-schema overhead is substantially
-heavier than Goose's lean agent loop — at the same ~77 tok/s, a heavier
+heavier than Castor's lean agent loop — at the same ~77 tok/s, a heavier
 per-turn prompt means *less* of the 400s budget reaches actual work, which
 cuts directly against the exact timeout problem being fought. Current
-decision: keep hardening Goose (two consecutive rounds of real, narrow,
+decision: keep hardening Castor (two consecutive rounds of real, narrow,
 fixable bugs so far — not evidence of a dead end); treat a Claude-Code-as-
 subprocess swap as a separate, isolated prototype to validate before ever
 wiring it into production.
@@ -521,7 +521,7 @@ low-probability tail event, not a known bug, unless it recurs. Mitigation
 `detectCorruption()` in `mcp-qwen/index.js` flags a repeated non-benign
 character (5+) or a 40-char block repeating 3+ times on every response;
 `ask_qwen`/`ask_qwen_fast` auto-retry once (safe, no side effects);
-`delegate_coding_task` cannot safely auto-retry (Goose may have already
+`delegate_coding_task` cannot safely auto-retry (Castor may have already
 written files) so it surfaces a loud warning instead.
 
 ## vLLM serving recipe knobs (tracks upstream syv-ai/qwen38-27b-rtx3090)
@@ -638,7 +638,7 @@ the four already-known cosmetic lines). Only observed change:
 `max_cudagraph_capture_size` went 32 → 64 and `cudagraph_capture_sizes`
 lengthened to `[1,2,4,8,16,24,32,40,48,56,64]`, adding ~15s of one-time
 compile/capture time (torch.compile itself: 36.00s, unchanged in kind from the
-MAX_SEQS=4 boot). Matched `MAX_CONCURRENT_GOOSE` in `mcp-qwen/index.js` to 8,
+MAX_SEQS=4 boot). Matched `MAX_CONCURRENT_CASTOR` in `mcp-qwen/index.js` to 8,
 updated the tool-description text, and re-ran `node --check index.js` (OK).
 
 **Process note, for future long-boot waits from this shell:** three separate
@@ -693,7 +693,7 @@ Root-cause analysis showed:
 - Mirrored `GEMINI.md` to `<user_home>/.gemini/GEMINI.md` and `CLAUDE.md` to
   `<user_home>/.claude/CLAUDE.md`.
 - Live verified from WSL via `mcp_client_test.js`: all 6 tools registered,
-  Goose subprocess executed, written files created and tested with 0 errors.
+  Castor subprocess executed, written files created and tested with 0 errors.
 
 ## SOTA Multi-Agent Hardening: Vision Role Division, Session Drift Fix, & Polling Invariants (2026-08-26)
 
@@ -707,8 +707,8 @@ An architectural audit of session traces (`<session_uuid>`) evaluating `TreeMap-
      - **Local Worker**: Pure text-only execution for AST/code manipulation, text DOM inspection, accessibility trees, API/curl endpoints, and 245K-context document ingestion via `uvx free-search-mcp` and `npx.cmd -y context7@latest`.
 
 2. **Session Persistence Drift & `--resume` Crash**:
-   - **Problem**: `mcp-qwen/index.js` tracked session existence using an in-memory `Set` (`knownSessions`). If the process restarted or session files were not saved by Goose, passing `--name <id> --resume` caused Goose to immediately crash with `Error: No session found with name '<id>'`.
-   - **Fix**: Replaced in-memory tracking with dynamic disk-grounded session discovery (`sessionExistsOnDisk` querying `goose session list`), passing `--name <id>` for new sessions and `--name <id> --resume` only when verified on disk.
+   - **Problem**: `mcp-qwen/index.js` tracked session existence using an in-memory `Set` (`knownSessions`). If the process restarted or session files were not saved by Castor, passing `--name <id> --resume` caused Castor to immediately crash with `Error: No session found with name '<id>'`.
+   - **Fix**: Replaced in-memory tracking with dynamic disk-grounded session discovery (`sessionExistsOnDisk` querying `castor session list`), passing `--name <id>` for new sessions and `--name <id> --resume` only when verified on disk.
 
 3. **Status Polling Storms & Turn Inflation**:
    - **Problem**: Lead agents executing 20s–30s polling loops on `qwen_task_status` burned ~150 conversational turns and accumulated massive cache-read tokens over 14 minutes.
@@ -798,13 +798,13 @@ workspaces; powershell -NoProfile invocation guidance) was audited and kept
 ## Engine-core wedge incident; wedge detection + first-token timeout (2026-08-28, v4.2.0)
 
 The ">10min MCP failure with GPU at 100%" incident, root-caused entirely from
-on-disk traces: vLLM engine log (`/tmp/mcp_launch_huge.log` in WSL), goose
-per-request logs (`%APPDATA%\Block\goose\data\logs\llm_request.*.jsonl` — **1 line
+on-disk traces: vLLM engine log (`/tmp/mcp_launch_huge.log` in WSL), castor
+per-request logs (`%APPDATA%\Block\castor\data\logs\llm_request.*.jsonl` — **1 line
 = request sent, zero chunks ever received; multi-line = streamed/healthy**), task
 state (`~/.qwen/tasks/`), and the per-surface MCP client logs under
 `claude-cli-nodejs\Cache\<project>\mcp-logs-qwen38-local\`.
 
-**Timeline (local time):** vLLM booted 13:29. A heavy large-context goose session
+**Timeline (local time):** vLLM booted 13:29. A heavy large-context castor session
 ran 14:03–14:32 (240–370KB request logs ≈ 60–90k-token prompts, streaming
 normally). One such request settled into `Running: 1 reqs` at 13.7 tok/s (vs the
 77–133 spec) holding 39.9% of the KV pool (~107k tokens), decayed to 0.0 tok/s by
@@ -814,7 +814,7 @@ vLLM prints an `Engine 000: ... Running:` stats line every 10s *unconditionally*
 (idle or busy), so a 4.5h gap in those lines is the engine core hung, while the
 API process stayed up (port answered, requests accepted then never scheduled) and
 the GPU sat at 100%/24.1GB generating nothing. Both audit dispatches (18:56:39,
-19:07:33) hit this: goose sent a well-formed streaming request, received zero SSE
+19:07:33) hit this: castor sent a well-formed streaming request, received zero SSE
 chunks, emitted zero stdout/stderr, and the 600s inactivity watchdog killed each
 at exactly 601s with `toolCallsCount: 0` — the caller's DB-timeout retry theory
 was wrong; no tool ever ran. ~19:21 the core spontaneously unwedged (a 69s "OK"
@@ -827,7 +827,7 @@ at 2026-08-28 00:42; this was the first heavy long-context day under the flag) �
 one day of correlation, not proof. User decision: **keep CHAIN enabled, add
 detection instead**. The 4-bit-K/2-bit-V + speculative-decoding risk class
 (arXiv 2606.09864, noted in the serving-stack entry above) remains the adjacent
-suspect. Ruled out: the MCP server, goose, Claude Code timeouts, the prompts.
+suspect. Ruled out: the MCP server, castor, Claude Code timeouts, the prompts.
 
 **Fixes (v4.2.0):**
 
@@ -843,7 +843,7 @@ suspect. Ruled out: the MCP server, goose, Claude Code timeouts, the prompts.
    5min TTL) because every Claude surface runs its own copy of this server —
    in-process locks do not serialize them.
 2. **First-Token Timeout (120s, `QWEN_FIRST_TOKEN_TIMEOUT_MS`).** Distinct from
-   the 600s mid-stream heartbeat: zero goose output within 120s of spawn → kill
+   the 600s mid-stream heartbeat: zero castor output within 120s of spawn → kill
    and fail with an explicit "engine wedged or saturated, no work performed"
    message. A wedged engine previously cost 10 min of GPU burn per attempt.
 3. **No DFlash2/CHAIN change and no context cap** (user decisions): 245K context
@@ -852,9 +852,9 @@ suspect. Ruled out: the MCP server, goose, Claude Code timeouts, the prompts.
    before stalling.
 
 **Queue semantics confirmed while in here** (answers a standing multi-session
-question): `MAX_CONCURRENT_GOOSE=1` is per-MCP-server-process, and each Claude
+question): `MAX_CONCURRENT_CASTOR=1` is per-MCP-server-process, and each Claude
 session/surface spawns its own process — so N sessions run up to N concurrent
-goose processes against the engine's MAX_SEQS=8; only same-session calls
+castor processes against the engine's MAX_SEQS=8; only same-session calls
 FIFO-serialize. Queued tasks are **never** heartbeat-killed: `startedAt` is null
 while queued (set only at dequeue) and the watchdog lives inside the spawned task,
 so neither the 600s heartbeat nor the 1h budget ticks while queued. The one real
@@ -866,16 +866,16 @@ gauges to tell saturation (Running/Waiting high) from a wedge (stats silent).
 MCP server processes pick this up only after the owning session restarts its MCP
 connection — running sessions keep the old code until then.
 
-## Global cross-process goose semaphore (2026-08-28, v4.3.0)
+## Global cross-process castor semaphore (2026-08-28, v4.3.0)
 
 Direct follow-up to the queue-semantics note above: the per-process
-`MAX_CONCURRENT_GOOSE=1` FIFO was useless across sessions — every Claude surface
+`MAX_CONCURRENT_CASTOR=1` FIFO was useless across sessions — every Claude surface
 spawns its own copy of this server, so N sessions = N processes = N concurrent
-gooses against one GPU regardless of the limit (exactly the load shape that
+castors against one GPU regardless of the limit (exactly the load shape that
 afternoon). Replaced the in-process semaphore with a disk-lease semaphore every
 instance shares:
 
-- **Lease files**: `~/.qwen/goose_slots/slot_<i>.json`, claimed atomically with an
+- **Lease files**: `~/.qwen/castor_slots/slot_<i>.json`, claimed atomically with an
   O_EXCL (`wx`) open — one winner per slot, no coordinator process needed.
 - **Heartbeat**: holders rewrite `hb` every 15s. Reclaim rules: pid dead +
   lease >90s stale, or pid alive but silent >5min (a wedged holder — its own task
@@ -883,7 +883,7 @@ instance shares:
   is abandoned by definition). Reclaim renames the file first (atomic) so racing
   reclaimers can't both win; holders detect theft (pid mismatch on heartbeat) and
   refuse to unlink a foreign lease on release.
-- **Semantics preserved**: default 1 = the strict one-goose-at-a-time `fac3113`
+- **Semantics preserved**: default 1 = the strict one-castor-at-a-time `fac3113`
   intended, now actually enforced machine-wide. Task entries stay `queued`
   (startedAt null, watchdog-exempt, no budget ticking) until they hold a slot —
   identical to the old per-process queue semantics, now global. Cancelled-while-
@@ -897,7 +897,7 @@ instance shares:
 - **Rollout caveat**: leases only coordinate new-code instances; old-code
   processes (sessions started before the MCP restart) bypass them entirely.
   `test_global_semaphore.js` exercises in-process exclusion, hand-off, and
-  cross-process exclusion against the shipped code (no vLLM/goose needed).
+  cross-process exclusion against the shipped code (no vLLM/castor needed).
 - **Why not strict global FIFO**: exact FIFO ordering across processes would need
   a sequencing protocol on top of the leases; slot-poll ordering is approximately
   fair and — with the default of 1 — ordering is all but irrelevant. Not built.
@@ -945,7 +945,7 @@ upstream: a first-execution / Triton-JIT-on-first-real-shape interaction on WSL2
 the n-gram-chains feature (upstream issue #38) lives in an external repo that was
 never installed, so the earlier CHAIN=1 -> CHAIN=0 arc toggled nothing; every wedge
 happened under an identical config. The feature is also documented greedy-only while
-our delegated workloads run at temperature 1.0 (goose sends temperature: null). The
+our delegated workloads run at temperature 1.0 (castor sends temperature: null). The
 env line is removed from `start_huge.sh`.
 
 **Trigger localization:** `_cached_multiquery_path`'s materialize route is only reached
@@ -988,8 +988,8 @@ aggravated variant share the same first-JIT-launch signature.
    - Attachments Gist: [Gist 532337dcf4b66a66729d8ae68df9d435](https://gist.github.com/<github_user>/532337dcf4b66a66729d8ae68df9d435) attached in [Comment #5462825503](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/48#issuecomment-5462825503), containing `repro.py`, `wedge_pyspy_enginecore.txt`, `wedge_001_104300_englog.txt`, `wedge_001_152027_englog.txt`, and `iterations_unpatched.jsonl`.
 
 2. **Dispatch `--exec` spawn fix**:
-   - In `ps` inspection of Goose processes, arguments appeared as `Prefer native Goose tools (, , , , )`. Spawning `wsl.exe -d Ubuntu -- <cmd>` ran through login shell bash, executing backtick-quoted tool directives as command substitutions.
-   - Fixed by switching `wsl.exe` spawn to `--exec <user_home>/.local/bin/goose` and updating `sessionExistsOnDisk` to use `--exec`.
+   - In `ps` inspection of Castor processes, arguments appeared as `Prefer native Castor tools (, , , , )`. Spawning `wsl.exe -d Ubuntu -- <cmd>` ran through login shell bash, executing backtick-quoted tool directives as command substitutions.
+   - Fixed by switching `wsl.exe` spawn to `--exec <user_home>/.local/bin/castor` and updating `sessionExistsOnDisk` to use `--exec`.
 
 3. **ESM Import & Test Harness Isolation (`isMain`)**:
    - `index.js` unconditionally ran `main()`, attached `StdioServerTransport`, and started `statusHttpServer.listen(18021)` upon module import.
@@ -1033,19 +1033,19 @@ aggravated variant share the same first-JIT-launch signature.
    - **Decode Throughput**: `SPEC=dflash2` provides 7-draft speculative decoding (~125–137 tok/s decode; ~60–63 tok/s at 72k depth; up to 382 tok/s on copy/edits). Lossless verification against target model logits.
    - **Multi-turn Efficiency**: `PREFIX_CACHE=1` enables instant (~1–5s) follow-up turns on 100k prompts.
    - **Verify Stability**: `VLLM_DFLASH2_LOOKUP_ADAPTIVE=0` pins verify block length for stable prefix caching (+26% faster).
-   - **Agent Concurrency**: `MAX_SEQS=8` preserves all 8 concurrent agent worker slots matching `MAX_CONCURRENT_GOOSE=8`.
+   - **Agent Concurrency**: `MAX_SEQS=8` preserves all 8 concurrent agent worker slots matching `MAX_CONCURRENT_CASTOR=8`.
    - **Metrics**: `REQ_METRICS=1` surfaces per-request latency & usage metrics.
    - Configured in `<workspace_root>/scripts/wsl/start_huge.sh`.
 
 5. **Historical Infrastructure Gotchas (Merged from root NOTES.md)**:
 
    ### Bug 0: Zombie Task reporting `EXECUTING` while GPU sits at 0% (Observed 2026-08-30)
-   - **Component**: Goose worker process behind `mcp-qwen` (`127.0.0.1:18021` task tracker + vLLM @ `:18020`).
+   - **Component**: Castor worker process behind `mcp-qwen` (`127.0.0.1:18021` task tracker + vLLM @ `:18020`).
    - **Symptom**: `GET /task/<id>/status` reports `actively EXECUTING` with elapsed timer, while GPU telemetry shows 0% utilization and vLLM has no running requests.
    - **Resolution in Stack**: Implemented `pidAlive(task.ownerPid)` liveness probing and `isTaskOrphaned(diskTask)` / `markTaskOrphanedOnDisk()` in `mcp-qwen/index.js` (lines 530-605). If worker process PID exits unexpectedly, the task tracker immediately detects orphan status on read and marks the task `FAILED`.
 
    ### Bug 1: Coworker Stream Timeout on Massive Turns (`Stream decode error`) (Observed 2026-08-30)
-   - **Component**: Multi-agent coworker harness (`goose` CLI + local vLLM endpoint @ `http://localhost:18020/v1` via `mcp-qwen`).
-   - **Symptom**: `Network error: Stream decode error: error decoding response body` when massive turns (>80k tokens, deep reasoning) exceed Goose's original 600s reqwest read timeout.
-   - **Resolution in Stack**: Goose binary timeout was extended from 600s to 1 hour, and `index.js` configured `INACTIVITY_TIMEOUT_MS = 1_800_000` (30-minute inactivity watchdog) and `DEFAULT_TIMEOUT_MS = 14_400_000` (4 hours) so massive prompt synthesis completes without premature connection termination.
+   - **Component**: Multi-agent coworker harness (`castor` CLI + local vLLM endpoint @ `http://localhost:18020/v1` via `mcp-qwen`).
+   - **Symptom**: `Network error: Stream decode error: error decoding response body` when massive turns (>80k tokens, deep reasoning) exceed Castor's original 600s reqwest read timeout.
+   - **Resolution in Stack**: Castor binary timeout was extended from 600s to 1 hour, and `index.js` configured `INACTIVITY_TIMEOUT_MS = 1_800_000` (30-minute inactivity watchdog) and `DEFAULT_TIMEOUT_MS = 14_400_000` (4 hours) so massive prompt synthesis completes without premature connection termination.
 

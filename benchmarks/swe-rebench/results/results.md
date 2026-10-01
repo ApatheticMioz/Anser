@@ -1,4 +1,4 @@
-# SWE-rebench eval results: Goose + Qwen3.8-27B (CTX=huge, DFlash2, KVarN)
+# SWE-rebench eval results: Castor + Qwen3.8-27B (CTX=huge, DFlash2, KVarN)
 
 **Run date:** 2026-08-24. **Split:** `nebius/SWE-rebench-leaderboard` / `2026_03`
 (110 tasks; 50 sampled, seed `20260824`). **Protocol:** best-of-1 (single
@@ -13,7 +13,7 @@ best-of-5 leaderboard protocol; see caveats below.
 |---|---|---|
 | Resolved (patch applied, FAIL_TO_PASS passed, no PASS_TO_PASS regressions) | 16 | 32.0% |
 | Attempted but did not resolve (real patch, ran, test failure/regression) | 12 | 24.0% |
-| Never attempted (Goose exhausted the 900s solve budget with no patch) | 22 | 44.0% |
+| Never attempted (Castor exhausted the 900s solve budget with no patch) | 22 | 44.0% |
 
 **The more informative number: among the 28 tasks that actually got a
 solve attempt, 16 resolved — a 57.1% per-attempt success rate.** The
@@ -47,7 +47,7 @@ by tooling bugs, not by the model**, before landing on this trustworthy
 number:
 
 1. **First solve run**: `subprocess.run(text=True)` on Windows decodes
-   captured output with the OEM codepage (cp1252), and Goose's terminal
+   captured output with the OEM codepage (cp1252), and Castor's terminal
    output contains UTF-8 sequences that aren't valid cp1252 — crashed the
    output-reader thread on every single task. Fixed by passing
    `encoding="utf-8", errors="replace"` explicitly.
@@ -56,7 +56,7 @@ number:
    inside it. Fixed by giving each attempt a fresh `tempfile.mkdtemp()`
    scratch dir instead of reusing `workdir/instance_id`.
 3. **A design gap, also fixed**: on a genuine 900s timeout, the script was
-   discarding any partial edits Goose had made instead of capturing
+   discarding any partial edits Castor had made instead of capturing
    `git diff` on the actual repo state before cleanup. Fixed - timeouts
    now still get credit for real partial work, though in practice none of
    the 22 timed-out tasks in this run had made any file changes yet when
@@ -83,5 +83,5 @@ number:
 ## Files
 
 - [`../predictions/sample_2026_03_50.jsonl`](../predictions/sample_2026_03_50.jsonl) — the 50 sampled tasks (no test data, solve-step input)
-- [`../predictions/goose_qwen_2026_03_50.jsonl`](../predictions/goose_qwen_2026_03_50.jsonl) — Goose+Qwen's raw predictions (patch + returncode + stderr tail per task)
-- [`goose_qwen_2026_03_50_report.json`](goose_qwen_2026_03_50_report.json) — the full per-instance grading report (FAIL_TO_PASS/PASS_TO_PASS results, exit codes, log paths)
+- [`../predictions/castor_qwen_2026_03_50.jsonl`](../predictions/castor_qwen_2026_03_50.jsonl) — Castor+Qwen's raw predictions (patch + returncode + stderr tail per task)
+- [`castor_qwen_2026_03_50_report.json`](castor_qwen_2026_03_50_report.json) — the full per-instance grading report (FAIL_TO_PASS/PASS_TO_PASS results, exit codes, log paths)

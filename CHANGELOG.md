@@ -1,13 +1,14 @@
-# Changelog — Anser
+# Changelog — Castor
 
-All notable changes to the **Anser** Universal 245K Agent Microkernel & MCP Server are documented in this file.
+All notable changes to the **Castor** Universal 245K Agent Microkernel & MCP Server are documented in this file.
 
 The project adheres to **[Calendar & Semantic Versioning](https://calver.org/)**:
 - **Frontier CalVer Era (`2026.x.y`)**:
+  - **`2026.3.0`** (2026-10-01) — Castor Major Release: Universal Model Agnosticism, Namespace Protection, Multimodal Vision, and Unified CLI.
   - **`2026.2.0`** (2026-09-26) — Socratic Collaborative Pair-Programming, Native Multi-Provider Research, and Cooperative Landing.
   - **`2026.1.0`** (2026-09-09) — Universal 245K Context, Open-Source Launch, AGENTS.md AAIF Standard, and 5-Layer Zero-Trust Sandbox.
 - **Hardening & Rebranding Era (`5.x.y`)**:
-  - **`5.2.0`** (2026-09-06) — Anser Rebrand & Native In-Process Microkernel Hard-Wiring.
+  - **`5.2.0`** (2026-09-06) — Castor Rebrand & Native In-Process Microkernel Hard-Wiring.
   - **`5.1.1`** (2026-09-06) — Multi-Instance Cancellation Isolation (P15) & 11h Marathon Telemetry.
   - **`5.1.0`** (2026-09-06) — 14-Pass Engineering Hardening Complete (P1–P14).
 - **Rapid Prototyping Era (`3.x.y – 4.x.y`)**:
@@ -16,6 +17,19 @@ The project adheres to **[Calendar & Semantic Versioning](https://calver.org/)**
   - **`4.0.0`** (2026-08-27) — Zero-Turn OS Wait Architecture (`:18021`), Hybrid Dual-Mode Execution, and Unified 3-Tool Design.
   - **`3.5.0`** (2026-08-27) — Self-Healing Pre-Flight Vitality Checks & In-Flight Network Retries.
   - **`3.4.0`** (2026-08-27) — Synchronous Execution Mode & 1-Hour Heartbeat Watchdog.
+
+---
+
+## [2026.3.0] — 2026-10-01
+
+### 🦫 Castor Rebrand & Universal Model Agnosticism
+- **Model-Agnostic Engine Core**: Decoupled the microkernel and runner from hardcoded assumptions. Supports any OpenAI-compatible provider (Ollama, LM Studio, vLLM, SGLang, LiteLLM) via `~/.castor/config.json`.
+- **User Default Baseline Preserved**: Out-of-the-box zero-config defaults remain tuned for the flagship RTX 3090 / 4090 setup (`Qwen3.8-27B`, `18020`, 245K context, vLLM launcher).
+- **Dual-Namespace Configuration**: `CASTOR_*` environment variables take precedence with automatic backwards-compatible fallback to `QWEN_*`.
+- **Namespace-Protected MCP Tools**: Default stdio tool prefix updated to `castor` (`castor_coworker`, `castor_task`, `castor_server`) with dynamic schema generation.
+- **Unified Package & CLI**: Renamed package directory to `mcp-castor/` and established `castor` CLI (`bin/castor.js`) with `install`, `init`, and `status` subcommands.
+- **Multimodal Vision Integration**: Native vision support across both Lead Architect (Gemini 3.8 Flash) and local peer programmer at $0 token cost.
+- **Authoritative Gate Verification**: 66 offline & integration test suites verified in a single pass.
 
 ---
 
@@ -46,7 +60,7 @@ The project adheres to **[Calendar & Semantic Versioning](https://calver.org/)**
 - **Proactive Turn 80 Rollover Advisory** (`e332cce`, `9b3ee41`, `0d1d271`): Injects an in-band `[!NOTE]` caution banner and `SessionTurnLimitRecommendation` at turn 80, prompting the orchestrator to checkpoint and roll to a fresh session ID.
 
 ### ⚡ KV Cache Prefix Stability & Architecture Hardening
-- **Static System Prompt Anchoring** (`0d1d271`): Pruned ~2,800 characters of dynamic per-dispatch instructions from `anser_runner.js` to stabilize vLLM Automatic Prefix Caching (APC) hit rates at ~8,000–9,500 tok/s.
+- **Static System Prompt Anchoring** (`0d1d271`): Pruned ~2,800 characters of dynamic per-dispatch instructions from `castor_runner.js` to stabilize vLLM Automatic Prefix Caching (APC) hit rates at ~8,000–9,500 tok/s.
 - **Deterministic Tool Serialization (M1)** (`32e54f4`): Normalized tool schemas and history reconstruction to maximize prefix reuse across multi-turn sessions.
 - **Socket Persistence on `:18021`** (`0d1d271`): Resolved status server port churn on rapid restarts using `exclusive: true` (`SO_EXCLUSIVEADDRUSE`) and keeper/follower election.
 
@@ -76,7 +90,7 @@ The project adheres to **[Calendar & Semantic Versioning](https://calver.org/)**
 **28 commits** between `v5.2.0` and `v2026.1.0` (`1e748bf` → `e14a852`).
 
 ### 🚀 Open-Source Launch & Standardizations
-- **Anser Open-Source Documentation** (`5eea3e4`): Published comprehensive open-source documentation, architecture guides, and portable environment resolvers.
+- **Castor Open-Source Documentation** (`5eea3e4`): Published comprehensive open-source documentation, architecture guides, and portable environment resolvers.
 - **AGENTS.md AAIF Standard** (`5eea3e4`): Formalized `AGENTS.md` per the 2026 Agentic AI Foundation standard as the canonical, machine-readable contract across Claude Code, Google Antigravity, and Cursor.
 - **GNU AGPLv3 Licensing** (`f802dff`, `7d66736`, `e14a852`, `139aaa8`): Adopted GNU AGPL-3.0-or-later dual-licensing to ensure open agent microkernel development.
 
@@ -108,7 +122,7 @@ The project adheres to **[Calendar & Semantic Versioning](https://calver.org/)**
 
 **1 commit** (`1e748bf`).
 
-- **Anser Rebrand**: Officially renamed the microkernel to **Anser**.
+- **Castor Rebrand**: Officially renamed the microkernel to **Castor**.
 - **Native Engine Consolidation**: Hard-wired native execution under `src/harness/`, pruned all legacy third-party runtime wrappers, and standardized in-process V8 tool dispatch.
 
 ---

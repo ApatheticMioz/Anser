@@ -2,7 +2,7 @@
 
 > Provenance: extracted verbatim from README.md on 2026-09-26 (docs present-state rewrite, slice D1).
 
-Anser is battle-tested. The metrics below reflect **exact, ground-truth telemetry** captured across an intensive 3-week continuous development marathon on a single consumer workstation equipped with an **NVIDIA GeForce RTX 3090 (24 GB VRAM)**:
+Castor is battle-tested. The metrics below reflect **exact, ground-truth telemetry** captured across an intensive 3-week continuous development marathon on a single consumer workstation equipped with an **NVIDIA GeForce RTX 3090 (24 GB VRAM)**:
 
 | Production Telemetry Axis | Measured Ground Truth | Operational Significance |
 |---|---|---|

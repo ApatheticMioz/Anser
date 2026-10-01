@@ -1,8 +1,8 @@
 # ============================================================================
-# Bug Report — Anser (The Universal 245K Agent Microkernel for Local LLMs)
+# Bug Report — Castor (The Universal 245K Agent Microkernel for Local LLMs)
 # ============================================================================
 name: "🐛 Bug Report"
-description: "Report a reproducible defect in the Anser microkernel, MCP server, or tooling."
+description: "Report a reproducible defect in the Castor microkernel, MCP server, or tooling."
 title: "[Bug] "
 labels: ["bug", "triage"]
 assignees: []
@@ -62,12 +62,12 @@ body:
     attributes:
       label: Environment
       description: |
-        Fill in what you know. The Anser microkernel is cross-platform
+        Fill in what you know. The Castor microkernel is cross-platform
         (Windows host + WSL engine, or native Linux), so this matters a lot.
       placeholder: |
         - OS: (e.g. Windows 11 / Ubuntu 22.04 WSL / macOS)
         - Node: (e.g. v20.x / v22.x)
-        - Anser / mcp-qwen version: (e.g. 5.2.0)
+        - Castor / mcp-qwen version: (e.g. 5.2.0)
         - Engine: (e.g. vLLM + Qwen3.8-27B @ 245K)
         - How you launched: (e.g. `node index.js`, MCP client, etc.)
     validations:

@@ -24,7 +24,7 @@
       "cd /d/LLM_Ecosystem/mcp-qwen && grep -rn \"task_\" src/ index.js stream_proxy.js --include=\"*.js\" | grep -v node_modules | head -60",
       "cd /d/LLM_Ecosystem/mcp-qwen && grep -rn \"tmp_\\|\\.tmp\\|rename\\|writeFile\\|appendFile\\|unlink\\|rmSync\\|rm(\" src/ index.js stream_proxy.js --include=\"*.js\" | grep -v node_modules | head -80",
       "cd /d/LLM_Ecosystem/mcp-qwen && grep -n \"saveTaskToDisk\\|lastHeartbeatAt\\|heartbeat\\|result =\\|result\\.\\|done = true\\|finishedAt\" src/harness/runner.js | head -60",
-      "cd /d/LLM_Ecosystem/mcp-qwen && grep -n \"saveTaskToDisk\\|lastHeartbeatAt\\|heartbeat\\|result =\\|result\\.\\|done = true\\|finishedAt\\|tasks.set\\|tasks.get\" src/goose_runner.js | head -60",
+      "cd /d/LLM_Ecosystem/mcp-qwen && grep -n \"saveTaskToDisk\\|lastHeartbeatAt\\|heartbeat\\|result =\\|result\\.\\|done = true\\|finishedAt\\|tasks.set\\|tasks.get\" src/castor_runner.js | head -60",
       "cd /d/LLM_Ecosystem/mcp-qwen && grep -rn \"saveTaskToDisk\" src/ index.js stream_proxy.js | grep -v node_modules",
       "cd /d/LLM_Ecosystem/mcp-qwen && wc -l src/harness/runner.js && grep -n \"writeFile\\|rename\\|tmp\\|task\\|result\\|finalText\\|onToken\\|onToolCall\\|heartbeat\" src/harness/runner.js | head -60"
     ],
@@ -43,8 +43,8 @@
     "engineEmptyResponses": 0
   },
   {
-    "taskId": "task_anser-metrics_s1_1789216367088",
-    "sessionId": "anser-metrics_s1",
+    "taskId": "task_castor-metrics_s1_1789216367088",
+    "sessionId": "castor-metrics_s1",
     "cwd": "D:\\LLM_Ecosystem",
     "createdAt": "2026-09-12T12:32:47.088Z",
     "durationSec": 433,
@@ -52,7 +52,7 @@
     "isError": false,
     "endStatus": "completed",
     "promptLen": 875,
-    "prompt": "READ-ONLY, no file mutations. One concern: how the local Qwen model behaved inside the Anser harness across sessions — performance drift and recovery events.\n\nOver C:\\Users\\Apath\\.qwen\\sessions\\*\\events.jsonl for sessions active 2026-09-05 through now: from assistant_message event metrics (promptTokens, completionTokens, tokensPerSec, ttftMs, totalMs, reasoningTokens), compute per session: assistant turn count, median tokensPerSec over the FIRST half of turns vs the LAST half (speculative-decode decay signal), median ttftMs, count of continuation_injected and empty_stream_retry events.\n\nDeliver: one table — sessionId | date | turns | tok/s early | tok/s late | ttftMs median | continuations | retries. Flag any session where late tok/s < 70% of early tok/s. One extra line: rough correlation between promptTokens and ttftMs across all sessions. Compact, no raw dumps.",
+    "prompt": "READ-ONLY, no file mutations. One concern: how the local Qwen model behaved inside the Castor harness across sessions — performance drift and recovery events.\n\nOver C:\\Users\\Apath\\.qwen\\sessions\\*\\events.jsonl for sessions active 2026-09-05 through now: from assistant_message event metrics (promptTokens, completionTokens, tokensPerSec, ttftMs, totalMs, reasoningTokens), compute per session: assistant turn count, median tokensPerSec over the FIRST half of turns vs the LAST half (speculative-decode decay signal), median ttftMs, count of continuation_injected and empty_stream_retry events.\n\nDeliver: one table — sessionId | date | turns | tok/s early | tok/s late | ttftMs median | continuations | retries. Flag any session where late tok/s < 70% of early tok/s. One extra line: rough correlation between promptTokens and ttftMs across all sessions. Compact, no raw dumps.",
     "toolCallsCount": 17,
     "tools": {
       "bash": 16,
@@ -65,8 +65,8 @@
       "ls /mnt/c/Users/ 2>&1; echo \"---\"; ls /mnt/c/ 2>&1 | head; echo \"---\"; ls /mnt/d/LLM_Ecosystem 2>&1 | head -30",
       "pwd; echo \"---\"; ls -la / 2>&1; echo \"---\"; ls -la /mnt 2>&1",
       "ls /c/Users/Apath/.qwen/sessions/ 2>&1 | head -60; echo \"---count---\"; ls /c/Users/Apath/.qwen/sessions/ 2>/dev/null | wc -l",
-      "cd /c/Users/Apath/.qwen/sessions; ls | tail -40; echo \"---\"; ls anser_fix_fx1_s1/ 2>&1; echo \"---\"; head -c 2000 anser_fix_fx1_s1/events.jsonl 2>&1",
-      "cd /c/Users/Apath/.qwen/sessions; grep -o '\"type\":\"[^\"]*\"' anser_fix_fx1_s1/events.jsonl | sort | uniq -c; echo \"---\"; grep '\"type\":\"assistant_message\"' anser_fix_fx1_s1/events.jsonl | head -1 | head -c 1500",
+      "cd /c/Users/Apath/.qwen/sessions; ls | tail -40; echo \"---\"; ls castor_fix_fx1_s1/ 2>&1; echo \"---\"; head -c 2000 castor_fix_fx1_s1/events.jsonl 2>&1",
+      "cd /c/Users/Apath/.qwen/sessions; grep -o '\"type\":\"[^\"]*\"' castor_fix_fx1_s1/events.jsonl | sort | uniq -c; echo \"---\"; grep '\"type\":\"assistant_message\"' castor_fix_fx1_s1/events.jsonl | head -1 | head -c 1500",
       "which python3 python 2>&1; python3 --version 2>&1"
     ],
     "filesWritten": [
@@ -84,8 +84,8 @@
     "engineEmptyResponses": 0
   },
   {
-    "taskId": "task_anser-knobs_s1_1789216668680",
-    "sessionId": "anser-knobs_s1",
+    "taskId": "task_castor-knobs_s1_1789216668680",
+    "sessionId": "castor-knobs_s1",
     "cwd": "D:\\LLM_Ecosystem",
     "createdAt": "2026-09-12T12:37:48.680Z",
     "durationSec": 1051,
@@ -93,7 +93,7 @@
     "isError": false,
     "endStatus": "completed",
     "promptLen": 984,
-    "prompt": "READ-ONLY source analysis in D:\\LLM_Ecosystem\\mcp-qwen (no edits). One concern: inventory every tunable runtime/dispatch knob the Anser harness exposes, with defaults and where each is set.\n\nCover: (1) reasoning effort / thinking budget (default, per-dispatch override options, any cutoff/landing logic); (2) turn limits (the value that produced a turn_limit_reached status), continuation caps (maxContinuations), stream idle timeout, retry counts; (3) token/time budgets (timeout defaults, reasoning budget exhaustion behavior); (4) engine/serving knobs the harness passes or assumes (max_model_len, MAX_SEQS/concurrency, speculative-decoding settings, prefix/prefill-cache warmup behavior); (5) anything prompt-size or session-related that affects latency (session reuse, context growth handling).\n\nDeliver: one table — knob | default | where (file:line or file:function) | effect/notes. Plus 2-3 lines on which knobs are per-dispatch vs global config vs engine-side. Analysis only.",
+    "prompt": "READ-ONLY source analysis in D:\\LLM_Ecosystem\\mcp-qwen (no edits). One concern: inventory every tunable runtime/dispatch knob the Castor harness exposes, with defaults and where each is set.\n\nCover: (1) reasoning effort / thinking budget (default, per-dispatch override options, any cutoff/landing logic); (2) turn limits (the value that produced a turn_limit_reached status), continuation caps (maxContinuations), stream idle timeout, retry counts; (3) token/time budgets (timeout defaults, reasoning budget exhaustion behavior); (4) engine/serving knobs the harness passes or assumes (max_model_len, MAX_SEQS/concurrency, speculative-decoding settings, prefix/prefill-cache warmup behavior); (5) anything prompt-size or session-related that affects latency (session reuse, context growth handling).\n\nDeliver: one table — knob | default | where (file:line or file:function) | effect/notes. Plus 2-3 lines on which knobs are per-dispatch vs global config vs engine-side. Analysis only.",
     "toolCallsCount": 41,
     "tools": {
       "list_dir": 2,
@@ -113,7 +113,7 @@
       "cd /d/LLM_Ecosystem/mcp-qwen && grep -n \"defaultTimeoutMs\\|DEFAULT_TIMEOUT\\|timeout_ms\" src/harness/services/shell_executor.js | head; echo ---; grep -n \"INACTIVITY\\|FIRST_TOKEN\" src/*.js src/harness/*.js src/harness/services/*.js | head; echo ---; grep -n \"long-poll\\|longPoll\\|wait\" src/task_registry.js | head -20"
     ],
     "filesWritten": [
-      "D:\\LLM_Ecosystem\\anser_knob_inventory.md"
+      "D:\\LLM_Ecosystem\\castor_knob_inventory.md"
     ],
     "filesReadCount": 16,
     "turns": 22,
@@ -136,7 +136,7 @@
     "isError": false,
     "endStatus": "completed",
     "promptLen": 1971,
-    "prompt": "Milestone implementation task in D:\\LLM_Ecosystem\\mcp-qwen (Anser harness, ES modules, Node 22+). One concern: expose reasoning effort as a per-dispatch parameter on the qwen_coworker tool.\n\nContext: QWEN_REASONING_EFFORT (src/config.js:33, default \"xhigh\") is read dynamically at call time in src/provider_vllm.js:146 and forwarded as chat_template_kwargs.reasoning_effort. Today it can only be changed globally via env at server boot.\n\nRequirements:\n1. Add optional tool parameter `reasoning_effort` to the qwen_coworker input schema. Accept only the effort tiers the engine's chat template actually supports — verify against the provider code and the serving launcher (~/qwen-serving/launchers/start_huge.sh in WSL, or engine /v1/chat completions handling) what values are valid; fail fast on invalid values (schema rejection). Note: the model family is documented as off/low/medium/xhigh (no \"high\" tier) — verify, don't assume.\n2. Plumb the value task-locally through the dispatch path (tool handler → task record → runner → provider request options). Invariant: no cross-task leakage — prefer explicit option threading to the existing dynamic read site over mutating process.env (which is global across tasks). The existing dynamic env read must remain the fallback when the param is absent.\n3. Surface the effective effort in the task record (and a session event field if cheap) for telemetry.\n4. Add ONE line to the qwen_coworker tool description documenting the parameter.\n5. Tests: schema rejects invalid values; omitted param → env default (xhigh) unchanged; provided param → value reaches chat_template_kwargs in the outgoing request payload (mock the stream layer the way existing tests do).\n\nConstraints: zero behavior change when the param is absent. Match existing code style and test patterns. Run the mcp-qwen test suite and report pass/fail counts. Return your report as your final message; write no files beyond the code/test edits this task requires.",
+    "prompt": "Milestone implementation task in D:\\LLM_Ecosystem\\mcp-qwen (Castor harness, ES modules, Node 22+). One concern: expose reasoning effort as a per-dispatch parameter on the qwen_coworker tool.\n\nContext: QWEN_REASONING_EFFORT (src/config.js:33, default \"xhigh\") is read dynamically at call time in src/provider_vllm.js:146 and forwarded as chat_template_kwargs.reasoning_effort. Today it can only be changed globally via env at server boot.\n\nRequirements:\n1. Add optional tool parameter `reasoning_effort` to the qwen_coworker input schema. Accept only the effort tiers the engine's chat template actually supports — verify against the provider code and the serving launcher (~/qwen-serving/launchers/start_huge.sh in WSL, or engine /v1/chat completions handling) what values are valid; fail fast on invalid values (schema rejection). Note: the model family is documented as off/low/medium/xhigh (no \"high\" tier) — verify, don't assume.\n2. Plumb the value task-locally through the dispatch path (tool handler → task record → runner → provider request options). Invariant: no cross-task leakage — prefer explicit option threading to the existing dynamic read site over mutating process.env (which is global across tasks). The existing dynamic env read must remain the fallback when the param is absent.\n3. Surface the effective effort in the task record (and a session event field if cheap) for telemetry.\n4. Add ONE line to the qwen_coworker tool description documenting the parameter.\n5. Tests: schema rejects invalid values; omitted param → env default (xhigh) unchanged; provided param → value reaches chat_template_kwargs in the outgoing request payload (mock the stream layer the way existing tests do).\n\nConstraints: zero behavior change when the param is absent. Match existing code style and test patterns. Run the mcp-qwen test suite and report pass/fail counts. Return your report as your final message; write no files beyond the code/test edits this task requires.",
     "toolCallsCount": 101,
     "tools": {
       "list_dir": 1,
@@ -161,7 +161,7 @@
       "D:\\LLM_Ecosystem\\mcp-qwen\\src\\config.js",
       "D:\\LLM_Ecosystem\\mcp-qwen\\src\\harness\\services\\provider_vllm.js",
       "D:\\LLM_Ecosystem\\mcp-qwen\\src\\harness\\runner.js",
-      "D:\\LLM_Ecosystem\\mcp-qwen\\src\\goose_runner.js",
+      "D:\\LLM_Ecosystem\\mcp-qwen\\src\\castor_runner.js",
       "D:\\LLM_Ecosystem\\mcp-qwen\\src\\tools.js",
       "D:\\LLM_Ecosystem\\mcp-qwen\\src\\task_registry.js",
       "D:\\LLM_Ecosystem\\mcp-qwen\\tests\\reasoning_effort_dispatch.test.js",
@@ -406,7 +406,7 @@
       "cd /d/LLM_Ecosystem/mcp-qwen && git diff src/harness/services/provider_vllm.js",
       "cd /d/LLM_Ecosystem/mcp-qwen && grep -n \"MAX_LEN_HUGE\\|MAX_TOKENS\\|STREAM_IDLE_TIMEOUT_MS\\|MAX_REASONING_TOKENS\\|getReasoningEffort\\|STREAM_PROXY_PORT\\|VLLM_PORT\" src/config.js | head -30; echo \"=== package.json test script ===\"; grep -n \"\\\"test\\\"\\|provider_reasoning\\|runner_continuation\\|\\\"scripts\\\"\" package.json",
       "cd /d/LLM_Ecosystem/mcp-qwen && node --check src/harness/services/provider_vllm.js && echo \"SYNTAX OK\" && node tests/provider_reasoning.test.js 2>&1 | tail -20",
-      "cd /d/LLM_Ecosystem/mcp-qwen && cat > /tmp/probe_runner_real.js <<'EOF'\nimport assert from \"node:assert\";\nprocess.env.QWEN_MAX_CONTINUATION_TURNS = \"3\";\nprocess.env.QWEN_EMPTY_STREAM_RETRIES = \"2\";\n\n// Fetch mock: content + finish \"stop\" + usage-only terminal chunk + [DONE]\nconst sse =\n  'data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"},\"finish_reason\":null}]}\\\\n\\\\n' +\n  'data: {\"choices\":[{\"delta\":{\"content\":\"world.\"},\"finish_reason\":null}]}\\\\n\\\\n' +\n  'data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\\\\n\\\\n' +\n  'data: {\"choices\":[],\"usage\":{\"prompt_tokens\":123,\"completion_tokens\":45,\"total_tokens\":168}}\\\\n\\\\n' +\n  'data: [DONE]\\\\n\\\\n';\nglobalThis.fetch = async (url, opts) => {\n  const stream = new ReadableStream({\n    start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); },\n  });\n  return new Response(stream, { status: 200, headers: { \"content-type\": \"text/event-stream\" } });\n};\n\nconst { AnserRunner } = await import(\"./src/harness/runner.js\");\nconst logger = { events: [], append(e){ this.events.push({timestamp:new Date().toISOString(),...e}); return this.events.at(-1); }, readAll(){return this.events;}, getConversationHistory(){return [];} };\nconst runner = new AnserRunner({ logger }); // no llm -> real vllm provider\nconst res = await runner.run({ prompt: \"hi\", sessionId: \"probe\", maxTurns: 10 });\nconsole.log(\"STATUS:\", res.status);\nconsole.log(\"FINALTEXT:\", JSON.stringify(res.finalText));\nconsole.log(\"EVENTS:\", logger.events.map(e=>e.type).join(\",\"));\nconst am = logger.events.filter(e=>e.type===\"assistant_message\");\nconsole.log(\"ASSISTANT:\", am.length, \"metrics.promptTokens=\", am[0]?.metrics?.promptTokens, \"estimated=\", am[0]?.metrics?.promptTokensEstimated);\nconsole.log(\"EMPTY_RETRIES:\", logger.events.filter(e=>e.type===\"empty_stream_retry\").length);\nEOF\nnode /tmp/probe_runner_real.js 2>&1 | tail -20"
+      "cd /d/LLM_Ecosystem/mcp-qwen && cat > /tmp/probe_runner_real.js <<'EOF'\nimport assert from \"node:assert\";\nprocess.env.QWEN_MAX_CONTINUATION_TURNS = \"3\";\nprocess.env.QWEN_EMPTY_STREAM_RETRIES = \"2\";\n\n// Fetch mock: content + finish \"stop\" + usage-only terminal chunk + [DONE]\nconst sse =\n  'data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"},\"finish_reason\":null}]}\\\\n\\\\n' +\n  'data: {\"choices\":[{\"delta\":{\"content\":\"world.\"},\"finish_reason\":null}]}\\\\n\\\\n' +\n  'data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\\\\n\\\\n' +\n  'data: {\"choices\":[],\"usage\":{\"prompt_tokens\":123,\"completion_tokens\":45,\"total_tokens\":168}}\\\\n\\\\n' +\n  'data: [DONE]\\\\n\\\\n';\nglobalThis.fetch = async (url, opts) => {\n  const stream = new ReadableStream({\n    start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); },\n  });\n  return new Response(stream, { status: 200, headers: { \"content-type\": \"text/event-stream\" } });\n};\n\nconst { CastorRunner } = await import(\"./src/harness/runner.js\");\nconst logger = { events: [], append(e){ this.events.push({timestamp:new Date().toISOString(),...e}); return this.events.at(-1); }, readAll(){return this.events;}, getConversationHistory(){return [];} };\nconst runner = new CastorRunner({ logger }); // no llm -> real vllm provider\nconst res = await runner.run({ prompt: \"hi\", sessionId: \"probe\", maxTurns: 10 });\nconsole.log(\"STATUS:\", res.status);\nconsole.log(\"FINALTEXT:\", JSON.stringify(res.finalText));\nconsole.log(\"EVENTS:\", logger.events.map(e=>e.type).join(\",\"));\nconst am = logger.events.filter(e=>e.type===\"assistant_message\");\nconsole.log(\"ASSISTANT:\", am.length, \"metrics.promptTokens=\", am[0]?.metrics?.promptTokens, \"estimated=\", am[0]?.metrics?.promptTokensEstimated);\nconsole.log(\"EMPTY_RETRIES:\", logger.events.filter(e=>e.type===\"empty_stream_retry\").length);\nEOF\nnode /tmp/probe_runner_real.js 2>&1 | tail -20"
     ],
     "filesWritten": [
       "D:\\LLM_Ecosystem\\mcp-qwen\\src\\harness\\services\\provider_vllm.js",

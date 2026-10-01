@@ -1,4 +1,4 @@
-# AGENTS.md — Anser
+# AGENTS.md — Castor
 
 > **The vendor-neutral "README for machines."** This file is the canonical,
 > machine-readable operating contract for any AI agent (Claude Code, Google
@@ -14,7 +14,7 @@
 
 ## 0. What This Repository Is
 
-**Anser** is a local-first, **$0-token-cost** agent microkernel that lets a
+**Castor** is a local-first, **$0-token-cost** agent microkernel that lets a
 high-reasoning cloud orchestrator (the *Lead Architect*) drive a locally-served
 **Qwen3.8-27B** peer programmer to do code exploration, structural AST
 surgery, testing, and file editing — all inside a zero-trust sandbox.
@@ -23,15 +23,15 @@ surgery, testing, and file editing — all inside a zero-trust sandbox.
 Lead Architect (cloud: Claude / Gemini / Antigravity)
         |  MCP over stdio - 3 consolidated tools
         v
-mcp-qwen/  (Node.js MCP server + Anser microkernel)
+mcp-castor/  (Node.js MCP server + Castor microkernel)
         |  in-process V8 tool calls (0.01 ms) + zero-turn HTTP wait (:18021)
         v
-Local Serving Engine (WSL2 / Linux, :18020)  ->  Qwen3.8-27B
+Local Serving Engine (WSL2 / Linux, :18020)  ->  Serving Provider (Qwen3.8-27B default)
 ```
 
-The **only** `package.json` lives in `mcp-qwen/`. There is **no root
-`package.json`** — every `npm` command must be run with `--prefix mcp-qwen`
-(or from inside `mcp-qwen/`).
+The **only** `package.json` lives in `mcp-castor/`. There is **no root
+`package.json`** — every `npm` command must be run with `--prefix mcp-castor`
+(or from inside `mcp-castor/`).
 
 ---
 
@@ -43,11 +43,11 @@ which one it is before acting.
 | Persona | Runtime | Mandate | Hard Limits |
 |---|---|---|---|
 | **Lead Architect** | Cloud (Claude Code: GLM 5.3 text-only Plan / GLM 5.3-flash vision Exec; Antigravity: Gemini 3.8 Flash vision) | Architecture, task decomposition, plan & manifest authorship, supervisory steering, final synthesis. | **Never** bulk-read source into cloud context; **never** author code; offloads exploration to the Coworker in single-concern slices. |
-| **Autonomous Execution Coworker** | Local Qwen3.8-27B via Anser (`qwen38-local` MCP) | Hands-on execution & peer engineering: explore, AST surgery, edit, test, shell. Local peer programmer also has vision capability enabled. Proactively challenges flawed assumptions, proposes architectural alternatives, and returns grounded facts. | **Never** authors high-level plans/roadmaps; **never** escapes the sandbox root. |
+| **Autonomous Execution Coworker** | Local peer programmer (Qwen3.8-27B default, or configured model) via Castor (`castor` MCP) | Hands-on execution & peer engineering: explore, AST surgery, edit, test, shell. Local peer programmer also has vision capability enabled. Proactively challenges flawed assumptions, proposes architectural alternatives, and returns grounded facts. | **Never** authors high-level plans/roadmaps; **never** escapes the sandbox root. |
 | **Autonomous Optimizer (Evo)** | Local, inside the Coworker | Closed-loop mutation: propose -> evaluate -> select/revert against a fitness metric. | **Snapshot before mutating**; **revert on regression**; never edits files outside the candidate's snapshot list. |
 
 > **Honest attribution:** No agent may claim "we" or coworker collaboration
-> unless a `qwen_coworker` MCP call was genuinely dispatched and its output
+> unless a `castor_coworker` MCP call was genuinely dispatched and its output
 > incorporated.
 
 ---
@@ -61,12 +61,13 @@ All commands are **relative** — never hardcode a drive letter or home path.
 - **Node.js >= 22** (22 or 24; the CI matrix runs both active LTS versions).
 - **Git** (leave `core.autocrlf` at default — `.gitattributes` pins LF).
 - **Optional, for the full live stack:** a GPU with >= 24 GB VRAM, WSL2 (or
-  native Linux), CUDA 12.4+, and a vLLM serving of Qwen3.8-27B on `:18020`.
+  native Linux), CUDA 12.4+, and an OpenAI-compatible serving engine (vLLM, Ollama,
+  LM Studio, SGLang, etc.; Qwen3.8-27B on `:18020` is the default).
   **You do NOT need a GPU to run the test gate** (see section 5).
 
 ### 2.2 Install
 ```bash
-cd <repo>/mcp-qwen
+cd <repo>/mcp-castor
 npm ci          # deterministic; REQUIRED for the platform-specific @ast-grep
                 # native binaries (linux-x64-gnu / win32-x64-msvc)
 ```
@@ -75,35 +76,38 @@ npm ci          # deterministic; REQUIRED for the platform-specific @ast-grep
 
 ### 2.3 Run the MCP server
 ```bash
-node <repo>/mcp-qwen/index.js
+node <repo>/mcp-castor/index.js
 ```
-Registers three stdio tools: `qwen_coworker`, `qwen_task`, `qwen_server`.
-On first dispatch the vLLM engine boots (up to 480 s) and the stream proxy
+Registers three stdio tools: `castor_coworker`, `castor_task`, `castor_server`
+(customizable via `CASTOR_TOOL_PREFIX`, default `"castor"`).
+On first dispatch the serving engine boots (if configured) and the stream proxy
 starts on `:18022`.
 
 ### 2.4 Register with a client
 ```bash
 # Claude Code
-claude mcp add --scope user qwen-anser node <repo>/mcp-qwen/index.js
+claude mcp add --scope user castor node <repo>/mcp-castor/index.js
 
 # Antigravity IDE (generate schemas into the IDE's MCP dir)
-python <repo>/mcp-qwen/update_schemas.py
+node <repo>/mcp-castor/bin/castor.js install --antigravity
 ```
 
-### 2.5 Key environment variables (all in `mcp-qwen/src/config.js`)
+### 2.5 Key environment variables (all in `mcp-castor/src/config.js`)
 | Variable | Default | Meaning |
 |---|---|---|
-| `QWEN_RACE_MS` | `15000` | Sync race window before yielding to the zero-turn long-poll wait. |
-| `QWEN_MAX_CONCURRENT` | `1` | Cross-process execution slots (disk-lease semaphore). |
-| `QWEN_STATE_DIR` | `~/.anser` | Root for task JSON, slot leases, session logs, Evo lineage. |
-| `VLLM_PORT` | `18020` | vLLM OpenAI-compatible API. |
+| `CASTOR_MODEL` / `QWEN_MODEL` | `Qwen3.8-27B` | Target model identifier for the coworker. |
+| `CASTOR_BASE_URL` / `QWEN_BASE_URL` | `http://127.0.0.1:18020/v1` | OpenAI-compatible endpoint. |
+| `CASTOR_TOOL_PREFIX` | `castor` | Namespace prefix for MCP tools (`castor_coworker`, etc.). |
+| `CASTOR_RACE_MS` | `15000` | Sync race window before yielding to zero-turn long-poll wait. |
+| `CASTOR_MAX_CONCURRENT` | `1` | Cross-process execution slots (disk-lease semaphore). |
+| `CASTOR_STATE_DIR` | `~/.castor` | Root for task JSON, slot leases, session logs, Evo lineage. |
 | `STATUS_PORT` | `18021` | Zero-turn long-poll HTTP wait/status server. |
 | `STREAM_PROXY_PORT` | `18022` | Universal SSE streaming proxy (loopback only). |
-| `QWEN_REASONING_EFFORT` | `medium` | Fallback effort when a dispatch sends none; per-dispatch `reasoning_effort` overrides. Engine accepts {xhigh, medium, low}. `xhigh` is explicit-only. |
+| `CASTOR_REASONING_EFFORT` | `medium` | Fallback effort when a dispatch sends none {xhigh, medium, low}. |
 | `TEST_OFFLINE` | *(unset)* | Set to `1` to force live suites to skip (GPU-less runs). |
-| `ALLOW_ENGINE_INTERRUPT` | `0` | Dangerous override: by default, test suites NEVER interrupt, probe (:18020), or reboot vLLM. Set to `1` only to explicitly test live GPU inference. |
-| `QWEN_BASE_TURN_BUDGET` | `80` | Base turn budget before requiring supervisor lease extension or triggering cooperative landing. |
-| `QWEN_MAX_ELASTIC_TURNS` | `200` | Maximum allowed turn ceiling via supervisor lease extension. |
+| `ALLOW_ENGINE_INTERRUPT` | `0` | Dangerous override: by default, test suites NEVER interrupt, probe, or reboot vLLM. |
+| `CASTOR_BASE_TURN_BUDGET` | `80` | Base turn budget before requiring supervisor lease extension or landing. |
+| `CASTOR_MAX_ELASTIC_TURNS` | `200` | Maximum allowed turn ceiling via supervisor lease extension. |
 | `QWEN_LOOP_DETECTION_WINDOW` | `6` | Sliding window size for action-hash stagnation detection. |
 | `QWEN_LOOP_DETECTION_REPETITIONS` | `3` | Consecutive identical non-mutating actions before circuit-breaking. |
 | `QWEN_SUPERVISOR_PREVIEW_CHARS` | `300` | Length of recent activity preview returned in task status and HTTP wait endpoints. |
@@ -141,16 +145,18 @@ Use structural AST tools, not string matching, for syntactic discovery and refac
 
 ### 3.4 Module layout (where new code goes)
 ```
-mcp-qwen/
+mcp-castor/
   index.js                 # MCP entry: 3 tools, lifecycle, isMain guard
   stream_proxy.js          # :18022 SSE proxy
+  bin/
+    castor.js              # CLI entry point (install, config, status, etc.)
   src/
     config.js              # ALL constants + env parsing (single source)
     platform.js            # WSL/Windows path translation, spawn profiles
     wsl_bridge.js          # path canonicalization, killProcessTree
     semaphore.js           # cross-process O_EXCL disk-lease
     task_registry.js       # :18021 long-poll wait, cancel, orphans
-    server_lifecycle.js    # vLLM boot, wedge detection, auto-heal
+    server_lifecycle.js    # engine boot, wedge detection, auto-heal
     tools.js               # zod schemas + dispatch
     harness/
       runner.js            # agent loop, continuation, empty-stream guard
@@ -271,17 +277,17 @@ mcp-qwen/
 ## 5. Verification Procedures
 
 ### 5.1 The test gates
-There is **no root `package.json`** — always use `--prefix mcp-qwen`.
+There is **no root `package.json`** — always use `--prefix mcp-castor`.
 
 ```bash
 # Fast canary gate - 9 critical suites (~4s, offline, zero engine interruption). Run during active development.
-npm test --prefix mcp-qwen
+npm test --prefix mcp-castor
 
 # Full authoritative gate - 66 suites (single-pass complete verification). Run before PR / milestone commit.
-npm run test:all --prefix mcp-qwen
+npm run test:all --prefix mcp-castor
 
 # GPU-less / CI: live suites skip honestly by default when ALLOW_ENGINE_INTERRUPT is unset or TEST_OFFLINE=1.
-TEST_OFFLINE=1 npm run test:all --prefix mcp-qwen
+TEST_OFFLINE=1 npm run test:all --prefix mcp-castor
 ```
 
 **Gate truth (verified):**
@@ -292,14 +298,14 @@ TEST_OFFLINE=1 npm run test:all --prefix mcp-qwen
 | On-disk `.test.js` | **66** | — | Total test suites in repository. |
 
 **Zero Engine Interruption Invariant:**
-By default, tests NEVER interrupt, probe, or reboot a running vLLM instance (`ALLOW_ENGINE_INTERRUPT=0`). Live suites (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) **skip honestly** by default so running background Anser workloads on single-sequence hardware are protected. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
+By default, tests NEVER interrupt, probe, or reboot a running serving engine (`ALLOW_ENGINE_INTERRUPT=0`). Live suites (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) **skip honestly** by default so running background Castor workloads on single-sequence hardware are protected. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
 
 ### 5.2 Canary-first staging (do not run the full chain first)
 1. Identify or write **one** targeted test that exercises exactly the code you
    changed (a *canary*).
-2. Run just that file: `node mcp-qwen/tests/<canary>.test.js`.
+2. Run just that file: `node mcp-castor/tests/<canary>.test.js`.
 3. If green, run the next-narrower group (the module's related suites).
-4. Only then run the full gate (`npm run test:all --prefix mcp-qwen`).
+4. Only then run the full gate (`npm run test:all --prefix mcp-castor`).
 5. If a canary fails, **fix the code** — never weaken the canary.
 
 ### 5.3 Evo closed-loop (for optimizations/refactors)
@@ -314,7 +320,7 @@ By default, tests NEVER interrupt, probe, or reboot a running vLLM instance (`AL
 ### 5.4 CI
 `.github/workflows/ci.yml` runs the gate on every push/PR across a
 **Node 22 & 24 x ubuntu-latest & windows-latest** matrix (4 jobs, no
-fail-fast). It uses `npm ci` in `mcp-qwen/` and runs the authoritative
+fail-fast). It uses `npm ci` in `mcp-castor/` and runs the authoritative
 `test:all` gate (66 suites). A green CI is required before a PR is mergeable.
 
 ---

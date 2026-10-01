@@ -6,14 +6,14 @@ Standalone driver for the Evo evolution loop that the MCP server executes.
 One round per invocation (re-run after each dispatch):
 
   1. Loads the candidate lineage from <dir>/.evo/lineage.json - the file
-     written by EvoLineageEngine (mcp-qwen/evo_engine.js), using that
+     written by EvoLineageEngine (mcp-castor/src/evo_engine.js), using that
      engine's real schema (candidates[] with candidateId/hypothesis/
      status/metricScore, plus bestCommit/bestMetric).
   2. Asks the local model (direct OpenAI-compatible call to :18020) for the
      next concrete, testable variation hypothesis given the objective and
      the recent lineage brief.
   3. Writes the ready-to-dispatch packet to <dir>/.evo/avq/ and prints the
-     exact qwen_coworker(...) MCP call (hypothesis / test_command /
+     exact castor_coworker(...) MCP call (hypothesis / test_command /
      metric_name / higher_is_better all set, so the MCP server runs the
      verification test after the coworker task and records the outcome in the
      lineage itself).

@@ -1,8 +1,8 @@
 # scripts/
 
-Repo-level tooling that lives **outside** the self-contained `mcp-qwen` npm
-package. These are not part of `mcp-qwen`'s build or test chain; they operate
-on the Qwen harness's on-disk telemetry (task files + session event logs).
+Repo-level tooling that lives **outside** the self-contained `mcp-castor` npm
+package. These are not part of `mcp-castor`'s build or test chain; they operate
+on the Castor harness's on-disk telemetry (task files + session event logs).
 
 ## qwen_tasks_analysis.mjs
 
@@ -80,8 +80,8 @@ emptyStreamRetries, engineEmptyResponses
 ### Test
 
 The exporter is a repo-level tool, so its test is a **standalone** repo-level
-test (not part of `mcp-qwen`'s `npm test` chain, which imports only from
-`mcp-qwen/src/` and never reaches the repo root):
+test (not part of `mcp-castor`'s `npm test` chain, which imports only from
+`mcp-castor/src/` and never reaches the repo root):
 
 ```sh
 node tests/qwen_tasks_exporter.test.js

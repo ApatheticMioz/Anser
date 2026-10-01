@@ -129,5 +129,5 @@ in mcp-qwen `ensureServerRunning` (it owns boot) — see next section.
   materialize-route bug independent of graph capture. Fix: kernel patch +
   route change.
 - `full` does NOT wedge ⇒ the production trigger is subtler than pure
-  prompt-size + prefix hits (likely interaction with real goose tool-call
+  prompt-size + prefix hits (likely interaction with real castor tool-call
   shapes); extend the harness toward real transcript replay before claiming.

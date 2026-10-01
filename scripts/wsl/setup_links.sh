@@ -27,7 +27,7 @@ ln -sf "$SOURCE_DIR/start_huge.sh" ~/qwen-serving/launchers/start_huge.sh
 ln -sf "$SOURCE_DIR/start_fast.sh" ~/qwen-serving/launchers/start_fast.sh
 ln -sf "$SOURCE_DIR/status.sh" ~/qwen-serving/launchers/status.sh
 ln -sf "$SOURCE_DIR/stop_server.sh" ~/qwen-serving/launchers/stop_server.sh
-ln -sf "$REPO_ROOT/mcp-qwen/stream_proxy.js" ~/qwen-serving/stream_proxy.js
+ln -sf "$REPO_ROOT/mcp-castor/stream_proxy.js" ~/qwen-serving/stream_proxy.js
 
 # Link home helpers
 ln -sf "$SOURCE_DIR/wait_ready.sh" ~/wait_ready.sh
@@ -50,7 +50,7 @@ cat << EOF > ~/.gemini/config/mcp_config.json
   "mcpServers": {
     "qwen38-local": {
       "command": "node",
-      "args": ["$REPO_ROOT/mcp-qwen/index.js"],
+      "args": ["$REPO_ROOT/mcp-castor/index.js"],
       "env": {
         "QWEN_RACE_MS": "150000"
       }

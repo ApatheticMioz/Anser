@@ -1,0 +1,95 @@
+# ============================================================================
+# Castor — Automated Release Pipeline
+# ============================================================================
+# Triggered on version tags (e.g. `v2026.3.0`).
+#
+# 1. Runs the full cross-platform test matrix (Node 22/24 × Ubuntu/Windows).
+# 2. Creates the GitHub Release with extracted changelog notes.
+# 3. Publishes `mcp-castor` to npm registry (if NPM_TOKEN is provided).
+# ============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  test:
+    name: Verify · Node ${{ matrix.node-version }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node-version: [22, 24]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: mcp-castor/package-lock.json
+
+      - name: Install dependencies (npm ci)
+        working-directory: mcp-castor
+        run: npm ci
+
+      - name: Run Authoritative Test Gate
+        working-directory: mcp-castor
+        run: npm run test:all
+        env:
+          TEST_OFFLINE: '1'
+          ALLOW_ENGINE_INTERRUPT: '0'
+
+  publish:
+    name: GitHub Release & NPM Publish
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Extract Tag Version
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --title "Castor ${{ steps.meta.outputs.version }}" \
+            --generate-notes \
+            --draft=false \
+            --prerelease=false
+
+      - name: Publish to NPM
+        if: env.NPM_TOKEN != ''
+        working-directory: mcp-castor
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

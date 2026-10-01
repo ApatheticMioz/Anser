@@ -1,0 +1,1357 @@
+import fs from "node:fs";
+import http from "node:http";
+import path from "node:path";
+import {
+  TASK_DIR,
+  STATUS_PORT,
+  TASK_RETENTION_MS,
+  DEFAULT_TIMEOUT_MS,
+  INACTIVITY_TIMEOUT_MS,
+  ORPHAN_REAP_STALE_MS,
+  BASE_TURN_BUDGET,
+  MAX_ELASTIC_TURNS,
+  SUPERVISOR_PREVIEW_CHARS,
+} from "./config.js";
+import {
+  pidAlive,
+  listTaskSlots,
+  clearReclaimableTaskSlots,
+  releaseTaskSlot,
+} from "./semaphore.js";
+import {
+  killProcessTree,
+  killSessionProcessTreeSync,
+} from "./wsl_bridge.js";
+import { EventLoggerService } from "./harness/services/event_logger.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+
+try {
+  fs.mkdirSync(TASK_DIR, { recursive: true });
+} catch {}
+
+export const tasks = new Map();
+
+export function saveTaskToDisk(task) {
+  if (!task || !task.id) return;
+  const filePath = path.join(TASK_DIR, `${task.id}.json`);
+  try {
+    const tmpPath = `${filePath}.tmp_${process.pid}_${Date.now()}`;
+    const payload = {
+      id: task.id,
+      sessionId: task.sessionId,
+      cwd: task.cwd,
+      prompt: task.prompt,
+      // Effective reasoning-effort tier for this task (per-dispatch param when
+      // provided, else the QWEN_REASONING_EFFORT env default). Persisted for
+      // telemetry; undefined when the task predates the field.
+      reasoningEffort: task.reasoningEffort ?? null,
+      ownerPid: task.ownerPid || process.pid,
+      ownerPlatform: task.ownerPlatform || process.platform,
+      createdAt: task.createdAt,
+      startedAt: task.startedAt,
+      finishedAt: task.finishedAt,
+      lastHeartbeatAt: task.lastHeartbeatAt || Date.now(),
+      status: task.status,
+      done: task.done,
+      isError: task.isError,
+      budgetTurns: task.budgetTurns || BASE_TURN_BUDGET,
+      leaseExtensionsCount: task.leaseExtensionsCount || 0,
+      lastActivityPreview: task.lastActivityPreview ? String(task.lastActivityPreview).slice(-SUPERVISOR_PREVIEW_CHARS) : "",
+      fileOps: task.fileOps || [],
+      toolCallsCount: task.toolCallsCount || 0,
+      toolOpsSummary: task.toolOpsSummary || { reads: 0, mutations: 0, commands: 0, web: 0 },
+      lastTool: task.lastTool || null,
+      lastPromptTokens: task.lastPromptTokens ?? null,
+      contextHeadroom: task.contextHeadroom ?? null,
+      result: task.result || null,
+      stderr: task.stderr ? task.stderr.slice(-2000) : "",
+    };
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    // Telemetry persistence must never throw into the runner, but it must not
+    // be invisible either: a failed save (disk full, EBUSY, permission) is a
+    // real signal — log the path and the error to stderr and continue.
+    const msg = err && err.message ? err.message : String(err);
+    console.error(`[task_registry] Failed to save task ${task.id} to ${filePath}: ${msg}`);
+  }
+}
+
+export function isTaskOrphaned(diskTask) {
+  if (!diskTask || diskTask.done) return false;
+  const now = Date.now();
+  const lastActive = diskTask.lastHeartbeatAt || diskTask.startedAt || diskTask.createdAt;
+
+  // LIVE-OWNER INVARIANT:
+  // If the owner process is still alive across platforms, it is not an orphan.
+  // Active workers make tool calls, perform deep deliberation, or run long commands.
+  if (diskTask.ownerPid && pidAlive(diskTask.ownerPid, diskTask.ownerPlatform)) {
+    return false;
+  }
+
+  // Owner process is dead or unrecorded: check if heartbeat is stale beyond threshold.
+  const staleThreshold = ORPHAN_REAP_STALE_MS;
+  if (lastActive && now - lastActive > staleThreshold) {
+    return true;
+  }
+
+  return false;
+}
+
+export function markTaskOrphanedOnDisk(diskTask) {
+  if (!diskTask || diskTask.done) return diskTask;
+  diskTask.done = true;
+  diskTask.status = "failed";
+  diskTask.isError = true;
+  diskTask.finishedAt = Date.now();
+  diskTask.result = {
+    isError: true,
+    text: `Task orphaned: worker process (PID ${diskTask.ownerPid || process.pid || "unknown"}) exited unexpectedly before completion.`,
+    toolCalls: diskTask.toolCallsCount || 0,
+    errors: ["WORKER_PROCESS_TERMINATED"],
+    fileOps: diskTask.fileOps || [],
+  };
+  saveTaskToDisk(diskTask);
+  appendOrphanTerminalEvent(diskTask);
+
+  // Clean up in-memory task handles and execution slot immediately
+  const mem = tasks.get(diskTask.id);
+  if (mem) {
+    if (mem.abortController) {
+      try { mem.abortController.abort(); } catch {}
+      mem.abortController = null;
+    }
+    if (mem.slot) {
+      try { releaseTaskSlot(mem.slot); } catch {}
+      mem.slot = null;
+    }
+  }
+  return diskTask;
+}
+
+/**
+ * Appends a single-line terminal `session_error` event to the orphaned task's
+ * session events.jsonl so a silent infra death (external process-tree kill)
+ * leaves a detectable trace.
+ *
+ * Cross-instance safe: the detecting instance may differ from the owning
+ * instance (shared state dir). We only ever APPEND one line (appendFileSync)
+ * and never rewrite existing content. The double-terminal guard
+ * (hasTerminalEvent) ensures a session that already ended (session_end or
+ * session_error) is not given a second terminal event.
+ *
+ * Never throws: a failure to append the trace must not break the (already
+ * working) orphan-marking of the task file.
+ */
+function appendOrphanTerminalEvent(diskTask) {
+  if (!diskTask || !diskTask.sessionId) return;
+  try {
+    const logger = new EventLoggerService({ sessionId: diskTask.sessionId });
+    // Double-terminal guard: if the session already has a terminal event, do
+    // not append a second one.
+    if (logger.hasTerminalEvent()) return;
+    logger.append({
+      type: "session_error",
+      reason: "orphaned",
+      detail: describeOrphanCause(diskTask),
+      taskId: diskTask.id,
+      ownerPid: diskTask.ownerPid || null,
+    });
+  } catch (err) {
+    // Honest, non-fatal: the trace is best-effort. The task file is already
+    // marked orphaned (the primary signal). Log and continue.
+    const msg = err && err.message ? err.message : String(err);
+    console.error(
+      `[task_registry] Failed to append orphan terminal event for session ${diskTask.sessionId}: ${msg}`
+    );
+  }
+}
+
+/**
+ * Honest, human-readable description of WHY the task was orphaned (the owner
+ * pid state), for the terminal event's `detail` field.
+ */
+function describeOrphanCause(diskTask) {
+  const pid = diskTask.ownerPid;
+  const platform = diskTask.ownerPlatform || process.platform;
+  if (pid) {
+    if (!pidAlive(pid, platform)) {
+      return `owner pid ${pid} (${platform}) is dead (process exited or was killed)`;
+    }
+    return `owner pid ${pid} (${platform}) is alive but heartbeat is stale`;
+  }
+  return `no owner pid recorded; heartbeat is stale`;
+}
+
+/**
+ * Quarantines a corrupt/unreadable task file by renaming it to
+ * `<name>.corrupt-<epochms>` (the LineageDag quarantine pattern) and logs
+ * loudly to stderr. Returns the underlying error message. Shared by
+ * readTaskFromDisk (single read) and listTasksFromDisk (bulk read) so BOTH
+ * surface corruption identically instead of silently swallowing it.
+ *
+        // Report corrupted task disk artifacts with HTTP 500 containing parse details.
+ * not-found. It is preserved (renamed, not deleted) so it can be inspected,
+ * and the corruption is announced on stderr.
+ */
+function quarantineCorruptTaskFile(filePath, err) {
+  const msg = err && err.message ? err.message : String(err);
+  const corruptBackup = `${filePath}.corrupt-${Date.now()}`;
+  console.error(
+    `[task_registry] Corrupt task file ${filePath}: ${msg}. Quarantining to ${corruptBackup}.`
+  );
+  try {
+    fs.renameSync(filePath, corruptBackup);
+  } catch (qerr) {
+    // The rename itself failed (e.g. the file vanished between the read and
+    // the rename, or a transient lock). The corruption is still surfaced via
+    // the stderr log and the returned message; we do not fabricate a success.
+    console.error(
+      `[task_registry] Failed to quarantine ${filePath}: ${
+        qerr && qerr.message ? qerr.message : String(qerr)
+      }`
+    );
+  }
+  return msg;
+}
+
+/**
+ * Reads a single task from disk, distinguishing execution signals:
+ *   - file ABSENT             -> null (not found)
+ *   - transient file lock     -> { transientLock: true, id } (retry next tick)
+ *   - file CORRUPT/unreadable -> { corrupted: true, id, file, error } (quarantined)
+ *   - healthy file            -> parsed task object
+ *
+ * @param {string} taskId Unique task identifier.
+ * @returns {object|null} Parsed task object, lock/corruption descriptor, or null.
+ */
+export function readTaskFromDisk(taskId) {
+  const filePath = path.join(TASK_DIR, `${taskId}.json`);
+  if (!fs.existsSync(filePath)) {
+    return null; // clean not-found
+  }
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    if (err && (err.code === "EBUSY" || err.code === "EPERM")) {
+      // Transient Windows file lock while the worker is mid-write: a real
+      // signal, not corruption. The caller retries on the next tick.
+      return { transientLock: true, id: taskId };
+    }
+    // Unreadable for a non-transient reason: corruption.
+    const msg = quarantineCorruptTaskFile(filePath, err);
+    return { corrupted: true, id: taskId, file: filePath, error: msg };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    // Unparseable: corruption.
+    const msg = quarantineCorruptTaskFile(filePath, err);
+    return { corrupted: true, id: taskId, file: filePath, error: msg };
+  }
+  if (parsed && !parsed.done && isTaskOrphaned(parsed)) {
+    return markTaskOrphanedOnDisk(parsed);
+  }
+  return parsed;
+}
+
+/**
+ * Lists all on-disk tasks, applying retention cleanup.
+ *
+        // Report corrupted task disk artifacts with HTTP 500 containing parse details.
+ * `catch {}` swallowed it, so a corrupt task vanished from the list with no
+ * signal). Now each corrupt file is QUARANTINEd and logged loudly to stderr
+ * (same helper as readTaskFromDisk); a transient lock (EBUSY/EPERM) is still
+ * skipped for this tick (the worker is mid-write) but is a distinct, honest
+ * case. The returned list contains only healthy, parseable tasks.
+ *
+ * Retention cleanup also reaps orphaned `task_*.json.tmp_<pid>_<ts>` files
+ * (a saveTaskToDisk whose writeFileSync succeeded but whose renameSync never
+ * ran). Those orphans never match the `.json` filter, so without this they
+ * accumulate forever; the same mtime age gate reaps them (their lifetime is
+ * sub-second, so the gate is sufficient).
+ */
+export function listTasksFromDisk() {
+  const result = [];
+  let files;
+  try {
+    files = fs.readdirSync(TASK_DIR);
+  } catch {
+    return result; // TASK_DIR unreadable this tick: return what we have.
+  }
+  const now = Date.now();
+  for (const f of files) {
+    // Match completed task JSON files and orphaned atomic write tmp files.
+    const isTmpOrphan = /\.json\.tmp_\d+_\d+$/.test(f);
+    if (!f.endsWith(".json") && !isTmpOrphan) continue;
+    const filePath = path.join(TASK_DIR, f);
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      continue; // vanished between readdir and stat
+    }
+    if (now - stat.mtimeMs > TASK_RETENTION_MS) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch {}
+      continue;
+    }
+    if (isTmpOrphan) continue; // within retention: leave it (sub-second, ages out)
+    let raw;
+    try {
+      raw = fs.readFileSync(filePath, "utf8");
+    } catch (err) {
+      if (err && (err.code === "EBUSY" || err.code === "EPERM")) continue; // transient lock
+      quarantineCorruptTaskFile(filePath, err);
+      continue;
+    }
+    let task;
+    try {
+      task = JSON.parse(raw);
+    } catch (err) {
+      quarantineCorruptTaskFile(filePath, err);
+      continue;
+    }
+    result.push(task);
+  }
+  return result;
+}
+
+/**
+ * Returns true when live work is in flight and the engine must NOT be
+ * stopped/rebooted. Used as the heal gatekeeper:
+ *  - any in-memory task with status "running"/"queued" (not done), OR
+ *  - any disk task that is not done, whose owner pid is alive, and whose
+ *    last heartbeat is within INACTIVITY_TIMEOUT_MS.
+ */
+export function hasLiveWork() {
+  for (const t of tasks.values()) {
+    if (!t.done && (t.status === "running" || t.status === "queued")) return true;
+  }
+  const now = Date.now();
+  for (const dt of listTasksFromDisk()) {
+    if (dt.done) continue;
+    if (!dt.ownerPid || !pidAlive(dt.ownerPid, dt.ownerPlatform)) continue;
+    const lastActive = dt.lastHeartbeatAt || dt.startedAt || dt.createdAt;
+    if (lastActive && now - lastActive <= INACTIVITY_TIMEOUT_MS) return true;
+  }
+  return false;
+}
+
+/**
+  // Periodic liveness check: reap orphaned tasks on the regular retention interval.
+ *
+ * The boot-only orphan sweep (markTaskOrphanedOnDisk, invoked from
+ * readTaskFromDisk) only runs when a task file is READ at process start. A
+ * task whose owner process dies MID-SESSION — e.g. task_anomaly-probe-s1,
+ * frozen at status:"running" with a dead ownerPid and no terminal event — is
+ * never re-read by a boot sweep, so it stays "running" forever and misleads
+ * every later probe (the N2 defect).
+ *
+ * This pass closes that gap. For every NOT-DONE task (in-memory AND on-disk)
+ * whose status is "queued"/"running" and whose heartbeat is STALE
+ * (now - lastHeartbeatAt > ORPHAN_REAP_STALE_MS), it reaps the task ONLY when
+ * the owner pid is dead — reusing the SAME liveness helper (pidAlive) the boot
+ * sweep uses, and writing the SAME terminal marker by CALLING the existing
+ * markTaskOrphanedOnDisk (never duplicating its logic):
+ *   { type:"session_error", reason:"orphaned" } + status/isError terminal +
+ *   finishedAt.
+ *
+ * LIVE-OWNER INVARIANT: a task whose ownerPid is ALIVE is NEVER reaped,
+ * regardless of how stale its heartbeat is. A live owner that is simply slow
+ * (a long deep-thinking turn, a wedged-but-alive worker) is not an orphan;
+ * reaping it would kill a healthy task. The dead-owner check is the gate; the
+ * stale-heartbeat check is only a conservative pre-filter so a live owner with
+ * a fresh heartbeat is never even considered.
+ *
+ * Conservative by design: a task with a FRESH heartbeat (within the stale
+ * window) is left untouched even if its owner pid is dead — the owner may
+ * still be writing its final state, and the next cadence tick re-checks.
+ *
+ * Idempotent: markTaskOrphanedOnDisk no-ops on an already-done task, and the
+ * double-terminal guard in appendOrphanTerminalEvent prevents a second
+ * terminal event, so re-running this pass is safe.
+ *
+ * @returns {number} the count of tasks reaped (marked orphaned) this pass.
+ */
+export function reapOrphans() {
+  const now = Date.now();
+  let reaped = 0;
+
+  // 1. In-memory tasks (this instance's live registry).
+  for (const task of tasks.values()) {
+    if (task.done) continue;
+    if (task.status !== "running" && task.status !== "queued") continue;
+    const lastActive = task.lastHeartbeatAt || task.startedAt || task.createdAt;
+    if (!lastActive || now - lastActive <= ORPHAN_REAP_STALE_MS) continue; // fresh: leave it
+    // LIVE-OWNER INVARIANT: never reap an in-memory task whose owner is alive.
+    const ownerPid = task.ownerPid || process.pid;
+    const ownerPlatform = task.ownerPlatform || process.platform;
+    if (pidAlive(ownerPid, ownerPlatform)) continue;
+    markTaskOrphanedOnDisk(task);
+    reaped++;
+  }
+
+  // 2. On-disk tasks (any instance sharing the state dir).
+  for (const diskTask of listTasksFromDisk()) {
+    if (diskTask.done) continue;
+    if (diskTask.status !== "running" && diskTask.status !== "queued") continue;
+    const lastActive = diskTask.lastHeartbeatAt || diskTask.startedAt || diskTask.createdAt;
+    if (!lastActive || now - lastActive <= ORPHAN_REAP_STALE_MS) continue; // fresh: leave it
+    // LIVE-OWNER INVARIANT: never reap a task whose owner is alive.
+    if (diskTask.ownerPid && pidAlive(diskTask.ownerPid, diskTask.ownerPlatform)) continue;
+    markTaskOrphanedOnDisk(diskTask);
+    reaped++;
+  }
+
+  return reaped;
+}
+
+export function cleanOldTasks() {
+  const now = Date.now();
+  for (const [id, task] of tasks.entries()) {
+    if (task.done && now - task.createdAt > TASK_RETENTION_MS) {
+      tasks.delete(id);
+    }
+  }
+  listTasksFromDisk(); // Triggers disk retention cleanup
+  // Periodic liveness check: reap orphaned tasks on the regular retention interval.
+  reapOrphans();
+}
+
+export function notifyWaiters(task) {
+  saveTaskToDisk(task);
+  if (!task.waiters || task.waiters.length === 0) return;
+  // Terminal wait responses return HTTP 200 with standard task JSON.
+  // Connection:close ensures socket terminates cleanly.
+  const now = Date.now();
+  const elapsed_s = Math.round(
+    ((task.finishedAt || now) - task.createdAt) / 1000
+  );
+  const lastActivitySecAgo = task.lastActivityAt
+    ? Math.max(0, Math.round((now - task.lastActivityAt) / 1000))
+    : null;
+  const body = JSON.stringify(
+    {
+      found: true,
+      id: task.id,
+      sessionId: task.sessionId,
+      cwd: task.cwd,
+      status: task.status,
+      done: task.done,
+      isError: task.isError,
+      reasoningEffort: task.reasoningEffort ?? null,
+      elapsed_s,
+      startedAt: task.startedAt,
+      lastActivitySecAgo,
+      budgetTurns: task.budgetTurns || BASE_TURN_BUDGET,
+      leaseExtensionsCount: task.leaseExtensionsCount || 0,
+      lastActivityPreview: task.lastActivityPreview || "",
+      streamBytes: task.streamBytes || 0,
+      streamTail: (task.streamTail || "")
+        .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
+        .replace(/\s+/g, " ")
+        .slice(-250),
+      fileOps: (task.fileOps || []).slice(-5),
+      toolCallsCount: task.toolCallsCount || 0,
+      lastPromptTokens: task.lastPromptTokens ?? null,
+      contextHeadroom: task.contextHeadroom ?? null,
+      result: task.result || null,
+    },
+    null,
+    2
+  );
+  for (const res of task.waiters) {
+    try {
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Connection": "close",
+        "X-Task-ID": task.id,
+        "X-Task-Status": task.status,
+      });
+      res.end(body);
+    } catch {}
+  }
+  task.waiters = [];
+}
+
+export async function cancelAllTasks(reason = "cancelled by caller") {
+  let count = 0;
+  // Cancel in-memory tasks and collect session IDs for child process cleanup.
+  const memSessionIds = new Set();
+  for (const task of tasks.values()) {
+    if (!task.done) {
+      if (task.child) {
+        killProcessTree(task.child, task.sessionId);
+        task.child = null;
+      }
+      if (task.abortController) {
+        try {
+          task.abortController.abort();
+        } catch {}
+        task.abortController = null;
+      }
+      // Release task execution slot immediately on cancel.
+      if (task.slot) {
+        releaseTaskSlot(task.slot);
+        task.slot = null;
+      }
+      task.status = "cancelled";
+      task.done = true;
+      task.isError = true;
+      task.finishedAt = Date.now();
+      task.result = { isError: true, text: `Task ${task.id} was ${reason}.` };
+      saveTaskToDisk(task);
+      notifyWaiters(task);
+      count++;
+      if (task.sessionId) memSessionIds.add(task.sessionId);
+    }
+  }
+
+  // 2. Cancel disk tasks (only this process's own tasks or dead owners' tasks)
+  const diskSessionIds = new Set();
+  for (const diskTask of listTasksFromDisk()) {
+    if (!diskTask.done) {
+      // LIVE-OWNER INVARIANT: Never cancel or kill tasks owned by another living process.
+      if (diskTask.ownerPid && diskTask.ownerPid !== process.pid && pidAlive(diskTask.ownerPid, diskTask.ownerPlatform)) {
+        continue;
+      }
+      diskTask.status = "cancelled";
+      diskTask.done = true;
+      diskTask.isError = true;
+      diskTask.finishedAt = Date.now();
+      diskTask.result = { isError: true, text: `Task ${diskTask.id} was ${reason}.` };
+      saveTaskToDisk(diskTask);
+      count++;
+      if (diskTask.sessionId) diskSessionIds.add(diskTask.sessionId);
+    }
+  }
+
+  // Terminate child processes matching exact session IDs across WSL and Windows.
+  // sessions survive. Sync kills are fast; cancel_all still returns promptly.
+  const sweepIds = new Set([...memSessionIds, ...diskSessionIds]);
+  for (const sessionId of sweepIds) {
+    try {
+      killSessionProcessTreeSync(sessionId);
+    } catch {}
+  }
+
+  // 4. Clean up slot lease locks (only this process's own or dead owners'
+  // leases — never another live instance's lease)
+  clearReclaimableTaskSlots();
+
+  return count;
+}
+
+/**
+ * Extends the execution turn budget for an active background task.
+ * Allows supervisor (Claude/Gemini) to grant extra turns dynamically
+ * without killing the task or re-dispatching from scratch.
+ *
+ * @param {string} taskId
+ * @param {number} [additionalTurns=25]
+ * @param {string} [reason="supervisor request"]
+ * @returns {{ success: boolean, taskId?: string, previousBudget?: number, budgetTurns?: number, leaseExtensionsCount?: number, error?: string, reason?: string }}
+ */
+export function extendTaskBudget(taskId, additionalTurns = 25, reason = "supervisor request") {
+  if (!taskId) return { success: false, error: "Task ID required" };
+  let task = tasks.get(taskId);
+  if (!task) {
+    task = readTaskFromDisk(taskId);
+  }
+  if (!task) {
+    return { success: false, error: "Task not found" };
+  }
+  if (task.corrupted) {
+    return { success: false, error: `Task file corrupted: ${task.error}` };
+  }
+  if (task.done) {
+    return { success: false, error: "Task already finished" };
+  }
+  const current = task.budgetTurns || BASE_TURN_BUDGET;
+  const newBudget = Math.min(current + additionalTurns, MAX_ELASTIC_TURNS);
+  task.budgetTurns = newBudget;
+  task.leaseExtensionsCount = (task.leaseExtensionsCount || 0) + 1;
+  saveTaskToDisk(task);
+  return {
+    success: true,
+    taskId,
+    previousBudget: current,
+    budgetTurns: newBudget,
+    leaseExtensionsCount: task.leaseExtensionsCount,
+    reason,
+  };
+}
+
+export let statusServerOwned = false;
+
+let mcpServerFactory = null;
+export function setMcpServerFactory(fn) {
+  mcpServerFactory = typeof fn === "function" ? fn : null;
+}
+function getMcpServerFactory() {
+  return mcpServerFactory;
+}
+export const activeSseSessions = new Map();
+
+export const statusHttpServer = http.createServer(async (req, res) => {
+  const parsedUrl = new URL(req.url, `http://localhost:${STATUS_PORT}`);
+  const pathname = parsedUrl.pathname;
+
+  // Global CORS headers for cross-boundary / local tooling access
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    return res.end();
+  }
+
+  // GET /sse — MCP Server-Sent Events stream endpoint
+  if (req.method === "GET" && pathname === "/sse") {
+    if (!mcpServerFactory) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "MCP server factory not initialized" }));
+    }
+    try {
+      const transport = new SSEServerTransport("/message", res);
+      const server = mcpServerFactory();
+      const sessionId = transport.sessionId;
+      activeSseSessions.set(sessionId, { transport, server });
+
+      const cleanup = () => {
+        if (activeSseSessions.has(sessionId)) {
+          activeSseSessions.delete(sessionId);
+          try {
+            server.close();
+          } catch {}
+        }
+      };
+
+      transport.onclose = cleanup;
+      res.on("close", cleanup);
+
+      await server.connect(transport);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    }
+    return;
+  }
+
+  // POST /message — MCP client message endpoint for active SSE session
+  if (req.method === "POST" && pathname === "/message") {
+    const sessionId = parsedUrl.searchParams.get("sessionId");
+    if (!sessionId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "Missing sessionId query parameter" }));
+    }
+    const session = activeSseSessions.get(sessionId);
+    if (!session) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: `Session not found: ${sessionId}` }));
+    }
+    try {
+      await session.transport.handlePostMessage(req, res);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    }
+    return;
+  }
+
+  // GET /health
+  if (req.method === "GET" && pathname === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      status: "ok",
+      service: STATUS_SERVICE_IDENTITY,
+      port: STATUS_PORT,
+      sse: true,
+      active_sse_sessions: activeSseSessions.size,
+    }));
+    return;
+  }
+
+  // GET /tasks
+  if (req.method === "GET" && pathname === "/tasks") {
+    const merged = new Map();
+    for (const dt of listTasksFromDisk()) {
+      merged.set(dt.id, {
+        id: dt.id,
+        sessionId: dt.sessionId,
+        cwd: dt.cwd,
+        status: dt.status,
+        createdAt: dt.createdAt,
+        elapsed_s: Math.round(((dt.finishedAt || Date.now()) - dt.createdAt) / 1000),
+        done: dt.done,
+        isError: dt.isError,
+      });
+    }
+    for (const t of tasks.values()) {
+      merged.set(t.id, {
+        id: t.id,
+        sessionId: t.sessionId,
+        cwd: t.cwd,
+        status: t.status,
+        createdAt: t.createdAt,
+        elapsed_s: Math.round(((t.finishedAt || Date.now()) - t.createdAt) / 1000),
+        done: t.done,
+        isError: t.isError,
+        streamBytes: t.streamBytes || 0,
+        streamTail: (t.streamTail || "")
+          .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
+          .replace(/\s+/g, " ")
+          .slice(-150),
+      });
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ active_tasks: Array.from(merged.values()) }, null, 2));
+  }
+
+  // GET /task/:id/wait (Universal blocking long-poll across memory + disk)
+  const waitMatch = pathname.match(/^\/task\/([^/]+)\/wait$/);
+  if (req.method === "GET" && waitMatch) {
+    if (req.socket) {
+      try {
+        req.socket.setKeepAlive(true, 15_000);
+        req.socket.setTimeout(0);
+      } catch {}
+    }
+    const taskId = waitMatch[1];
+    let task = tasks.get(taskId);
+    if (task && !task.done && isTaskOrphaned(task)) {
+      task = markTaskOrphanedOnDisk(task);
+    }
+    let diskTask = null;
+    if (!task) {
+      diskTask = readTaskFromDisk(taskId);
+      if (diskTask && diskTask.corrupted) {
+        // Report corrupted task disk artifacts with HTTP 500 containing parse details.
+        res.writeHead(500, {
+          "Content-Type": "application/json",
+          "Connection": "close",
+        });
+        return res.end(
+          JSON.stringify({
+            found: true,
+            id: taskId,
+            corrupted: true,
+            file: diskTask.file,
+            error: `Task file corrupted: ${diskTask.error}`,
+          })
+        );
+      }
+      if (!diskTask) {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        return res.end(`Task not found: ${taskId}`);
+      }
+    }
+
+    const isDone = task ? task.done : diskTask.done;
+    if (isDone) {
+  // Terminal wait responses return HTTP 200 with standard task JSON.
+  // Connection:close ensures socket terminates cleanly.
+      const t = task || diskTask;
+      const now = Date.now();
+      const elapsed_s = Math.round(((t.finishedAt || now) - t.createdAt) / 1000);
+      const lastActivitySecAgo = t.lastActivityAt
+        ? Math.max(0, Math.round((now - t.lastActivityAt) / 1000))
+        : null;
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Connection": "close",
+      });
+      return res.end(
+        JSON.stringify(
+          {
+            found: true,
+            id: t.id,
+            sessionId: t.sessionId,
+            cwd: t.cwd,
+            status: t.status,
+            done: t.done,
+            isError: t.isError,
+            reasoningEffort: t.reasoningEffort ?? null,
+            elapsed_s,
+            startedAt: t.startedAt,
+            lastActivitySecAgo,
+            budgetTurns: t.budgetTurns || BASE_TURN_BUDGET,
+            leaseExtensionsCount: t.leaseExtensionsCount || 0,
+            lastActivityPreview: t.lastActivityPreview || "",
+            streamBytes: t.streamBytes || 0,
+            streamTail: (t.streamTail || "")
+              .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
+              .replace(/\s+/g, " ")
+              .slice(-250),
+            fileOps: t.fileOps || [],
+            toolCallsCount: t.toolCallsCount || 0,
+            lastPromptTokens: t.lastPromptTokens ?? null,
+            contextHeadroom: t.contextHeadroom ?? null,
+            result: t.result || null,
+          },
+          null,
+          2
+        )
+      );
+    }
+
+    if (task) {
+      task.waiters = task.waiters || [];
+      task.waiters.push(res);
+      req.on("close", () => {
+        task.waiters = task.waiters.filter((w) => w !== res);
+      });
+      return;
+    }
+
+    // Disk-based task from another instance: poll disk until done
+    const waitStartTime = Date.now();
+    let absentTicks = 0;
+    const diskPoll = setInterval(() => {
+      const current = readTaskFromDisk(taskId);
+      if (current?.transientLock) {
+        // Transient Windows file lock (EBUSY/EPERM) during worker saveTaskToDisk.
+        // Worker is actively writing; skip tick and continue polling.
+        return;
+      }
+      if (current?.corrupted) {
+        // Report corrupted task disk artifacts with HTTP 500 containing parse details.
+        // corruption signal (500) naming the file and the parse error — never
+        // debounced into a fabricated "Task failed."
+        clearInterval(diskPoll);
+        try {
+          res.writeHead(500, {
+            "Content-Type": "application/json",
+            "Connection": "close",
+          });
+          res.end(
+            JSON.stringify({
+              id: taskId,
+              corrupted: true,
+              file: current.file,
+              error: `Task file corrupted: ${current.error}`,
+            })
+          );
+        } catch {}
+        return;
+      }
+
+      if (!current) {
+        absentTicks++;
+        // Debounce: require 3 consecutive absent ticks (6 seconds) before treating as missing/failed
+        if (absentTicks < 3) {
+          return;
+        }
+      } else {
+        absentTicks = 0;
+      }
+
+      if (!current || current.done) {
+        clearInterval(diskPoll);
+  // Terminal wait responses return HTTP 200 with standard task JSON.
+  // Connection:close ensures socket terminates cleanly.
+        const t = current || {
+          id: taskId,
+          done: true,
+          isError: true,
+          status: "failed",
+          result: { isError: true, text: "Task file disappeared during wait." },
+        };
+        const now = Date.now();
+        const elapsed_s = Math.round(((t.finishedAt || now) - t.createdAt) / 1000);
+        const lastActivitySecAgo = t.lastActivityAt
+          ? Math.max(0, Math.round((now - t.lastActivityAt) / 1000))
+          : null;
+        try {
+          res.writeHead(200, {
+            "Content-Type": "application/json",
+            "Connection": "close",
+          });
+          res.end(
+            JSON.stringify(
+              {
+                found: true,
+                id: t.id,
+                sessionId: t.sessionId,
+                cwd: t.cwd,
+                status: t.status,
+                done: t.done,
+                isError: t.isError,
+                reasoningEffort: t.reasoningEffort ?? null,
+                elapsed_s,
+                startedAt: t.startedAt,
+                lastActivitySecAgo,
+                budgetTurns: t.budgetTurns || BASE_TURN_BUDGET,
+                leaseExtensionsCount: t.leaseExtensionsCount || 0,
+                lastActivityPreview: t.lastActivityPreview || "",
+                streamBytes: t.streamBytes || 0,
+                streamTail: (t.streamTail || "")
+                  .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
+                  .replace(/\s+/g, " ")
+                  .slice(-250),
+                fileOps: t.fileOps || [],
+                toolCallsCount: t.toolCallsCount || 0,
+                lastPromptTokens: t.lastPromptTokens ?? null,
+                contextHeadroom: t.contextHeadroom ?? null,
+                result: t.result || null,
+              },
+              null,
+              2
+            )
+          );
+        } catch {}
+        return;
+      }
+      if (Date.now() - waitStartTime > DEFAULT_TIMEOUT_MS) {
+        clearInterval(diskPoll);
+        try {
+          res.writeHead(504, {
+            "Content-Type": "text/markdown; charset=utf-8",
+            "Connection": "close",
+          });
+          res.end("Task wait timed out after maximum duration budget.");
+        } catch {}
+      }
+    }, 2000);
+
+    req.on("close", () => {
+      clearInterval(diskPoll);
+    });
+    return;
+  }
+
+  // GET /task/:id (Immediate JSON status check & telemetry)
+  const getMatch = pathname.match(/^\/task\/([^/]+)$/);
+  if (req.method === "GET" && getMatch) {
+    const taskId = getMatch[1];
+    let task = tasks.get(taskId);
+    if (task && !task.done && isTaskOrphaned(task)) {
+      task = markTaskOrphanedOnDisk(task);
+    }
+    if (!task) {
+      task = readTaskFromDisk(taskId);
+    }
+    if (task && task.corrupted) {
+      // Return HTTP 500 with error details for corrupted task disk state.
+      res.writeHead(500, { "Content-Type": "application/json" });
+      return res.end(
+        JSON.stringify({
+          found: true,
+          id: taskId,
+          corrupted: true,
+          file: task.file,
+          error: `Task file corrupted: ${task.error}`,
+        })
+      );
+    }
+    if (!task) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ found: false, id: taskId }));
+    }
+    const now = Date.now();
+    const elapsed_s = Math.round(((task.finishedAt || now) - task.createdAt) / 1000);
+    const lastActivitySecAgo = task.lastActivityAt
+      ? Math.max(0, Math.round((now - task.lastActivityAt) / 1000))
+      : null;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(
+      JSON.stringify(
+        {
+          found: true,
+          id: task.id,
+          sessionId: task.sessionId,
+          cwd: task.cwd,
+          status: task.status,
+          done: task.done,
+          isError: task.isError,
+          reasoningEffort: task.reasoningEffort ?? null,
+          elapsed_s,
+          startedAt: task.startedAt,
+          lastActivitySecAgo,
+          budgetTurns: task.budgetTurns || BASE_TURN_BUDGET,
+          leaseExtensionsCount: task.leaseExtensionsCount || 0,
+          lastActivityPreview: task.lastActivityPreview || "",
+          streamBytes: task.streamBytes || 0,
+          streamTail: (task.streamTail || "")
+            .replace(/["\\{}\[\]]|type|message|content|delta|thinking|text/g, " ")
+            .replace(/\s+/g, " ")
+            .slice(-250),
+          fileOps: (task.fileOps || []).slice(-5),
+          toolCallsCount: task.toolCallsCount || 0,
+          lastPromptTokens: task.lastPromptTokens ?? null,
+          contextHeadroom: task.contextHeadroom ?? null,
+        },
+        null,
+        2
+      )
+    );
+  }
+
+  // POST /task/:id/extend_lease (Supervisor Dynamic Lease Extension)
+  const extendMatch = pathname.match(/^\/task\/([^/]+)\/extend_lease$/);
+  if (req.method === "POST" && extendMatch) {
+    const taskId = extendMatch[1];
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body || "{}");
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json", Connection: "close" });
+        res.end(JSON.stringify({ success: false, error: "Malformed JSON body" }));
+        return;
+      }
+      const turns = typeof parsed.turns === "number" ? parsed.turns : 25;
+      const resData = extendTaskBudget(taskId, turns, parsed.reason);
+      res.writeHead(
+        resData.success
+          ? 200
+          : resData.error === "Task not found"
+          ? 404
+          : 400,
+        {
+          "Content-Type": "application/json",
+          Connection: "close",
+        }
+      );
+      res.end(JSON.stringify(resData, null, 2));
+    });
+    return;
+  }
+
+  // POST /task/:id/cancel
+  const cancelMatch = pathname.match(/^\/task\/([^/]+)\/cancel$/);
+  if ((req.method === "POST" || req.method === "DELETE") && cancelMatch) {
+    const taskId = cancelMatch[1];
+    const task = tasks.get(taskId);
+    if (task) {
+      if (!task.done) {
+        killProcessTree(task.child, task.sessionId);
+        // Abort in-flight task execution via AbortController.
+        if (task.abortController) {
+          try {
+            task.abortController.abort();
+          } catch {}
+        }
+      // Release task execution slot immediately on cancel.
+        // (idempotent — a cancel after natural completion is a no-op).
+        if (task.slot) {
+          releaseTaskSlot(task.slot);
+          task.slot = null;
+        }
+        task.status = "cancelled";
+        task.done = true;
+        task.isError = true;
+        task.result = { isError: true, text: `Task ${taskId} cancelled by request.` };
+        saveTaskToDisk(task);
+        notifyWaiters(task);
+        // E5: single-task cancel must also clear any stale slot-lease locks
+        // (dead-owner or already-terminal leases) so a cancelled task does not
+        // leave a zombie lease that blocks the next dispatch. Idempotent and
+        // LIVE-OWNER safe: clearReclaimableTaskSlots never touches a live
+        // owner's active lease.
+        try {
+          clearReclaimableTaskSlots();
+        } catch (err) {
+          const msg = err && err.message ? err.message : String(err);
+          console.error(`[task_registry] stale slot-lease cleanup on cancel failed: ${msg}`);
+        }
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ cancelled: true, id: taskId }));
+    }
+    const diskTask = readTaskFromDisk(taskId);
+    if (diskTask && diskTask.corrupted) {
+      // Report corrupt task file on cancel attempt with HTTP 500.
+      res.writeHead(500, { "Content-Type": "application/json" });
+      return res.end(
+        JSON.stringify({
+          cancelled: false,
+          id: taskId,
+          corrupted: true,
+          file: diskTask.file,
+          error: `Task file corrupted: ${diskTask.error}`,
+        })
+      );
+    }
+    if (diskTask) {
+      if (diskTask.sessionId) {
+        // Perform anchored process sweep targeting exact session ID boundaries.
+        try {
+          killSessionProcessTreeSync(diskTask.sessionId);
+        } catch {}
+      }
+      diskTask.status = "cancelled";
+      diskTask.done = true;
+      diskTask.isError = true;
+      diskTask.result = { isError: true, text: `Task ${taskId} cancelled.` };
+      saveTaskToDisk(diskTask);
+      // E5: clear stale slot-lease locks on disk-task cancel (idempotent,
+      // LIVE-OWNER safe — never touches a live owner's active lease).
+      try {
+        clearReclaimableTaskSlots();
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        console.error(`[task_registry] stale slot-lease cleanup on cancel failed: ${msg}`);
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ cancelled: true, id: taskId }));
+    }
+    res.writeHead(404, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ cancelled: false, error: "Not found" }));
+  }
+
+  // POST /tasks/cancel or /tasks/cancel_all (Universal mass cancellation)
+  if (
+    (req.method === "POST" || req.method === "DELETE") &&
+    (pathname === "/tasks/cancel" || pathname === "/tasks/cancel_all")
+  ) {
+    cancelAllTasks("cancelled via HTTP coordinator")
+      .then((count) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ cancelled: true, count }));
+      })
+      .catch((err) => {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ cancelled: false, error: err.message }));
+      });
+    return;
+  }
+
+  res.writeHead(404, { "Content-Type": "text/plain" });
+  res.end("Not found");
+});
+
+statusHttpServer.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    statusServerOwned = false;
+  } else {
+    console.error("Status HTTP Server Error:", err);
+  }
+});
+
+/**
+ * Status Server Keeper Re-Election Protocol.
+ *
+ * Coordinates ownership of STATUS_PORT across concurrent client instances:
+ * - Exactly one process binds STATUS_PORT as keeper; other instances act as followers.
+ * - Followers periodically probe /health to verify keeper availability and service identity.
+ * - If the port becomes dark, followers attempt atomic listen() re-election.
+ * - The OS kernel arbitrates port ownership: the winner becomes keeper, losers remain followers.
+ */
+
+// The identity our /health endpoint advertises. A responder with this exact
+// service string is a healthy keeper of OUR service; anything else is foreign.
+export const STATUS_SERVICE_IDENTITY = "mcp-castor-status";
+
+// How often a follower re-probes the port. ~60s keeps the test suite fast
+// (tests inject a shorter interval) while bounding real-world dark-port
+// recovery to a minute.
+const STATUS_ELECTION_INTERVAL_MS = 60_000;
+// Per-probe fetch timeout. A dark port (connection refused) fails fast; this
+// only bounds a half-open / black-holed socket.
+const STATUS_ELECTION_PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Pure election decision. Given the raw /health body (or null when the port
+ * is dark / the probe failed) and whether we currently own the port, decide
+ * what to do. Exported as a pure function so it can be unit-tested without
+ * any socket or timer.
+ *
+ * @param {object|null} healthBody parsed /health JSON, or null when dark.
+ * @param {boolean} owned whether this process currently owns the port.
+ * @returns {"stay"|"takeover"|"foreign"}
+ *   "stay"     = keep the current role (owner, or our live keeper holds it);
+ *   "takeover" = the port is dark — attempt re-listen;
+ *   "foreign"  = a non-Castor process holds the port — never fight it; report
+ *                loudly and stay a follower.
+ */
+export function decideElection(healthBody, owned) {
+  // Owner path: never re-elect. The one-shot boot listen is the owner's
+  // contract; it is left exactly as-is.
+  if (owned) return "stay";
+  // Follower: a dark port (null) means the keeper is gone — take over.
+  if (healthBody === null) return "takeover";
+  // A healthy responder with OUR identity is a live keeper — stay follower.
+  if (healthBody && (healthBody.service === STATUS_SERVICE_IDENTITY || healthBody.service === "mcp-qwen-status")) return "stay";
+  // A FOREIGN service occupies the port. We never fight a foreign process
+  // for the port (same doctrine as the stream proxy's PortConflictError on
+  // unverified alien listeners): the tick reports it loudly and stays a
+  // follower, re-probing so we can take over the moment the port frees.
+  return "foreign";
+}
+
+/**
+ * Probe the status port's /health endpoint. Returns the parsed JSON body, or
+ * null when the port is dark (connection refused / timeout / non-2xx /
+ * unparseable). Never throws.
+ *
+ * @param {number} [port] defaults to STATUS_PORT.
+ * @param {number} [timeoutMs] defaults to STATUS_ELECTION_PROBE_TIMEOUT_MS.
+ * @returns {Promise<object|null>}
+ */
+export async function probeStatusHealth(port = STATUS_PORT, timeoutMs = STATUS_ELECTION_PROBE_TIMEOUT_MS) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    const body = JSON.parse(text);
+    return body && typeof body === "object" ? body : null;
+  } catch {
+    // Connection refused / timeout / bad JSON: the port is dark for our
+    // purposes. This is a real signal (keeper gone), not an error to swallow.
+    return null;
+  }
+}
+
+/**
+ * Attempt a single atomic re-listen on the status port. Returns true if this
+ * process won the election (became keeper), false if the port is still held
+ * by someone else (EADDRINUSE) or the listen failed for another reason.
+ *
+ * The listen() call is the atomic arbiter: the OS grants the port to exactly
+ * one process, so concurrent callers cannot both win.
+ *
+ * @param {number} [port] defaults to STATUS_PORT.
+ * @returns {Promise<boolean>}
+ */
+export function attemptStatusReListen(port = STATUS_PORT) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let onErr = null;
+    const done = (won) => {
+      if (settled) return;
+      settled = true;
+      if (onErr) statusHttpServer.removeListener("error", onErr);
+      resolve(won);
+    };
+    try {
+      onErr = (err) => {
+        if (err && err.code === "EADDRINUSE") {
+          done(false); // someone else owns it — remain follower
+        } else {
+          // A non-EADDRINUSE error: do not claim ownership. Log it (honest
+          // signal) and stay a follower; the next tick will re-probe.
+          console.error("[status-election] re-listen error:", err);
+          done(false);
+        }
+      };
+      statusHttpServer.once("error", onErr);
+      statusHttpServer.listen({ port, host: "127.0.0.1", exclusive: true }, () => {
+        statusServerOwned = true; // we won the election — we are keeper
+        done(true);
+      });
+    } catch (err) {
+      if (err && err.code === "EADDRINUSE") {
+        done(false);
+      } else {
+        console.error("[status-election] re-listen threw:", err);
+        done(false);
+      }
+    }
+  });
+}
+
+/**
+ * Start the follower re-election loop. Only meaningful when this process is
+ * a follower (statusServerOwned === false after the boot listen). The timer
+ * is .unref()ed so it never keeps the process alive.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.intervalMs] probe interval (default 60s).
+ * @param {number} [opts.port] status port (default STATUS_PORT).
+ * @returns {NodeJS.Timeout|null} the unref'd interval, or null if we are
+ *   already the owner (nothing to elect).
+ */
+export function startStatusServerElection({
+  intervalMs = STATUS_ELECTION_INTERVAL_MS,
+  port = STATUS_PORT,
+} = {}) {
+  // Owner path: nothing to do. The one-shot boot listen already won.
+  if (statusServerOwned) return null;
+
+  const tick = async () => {
+    // If we became owner some other way (or a prior tick won), stop.
+    if (statusServerOwned) {
+      clearInterval(timer);
+      return;
+    }
+    const body = await probeStatusHealth(port);
+    const verdict = decideElection(body, statusServerOwned);
+    if (verdict === "takeover") {
+      const won = await attemptStatusReListen(port);
+      if (won) {
+        clearInterval(timer); // we are keeper now — stop the election loop
+      }
+      // If we did not win, remain a follower and let the next tick re-probe.
+    } else if (verdict === "foreign") {
+      // Honest, recurring signal (follower-only, unref'd timer): a non-Castor
+      // process holds the status port. We do not fight it; each tick says so
+      // until the situation resolves.
+      console.error(
+        `[status-election] foreign service on 127.0.0.1:${port} (service=${body && body.service}): not ours; staying follower`
+      );
+    }
+  };
+
+  const timer = setInterval(() => {
+    // Fire-and-forget each tick; a slow probe must not block the next.
+    tick().catch((err) => {
+      // A probe/listen failure is a real signal, not a crash. Log it and
+      // keep the election alive on the next tick.
+      console.error("[status-election] tick error:", err);
+    });
+  }, intervalMs);
+  timer.unref(); // never hold the process open
+  return timer;
+}
+
+export function initStatusServer() {
+  // Disable Node.js server request and socket timeouts for long-poll blocking waits
+  statusHttpServer.requestTimeout = 0;
+  statusHttpServer.headersTimeout = 0;
+  statusHttpServer.keepAliveTimeout = 0;
+  statusHttpServer.timeout = 0;
+  const onBootError = (err) => {
+    if (err && err.code === "EADDRINUSE") {
+      statusServerOwned = false;
+    } else {
+      console.error("[status-server] boot listen error:", err);
+      statusServerOwned = false;
+    }
+    startStatusServerElection();
+  };
+
+  statusHttpServer.once("error", onBootError);
+
+  try {
+    statusHttpServer.listen({ port: STATUS_PORT, host: "127.0.0.1", exclusive: true }, () => {
+      statusHttpServer.removeListener("error", onBootError);
+      statusServerOwned = true;
+    });
+  } catch (err) {
+    statusHttpServer.removeListener("error", onBootError);
+    if (err.code === "EADDRINUSE") {
+      statusServerOwned = false;
+    } else {
+      console.error("[status-server] boot listen threw:", err);
+      statusServerOwned = false;
+    }
+    startStatusServerElection();
+  }
+  setInterval(cleanOldTasks, 300_000).unref();
+}

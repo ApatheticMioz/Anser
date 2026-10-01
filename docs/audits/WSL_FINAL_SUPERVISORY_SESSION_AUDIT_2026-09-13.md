@@ -29,7 +29,7 @@ During this 4-hour supervisory window, the user deployed **Google Antigravity ID
                       │                                │
                       ▼                                │
        ┌───────────────────────────────┐               │
-       │ Anser Microkernel (:18021)    │◄──────────────┘
+       │ Castor Microkernel (:18021)    │◄──────────────┘
        │ - Zero-turn long-poll wait    │  (Direct state monitoring
        │ - Task registry & events      │   via filesystem & metrics)
        └──────────────┬────────────────┘
@@ -51,7 +51,7 @@ While Claude Code acted as the primary driver dispatching tasks to Qwen, Antigra
 ### Issue 1: The 93-Minute Figure 2 Stall & Tool Underutilization
 - **Task ID**: `task_fig2_enlarge_s1_1789304736843`
 - **Target**: `paper/figures/fig2_empty_dice.py` (Enlarging SIIM radiograph tiles to ~6cm).
-- **User Frustration**: *"fym 100% healthy, WHY IS IT SO SLOW?"* (16:52), *"WHY IS IT TAKING SO LONG AGAIN? WHAT IS QWEN DOING? DOESNT IT HAVE TOOLS THAT ANSER PROVIDES?"* (19:11), *"93 mins.. pissing me off"* (19:41).
+- **User Frustration**: *"fym 100% healthy, WHY IS IT SO SLOW?"* (16:52), *"WHY IS IT TAKING SO LONG AGAIN? WHAT IS QWEN DOING? DOESNT IT HAVE TOOLS THAT CASTOR PROVIDES?"* (19:11), *"93 mins.. pissing me off"* (19:41).
 - **Forensic Diagnosis**:
   1. **The Interactive Probe Trap**: Qwen has native AST and direct editing primitives (`edit_file`, `apply_patch`), but because Claude's prompt was an open-ended visual target (*"enlarge tiles and balance layout so it looks readable on page"*), Qwen abandoned direct editing.
   2. **30+ Consecutive Bash Scripts**: Turns 12 through 42 consisted of over 30 consecutive `bash` invocations generating scratch Python test scripts, rendering images, and running `pdflatex`.
@@ -111,7 +111,7 @@ While Claude Code acted as the primary driver dispatching tasks to Qwen, Antigra
   Antigravity formulated the prescriptive prompt that the user injected into Claude Code to rein in Qwen:
   ```text
   1. Anti-Probe Constraint (Mandatory):
-     "Execute the modification in ONE pass using Anser's native tools (edit_file, write_file, or apply_patch).
+     "Execute the modification in ONE pass using Castor's native tools (edit_file, write_file, or apply_patch).
       Do NOT run incremental bash/python test probe scripts or interactive simulation loops.
       Make the code edit directly, then run the build/verification command once to test."
 

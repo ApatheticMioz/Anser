@@ -2,11 +2,11 @@
 
 > [!NOTE]
 > **[OLD / HISTORICAL PRE-RELEASE BASELINE (v5.2.0)]**:
-> This telemetry log captures a pre-release development run (v5.2.0) prior to the upcoming stable Anser release. It does not reflect the upcoming stable release and is preserved for empirical baseline and debugging analysis.
+> This telemetry log captures a pre-release development run (v5.2.0) prior to the upcoming stable Castor release. It does not reflect the upcoming stable release and is preserved for empirical baseline and debugging analysis.
 
 ## 1. Executive Summary
 
-This telemetry log captures an unbroken **13.1-hour autonomous pairing session** between **Claude Code** (Lead Architect running `glm-5.3` and `glm-5.3-flash`) and **local Qwen3.8-27B** (Anser Coworker running via Goose MCP on an RTX 3090 24GB).
+This telemetry log captures an unbroken **13.1-hour autonomous pairing session** between **Claude Code** (Lead Architect running `glm-5.3` and `glm-5.3-flash`) and **local Qwen3.8-27B** (Castor Coworker running via Castor MCP on an RTX 3090 24GB).
 
 The pairing stack drove the complete **6-phase UI overhaul** of an enterprise web application, implementing unified design tokens, dark-mode infrastructure, assistant-ui integration, dashboard bento refactor, tasks view drawer, settings/suggestions refactor, and paying down 10 pre-existing lint errors (dropping from 86 to 76 baseline problems) across commits `d2383c6` $\to$ `9869945`.
 
@@ -58,7 +58,7 @@ Detailed audit of the Claude Code transcripts reveals the specific failure and f
 ### 4. vLLM Stream Idle Timeout & 4 Stalled Wait Intervals (Transcript Lines 1020–1037, `17:11:37 UTC`)
 - **Transcript Record**:
   > *The review's final answer died on a vLLM stream idle timeout (known infra flake — 4 stalled attempts). Checking state, then nudging the session to emit what it has:*
-  > *Task status payload: `[qwen task] id=task_ui_ovh_review_p5_1788799281847 status=error elapsed_s=1772 isError=true Anser execution error: vLLM stream idle timeout: no meaningful SSE frame for 900000ms`*
+  > *Task status payload: `[qwen task] id=task_ui_ovh_review_p5_1788799281847 status=error elapsed_s=1772 isError=true Castor execution error: vLLM stream idle timeout: no meaningful SSE frame for 900000ms`*
 - **Operational Symptom**: `task_ui_ovh_review_p5_1788799281847` ran for 1,772 seconds (~29.5 minutes) executing 11 tool calls. Claude Code blocked across 3 consecutive 600-second TaskOutput timeouts (600s + 600s + 600s = 1800s / 30 mins) — the "4 stalled attempts" — until the MCP inactivity watchdog tripped at 900s of silence.
 - **Recovery**: Dispatched a compacted prompt (`task_ui_ovh_review_p5_1788801115415`) targeting specific greps rather than full file reads. It completed in 197.9s with 4 tool calls and issued **Verdict: PASS**.
 - **Root Cause & Fix**: Monolithic prompt bundling causing quadratic prefill and massive thinking loops. Resolved by prompt-level scoping discipline and `xhigh` reasoning budget management.
