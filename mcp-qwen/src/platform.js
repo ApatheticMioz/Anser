@@ -229,6 +229,19 @@ export function streamProxyPath() {
   return `${toPosixWslPath(repoRoot)}/stream_proxy.js`;
 }
 
+/**
+ * WSL-side path to the launcher script (scripts/wsl/start_huge.sh).
+ * Sourced directly from the repository so it does not rely on brittle symlinks.
+ * Env QWEN_LAUNCHER_PATH overrides.
+ */
+export function launcherScriptPath() {
+  if (process.env.QWEN_LAUNCHER_PATH) return process.env.QWEN_LAUNCHER_PATH;
+  const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const ecosystemRoot = path.dirname(repoRoot);
+  return `${toPosixWslPath(ecosystemRoot)}/scripts/wsl/start_huge.sh`;
+}
+
+
 // ---------------------------------------------------------------------------
 // API-key candidate paths
 // ---------------------------------------------------------------------------

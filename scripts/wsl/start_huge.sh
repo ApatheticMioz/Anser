@@ -8,6 +8,8 @@ cd ~/qwen-serving
 export SPEC=dflash2
 export CTX=huge
 export PREFIX_CACHE=1
+# Vision enabled via CPU-offloaded vision tower (VISION_OFFLOAD=1). Pinned in host RAM; zero VRAM penalty on 245K context pool.
+export VISION=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False
 export VLLM_WSL2_ENABLE_PIN_MEMORY=1
 export VLLM_DFLASH2_LOOKUP_ADAPTIVE=0  # A/B tested 2026-08-23: pins verify block length, fixes documented prefix-cache bug at zero cost, measured +26pct faster (160.7 vs 127.6 tok/s), no downside in 6 trials/config - see docs/gotchas or single-user/start_qwen.sh comments
@@ -39,6 +41,13 @@ export REQ_METRICS=1
 # accuracy lift over off, without xhigh's verbosity tax on simple delegated tasks.
 export EXTRA_ARGS='--default-chat-template-kwargs {"reasoning_effort":"medium"}'
 # Universal Stateful UTF-8 & SSE Stream Sanitizer Proxy (port 18022 -> 18020)
-pkill -9 -f 'stream_proxy.js' 2>/dev/null || true
-setsid node ~/qwen-serving/stream_proxy.js < /dev/null > /tmp/stream_proxy.log 2>&1 &
+STREAM_PROXY_SCRIPT="${STREAM_PROXY_PATH:-/mnt/d/LLM_Ecosystem/mcp-qwen/stream_proxy.js}"
+if [ ! -f "$STREAM_PROXY_SCRIPT" ] && [ -f ~/qwen-serving/stream_proxy.js ]; then
+  STREAM_PROXY_SCRIPT=~/qwen-serving/stream_proxy.js
+fi
+if [ -f "$STREAM_PROXY_SCRIPT" ]; then
+  pkill -9 -f 'stream_proxy.js' 2>/dev/null || true
+  setsid node "$STREAM_PROXY_SCRIPT" < /dev/null > /tmp/stream_proxy.log 2>&1 &
+fi
 exec bash single-user/start_qwen.sh
+

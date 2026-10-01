@@ -20,6 +20,7 @@ import {
   MAX_REASONING_TOKENS,
   MODEL,
   BASE_URL,
+  STREAM_PROXY_PORT,
 } from "../../config.js";
 
 export class VllmProviderService {
@@ -27,9 +28,17 @@ export class VllmProviderService {
     // Engine identity is sourced from config.js (env > ~/.anser/config.json >
     // built-in defaults) so the provider never hardcodes a model name or
     // endpoint that could drift from the rest of the harness.
-    this.baseUrl = options.baseUrl || BASE_URL;
+    this.baseUrl =
+      options.baseUrl ||
+      (BASE_URL === `http://localhost:${VLLM_PORT}/v1`
+        ? `http://127.0.0.1:${STREAM_PROXY_PORT}/v1`
+        : BASE_URL);
     this.fallbackUrl = options.fallbackUrl || `http://127.0.0.1:${VLLM_PORT}/v1`;
-    this.model = options.model || MODEL;
+    const rawModel = options.model || MODEL;
+    this.model =
+      rawModel && rawModel.toLowerCase() === "qwen3.8-27b"
+        ? "qwen3.8-27b"
+        : rawModel;
     this.defaultTemperature = options.temperature ?? 0.0;
     this.defaultMaxTokens = options.maxTokens ?? MAX_TOKENS;
   }

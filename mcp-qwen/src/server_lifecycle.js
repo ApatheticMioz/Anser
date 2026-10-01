@@ -20,7 +20,7 @@ import {
   IS_TEST_ENV,
 } from "./config.js";
 import { getApiKeySync, runWslCommand } from "./wsl_bridge.js";
-import { streamProxyPath } from "./platform.js";
+import { streamProxyPath, launcherScriptPath } from "./platform.js";
 
 // Indirection for the WSL command runner; tests inject a stub to run offline.
 let wslRun = runWslCommand;
@@ -647,8 +647,9 @@ export async function ensureServerRunning() {
   }
 
   try {
+    const launcher = launcherScriptPath();
     await wslRun(
-      `cd ~/qwen-serving && nohup bash launchers/start_huge.sh > ${ENGINE_LOG_PATH} 2>&1 < /dev/null & disown; sleep 1; true`
+      `cd ~/qwen-serving && if [ -f "${launcher}" ]; then nohup bash "${launcher}"; elif [ -f launchers/start_huge.sh ]; then nohup bash launchers/start_huge.sh; else nohup bash single-user/start_qwen.sh; fi > ${ENGINE_LOG_PATH} 2>&1 < /dev/null & disown; sleep 1; true`
     );
     const deadline = Date.now() + BOOT_TIMEOUT_MS;
     while (Date.now() < deadline) {

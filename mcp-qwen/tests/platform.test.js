@@ -29,6 +29,7 @@ const {
   winHome,
   winHomeWsl,
   streamProxyPath,
+  launcherScriptPath,
   apiKeyCandidates,
   buildSpawnProfile,
   setWslUserProbe,
@@ -232,6 +233,11 @@ function assertOk(cond, name) {
     } finally {
       process.chdir(before);
     }
+    // Test launcherScriptPath
+    assertOk(
+      launcherScriptPath().endsWith("/scripts/wsl/start_huge.sh"),
+      `launcherScriptPath() ends with /scripts/wsl/start_huge.sh (got ${launcherScriptPath()})`
+    );
   } finally {
     process.env = saved;
   }

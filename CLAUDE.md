@@ -3,9 +3,16 @@
 ## 1. System Architecture & Model Role Division
 
 You operate within a hierarchical multi-agent pair-programming architecture in Claude Code:
-- **Plan Mode Orchestrator (GLM 5.3 + Qwen)**: High-reasoning pure text architecture, task decomposition, and formal interface design.
-- **Execution Mode Orchestrator (GLM 5.3-flash + Qwen)**: Native multimodal vision authority, rapid supervisory steering, and deliverable synthesis.
-- **Autonomous Execution Coworker (Qwen3.8-27B)**: Pure text-only execution harness running locally via vLLM + DFlash2 + KVarN (`http://localhost:18020/v1`, RTX 3090 24GB, Universal 245K Context, `MAX_SEQS=1`) inside the Anser 2026.2 microkernel harness (`qwen38-local`) at $0 token cost.
+- **Plan Mode Orchestrator (GLM 5.3)**: High-reasoning pure text architecture, task decomposition, and formal interface design.
+- **Execution Mode Orchestrator (GLM 5.3-flash)**: Native multimodal vision authority, rapid supervisory steering, and deliverable synthesis.
+- **Autonomous Execution Coworker (Qwen 3.8-27B)**: Local peer programmer accessed via the `qwen38-local` MCP server at $0 token cost (text + vision capable).
+
+### Role Capabilities at a Glance
+| Role | Model | Modality | Primary Focus |
+|---|---|---|---|
+| **Plan Mode Orchestrator** | GLM 5.3 | **Text only** | System architecture, specs, and milestone planning. |
+| **Execution Mode Orchestrator** | GLM 5.3-flash | **Vision** | Supervisory steering, visual validation, and synthesis. |
+| **Autonomous Coworker** | Local Qwen 3.8-27B | **Text + Vision** | Hands-on execution, code AST surgery, and local visual inspection ($0 cost). |
 
 ### Prescriptive Responsibilities
 - **Plan Mode Orchestrator (GLM 5.3 - Strictly Pure Text)**:
@@ -13,16 +20,16 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
   - Granular milestone planning and ground-truth validation against source files and code ASTs.
   - **Plan Authorship**: Author and maintain implementation plans in cloud context; synthesize facts and test outputs gathered from coworker exploration turns.
   - **Zero Cloud Bulk Exploration**: Strictly avoid bulk-reading repository source files or hoarding tokens into cloud context; offload codebase exploration systematically to local Qwen in bite-sized, single-concern inquiry slices.
-  - **STRICT Vision Prohibition in Plan Mode**: GLM 5.3 operates in pure text mode and lacks multimodal vision capabilities. It MUST NOT invoke visual tools (`Read` on `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, screenshot analysis, or OCR). All visual verifications are explicitly deferred to Execution Mode.
+  - **STRICT Vision Prohibition in Plan Mode**: GLM 5.3 operates in pure text mode and lacks multimodal vision capabilities. It MUST NOT invoke visual tools (`Read` on `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, screenshot analysis, or OCR). All visual verifications are explicitly deferred to Execution Mode or offloaded to the local peer programmer.
 - **Execution Mode Orchestrator (GLM 5.3-flash - Native Multimodal Authority)**:
   - Supervisory steering, turn-by-turn orchestration, and quality gates.
-  - **MANDATORY Multimodal Vision Authority**: Directly inspect and visually analyze all UI screenshots, rendered components, compiled document pages, diagrams, and visual assets using native vision capabilities.
+  - **Multimodal Vision Authority**: Directly inspect and visually analyze all UI screenshots, rendered components, compiled document pages, diagrams, and visual assets using native vision capabilities.
   - Formulating hypotheses, verification specifications, and synthesizing final deliverables.
-- **Autonomous Execution Coworker (Qwen via Anser & MCP @ $0)**:
+- **Autonomous Execution Coworker (Local Qwen via MCP @ $0)**:
   - Hands-on execution: codebase exploration, AST manipulation, code editing, and shell operations across Windows & WSL.
-  - **STRICT Pure Text-Only Execution**: 24GB VRAM is 100% dedicated to Universal 245K context and speculative decoding (`--language-model-only`). No vision encoder is loaded.
-  - Large-context repository and document ingestion (50k–200k tokens locally for $0).
-  - Multi-provider live web & documentation research via native `web_search` (Brave, Tavily, Context7 framework docs, SearXNG, DuckDuckGo) and `web_fetch`; optional stdio extensions via `McpBridge`.
+  - **Dual Code & Vision Execution**: Inspect visual assets, screenshots, and diagrams alongside code at $0 token cost.
+  - Large-context repository and document ingestion locally for $0.
+  - Multi-provider live web & documentation research via native `web_search` and `web_fetch`; optional stdio extensions via `McpBridge`.
   - Authenticated GitHub workflows and atomic git operations (`gh` CLI / `git`).
   - **Autonomous Peer Engineering & Fact-Gathering**: Execute targeted exploration, AST surgery, code editing, and test runs locally. Proactively identify architectural risks, challenge flawed assumptions with evidence, propose cleaner alternatives, and return grounded findings concisely back to the orchestrator without taking on meta-document authorship.
 
@@ -46,11 +53,12 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
    - **Fast Tasks (< 15s)**: `qwen_coworker` completes within the sync window and returns the complete deliverable directly in Turn 1.
    - **Long Tasks (>= 15s)**: `qwen_coworker` safely yields a durable `taskId` and a `wait_command` (`curl -fsS http://127.0.0.1:18021/task/<id>/wait`).
    - **Zero Polling Tax**: Immediately run `wait_command` via native shell tool (`Bash`). The OS-level process blocks at $0 token cost and automatically wakes you upon task completion. **Manual LLM polling loops and exploratory file reading while waiting are strictly prohibited**.
-3. **Universal Vision & Multimodal Invariant**:
-   - Local Qwen runs in pure text mode (`--language-model-only`). Never pass image paths or visual inspection tasks to `qwen_coworker`.
+3. **Universal Vision & Multimodal Alignment**:
+   - Model vision capabilities are partitioned as: **GLM 5.3 (text only)** in Plan Mode, **GLM 5.3-flash (vision)** in Execution Mode, and **local peer programmer Qwen 3.8-27B (text + vision)**.
    - In Plan Mode (GLM-5.3), visual inspection is prohibited; analyze text source code, data formats, and configs directly.
    - In Execution Mode (5.3-flash), the orchestrator inspects visual outputs directly, extracts design tokens or visual defects into structured text, and passes textual specifications to the coworker.
-   - Never read binary files (`.pdf`, `.png`, `.jpg`, `.webp`, …) on a text-only orchestrator or engine: binary bytes are not valid text payloads and invalidate the model transcript. The Anser harness enforces this invariant with an immediate magic-number fail-fast (`BinaryFileError`) on coworker-side reads. Inspect binary outputs using native multimodal vision, or extract plaintext via shell utilities (`pdftotext`, `strings`).
+   - The local peer programmer also has vision capability to inspect visual assets, screenshots, and rendered pages locally at $0 token cost.
+   - Never read raw binary files (`.pdf`, `.png`, `.jpg`, `.webp`, …) into text transcripts or code string buffers: binary bytes are not valid text payloads and invalidate the model transcript. The Anser harness enforces this invariant with an immediate magic-number fail-fast (`BinaryFileError`) on coworker-side reads. Inspect binary outputs using native multimodal vision, or extract plaintext via shell utilities (`pdftotext`, `strings`).
 4. **Ground Truth Hierarchy**:
    - Ground truth consists exclusively of active source code, configuration files, raw data matrices, test suites, and verifiable build artifacts.
    - Secondary documentation, historical audit reports, and markdown notes are reference ledgers, not executable ground truth. Claims and invariants must be validated against current source code and live test runs.
@@ -76,10 +84,9 @@ You operate within a hierarchical multi-agent pair-programming architecture in C
    - NEVER inject artificial stop-thinking or landing directives (e.g. "wrap up now", "stop deliberating") into continuation turns. Deliberation must conclude naturally based on internal problem resolution.
    - If token budget is exhausted during reasoning, the runtime fails fast with an explicit `reasoning_budget_exhausted` status rather than synthesizing a truncated completion.
 10. **Multi-Instance Concurrency & Live-Owner Invariant**:
-    - Multiple MCP client sessions (Claude Code and Antigravity) share the `MAX_SEQS=1` GPU engine and `~/.qwen/` state directory.
-    - All engine boot and heal operations are serialized via atomic `O_EXCL` file locks with Rename-to-Tombstone recovery.
-    - An active slot lease is NEVER stolen while its owner PID is alive (`pidAlive(lease.pid)` is true).
-    - Stream proxy listener port (18022) is verified for `{ service: "mcp-qwen-stream-proxy" }` identity before any lifecycle signal is sent; unverified alien processes trip `PortConflictError` immediately.
+    - Multiple MCP client sessions (Claude Code and Antigravity) share the local execution engine and state directory.
+    - All engine boot and heal operations are serialized via atomic locks.
+    - An active slot lease is never stolen while its owner process is alive.
 11. **Pre-Flight File Hoarding Prohibition**:
     - Following multimodal visual inspection, the orchestrator is strictly prohibited from running repetitive `Read`/`Glob` calls to ingest raw source files wholesale into cloud context.
     - The orchestrator translates visual defects into behavioral requirements and AST coordinate targets; Qwen performs local code inspection and AST surgery directly at $0 token cost.

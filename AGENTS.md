@@ -16,9 +16,8 @@
 
 **Anser** is a local-first, **$0-token-cost** agent microkernel that lets a
 high-reasoning cloud orchestrator (the *Lead Architect*) drive a locally-served
-**Qwen3.8-27B** (245K context, vLLM + DFlash2 + KVarN) to do code exploration,
-structural AST surgery, testing, and file editing — all inside a zero-trust
-sandbox.
+**Qwen3.8-27B** peer programmer to do code exploration, structural AST
+surgery, testing, and file editing — all inside a zero-trust sandbox.
 
 ```
 Lead Architect (cloud: Claude / Gemini / Antigravity)
@@ -27,7 +26,7 @@ Lead Architect (cloud: Claude / Gemini / Antigravity)
 mcp-qwen/  (Node.js MCP server + Anser microkernel)
         |  in-process V8 tool calls (0.01 ms) + zero-turn HTTP wait (:18021)
         v
-vLLM engine (WSL2 / Linux, :18020)  ->  Qwen3.8-27B @ 245K
+Local Serving Engine (WSL2 / Linux, :18020)  ->  Qwen3.8-27B
 ```
 
 The **only** `package.json` lives in `mcp-qwen/`. There is **no root
@@ -43,8 +42,8 @@ which one it is before acting.
 
 | Persona | Runtime | Mandate | Hard Limits |
 |---|---|---|---|
-| **Lead Architect** | Cloud (Claude Code: GLM 5.3 Plan / GLM 5.3-flash Exec; Antigravity: Gemini 3.8 Flash) | Architecture, task decomposition, plan & manifest authorship, supervisory steering, final synthesis. | **Never** bulk-read source into cloud context; **never** author code; offloads exploration to the Coworker in single-concern slices. |
-| **Autonomous Execution Coworker** | Local Qwen3.8-27B via Anser (`qwen38-local` MCP) | Hands-on execution & peer engineering: explore, AST surgery, edit, test, shell. Proactively challenges flawed assumptions, proposes architectural alternatives, and returns grounded facts. | **Pure text only** (`--language-model-only`); **never** vision; **never** authors high-level plans/roadmaps; **never** escapes the sandbox root. |
+| **Lead Architect** | Cloud (Claude Code: GLM 5.3 text-only Plan / GLM 5.3-flash vision Exec; Antigravity: Gemini 3.8 Flash vision) | Architecture, task decomposition, plan & manifest authorship, supervisory steering, final synthesis. | **Never** bulk-read source into cloud context; **never** author code; offloads exploration to the Coworker in single-concern slices. |
+| **Autonomous Execution Coworker** | Local Qwen3.8-27B via Anser (`qwen38-local` MCP) | Hands-on execution & peer engineering: explore, AST surgery, edit, test, shell. Local peer programmer also has vision capability enabled. Proactively challenges flawed assumptions, proposes architectural alternatives, and returns grounded facts. | **Never** authors high-level plans/roadmaps; **never** escapes the sandbox root. |
 | **Autonomous Optimizer (Evo)** | Local, inside the Coworker | Closed-loop mutation: propose -> evaluate -> select/revert against a fitness metric. | **Snapshot before mutating**; **revert on regression**; never edits files outside the candidate's snapshot list. |
 
 > **Honest attribution:** No agent may claim "we" or coworker collaboration
@@ -253,7 +252,7 @@ mcp-qwen/
 - **NEVER** let a file or shell operation escape the workspace root. The
   5-layer defense (PathEscape -> Symlink Realpath -> Root-Overwrite Guard ->
   Dangerous-Shell Filter -> AST Syntax Gate + Evo Rollback) is non-negotiable.
-- **NEVER** route vision/image tasks to the local Qwen (`--language-model-only`).
+- **NEVER** dump raw binary file bytes (`.pdf`, `.png`, etc.) into plaintext string buffers or transcripts (`BinaryFileError` guard).
 - **NEVER** silently catch, suppress, or mask errors or upstream HTTP status
   codes (Rule 8).
 - **NEVER** impose "write no files" or "no mutation" restrictions on scratchpad usage during exploration or debugging (forces reasoning context explosion, ceiling deaths, and runaway inline-bash probe streaks). The coworker has full, unrestricted write freedom in the workspace scratchpad (`.scratch/`) to empirically isolate bugs and verify hypotheses before touching production code.

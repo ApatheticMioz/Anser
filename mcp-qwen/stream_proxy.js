@@ -353,12 +353,15 @@ const server = http.createServer((req, res) => {
       const rawBody = Buffer.concat(chunks);
       try {
         const bodyStr = rawBody.toString("utf8");
+        const visionEnabled =
+          process.env.VISION === "1" || process.env.ENABLE_VISION === "1";
         if (
-          bodyStr.includes('"image"') ||
-          bodyStr.includes('"image_url"') ||
-          bodyStr.includes('"input_image"') ||
-          bodyStr.includes('"image_file"') ||
-          bodyStr.includes("data:image/")
+          !visionEnabled &&
+          (bodyStr.includes('"image"') ||
+            bodyStr.includes('"image_url"') ||
+            bodyStr.includes('"input_image"') ||
+            bodyStr.includes('"image_file"') ||
+            bodyStr.includes("data:image/"))
         ) {
           const body = JSON.parse(bodyStr);
           let modified = false;
