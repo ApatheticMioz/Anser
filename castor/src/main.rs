@@ -9,7 +9,7 @@ mod mcp;
 mod platform;
 mod proxy;
 mod runner;
-mod skills;
+pub mod skills;
 mod state;
 mod task;
 mod telemetry;
