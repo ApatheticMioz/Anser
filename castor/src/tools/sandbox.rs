@@ -262,6 +262,7 @@ pub fn check_binary(path: &Path) -> Result<PathBuf, SandboxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::shell::{self, ShellPolicyError};
 
     fn test_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -416,10 +417,11 @@ mod tests {
     // Each row: (input, op, expected, layer, path_operand, runnable)
     //   - `layer` names the refusal layer for blocked vectors, or "in-tree"
     //     for allowed ones.
-    //   - `runnable` = true when the vector maps to a Rust path layer
-    //     (`normalize_traversal`) and can be exercised live; false for
-    //     JS-only rules (shell / deadman-fuse / dry-run / module-isolation)
-    //     that have no Rust equivalent and are mapped to the closest layer.
+    //   - `runnable` = true when the vector can be exercised live against a
+    //     Rust policy: `ShellPolicy` rows through `shell::validate`, path
+    //     rows through `normalize_traversal`. false for JS-only rules
+    //     (deadman-fuse / dry-run / module-isolation) that have no Rust
+    //     equivalent and are mapped to the closest layer.
     // ========================================================================
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -436,8 +438,9 @@ mod tests {
         /// For allowed shell vectors: the path operand that must resolve
         /// in-tree (i.e., not be a protected root).
         path_operand: Option<&'static str>,
-        /// Whether this vector can be exercised live through
-        /// `normalize_traversal` (Rust path layer).
+        /// Whether this vector can be exercised live against a Rust policy:
+        /// `ShellPolicy` rows through `shell::validate`, path-layer rows
+        /// through `normalize_traversal`.
         runnable: bool,
     }
 
@@ -519,8 +522,8 @@ mod tests {
         });
 
         // --- Category 5: Dangerous Shell Command Blocking (43) ---
-        // JS-only: no Rust shell-validator layer. Mapped to the closest
-        // Rust layer (path-containment / ShellPolicy).
+        // Exercised live against `shell::validate` (the Rust shell-command
+        // policy); each must yield a typed refusal.
         let dangerous = [
             "rm -rf /",
             "rm -rf /*",
@@ -563,7 +566,7 @@ mod tests {
             "rm -rf --no-preserve-root=/",
             "rm -rf ~user",
             "rm -rf ~root",
-            "rm -rf /mnt/c/\u{FF55}indows",
+            "rm -rf /mnt/c/\u{FF37}indows",
             "bash -c \"cd /tmp && rm -rf /\"",
         ];
         for cmd in &dangerous {
@@ -573,7 +576,7 @@ mod tests {
                 expected: Outcome::Blocked,
                 layer: "ShellPolicy",
                 path_operand: None,
-                runnable: false,
+                runnable: true,
             });
         }
 
@@ -764,9 +767,26 @@ mod tests {
             }
         }
 
-        // 5. Runnable path-based vectors: exercise the Rust policy live.
+        // 5. Runnable vectors: exercise the Rust policy live.
+        //    - `ShellPolicy` rows are asserted against `shell::validate`
+        //      (the Rust shell-command policy) and must yield a typed refusal.
+        //    - Path-layer rows are asserted against `normalize_traversal`.
         let root = test_root("security_table");
         for v in vectors.iter().filter(|v| v.runnable) {
+            if v.layer == "ShellPolicy" {
+                let err = shell::validate(v.input).unwrap_err();
+                match &err {
+                    ShellPolicyError::ProhibitedPattern(_)
+                    | ShellPolicyError::ProtectedRoot(_, _)
+                    | ShellPolicyError::UnexpandedReference(_)
+                    | ShellPolicyError::DeadManFuse => {}
+                    other => panic!(
+                        "runnable ShellPolicy vector '{}' expected a typed refusal, got {other:?}",
+                        v.input
+                    ),
+                }
+                continue;
+            }
             let err = normalize_traversal(&root, v.input).unwrap_err();
             match (v.layer, &err) {
                 ("PathEscape", SandboxError::PathEscape(_)) => {}
