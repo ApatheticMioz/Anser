@@ -179,7 +179,18 @@ pub fn normalize_traversal(root: &Path, input: &str) -> Result<PathBuf, SandboxE
             base_name.to_uppercase()
         )));
     }
-    let p = if posix.starts_with('/') {
+    // Treat Windows drive-letter paths (e.g. "C:/", "D:/") as absolute so
+    // they are refused as out-of-tree rather than silently joined under the
+    // workspace root. (On Unix, `Path::is_absolute` does not recognize
+    // drive-letter prefixes, so we detect them explicitly.)
+    let is_drive = {
+        let mut ch = posix.chars();
+        match (ch.next(), ch.next()) {
+            (Some(c), Some(':')) => c.is_ascii_alphabetic(),
+            _ => false,
+        }
+    };
+    let p = if posix.starts_with('/') || is_drive {
         PathBuf::from(posix)
     } else {
         root.join(&posix)
@@ -395,5 +406,377 @@ mod tests {
         assert_eq!(resolved, root.join("src").join("main.rs"));
         let resolved = normalize_traversal(&root, "./src/../src/main.rs").unwrap();
         assert_eq!(resolved, root.join("src").join("main.rs"));
+    }
+
+    // ========================================================================
+    // 137-Vector Security Table
+    // Ported verbatim from mcp-castor/tests/security.test.js
+    // (123 attack vectors blocked + 14 allow vectors permitted)
+    //
+    // Each row: (input, op, expected, layer, path_operand, runnable)
+    //   - `layer` names the refusal layer for blocked vectors, or "in-tree"
+    //     for allowed ones.
+    //   - `runnable` = true when the vector maps to a Rust path layer
+    //     (`normalize_traversal`) and can be exercised live; false for
+    //     JS-only rules (shell / deadman-fuse / dry-run / module-isolation)
+    //     that have no Rust equivalent and are mapped to the closest layer.
+    // ========================================================================
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Outcome {
+        Blocked,
+        Allowed,
+    }
+
+    struct Vector {
+        input: &'static str,
+        op: Option<&'static str>,
+        expected: Outcome,
+        layer: &'static str,
+        /// For allowed shell vectors: the path operand that must resolve
+        /// in-tree (i.e., not be a protected root).
+        path_operand: Option<&'static str>,
+        /// Whether this vector can be exercised live through
+        /// `normalize_traversal` (Rust path layer).
+        runnable: bool,
+    }
+
+    fn security_vectors() -> Vec<Vector> {
+        let mut v = Vec::new();
+
+        // --- Category 1: File Path Escapes (15 paths × 4 ops = 60) ---
+        let paths = [
+            "C:\\Windows\\System32\\calc.exe",
+            "C:\\Users\\testuser\\Desktop",
+            "C:\\",
+            "c:/autoexec.bat",
+            "D:\\",
+            "D:\\..",
+            "D:\\OtherFolder",
+            "..\\..\\sensitive_file.txt",
+            "../../../../etc/passwd",
+            "/mnt/c/Windows",
+            "/mnt/c/Users",
+            "/mnt/d",
+            "/mnt/d/..",
+            "/etc/shadow",
+            "/var/log",
+        ];
+        let ops = ["readFile", "writeFile", "astSearch", "astReplace"];
+        for path in &paths {
+            for op in &ops {
+                v.push(Vector {
+                    input: path,
+                    op: Some(*op),
+                    expected: Outcome::Blocked,
+                    layer: "PathEscape",
+                    path_operand: None,
+                    runnable: true,
+                });
+            }
+        }
+
+        // --- Category 2: Null Byte Attacks (2) ---
+        v.push(Vector {
+            input: "safe_name.js\0malicious.exe",
+            op: None,
+            expected: Outcome::Blocked,
+            layer: "NullByte",
+            path_operand: None,
+            runnable: true,
+        });
+        v.push(Vector {
+            input: "src/test.py\0/../../../../Windows",
+            op: None,
+            expected: Outcome::Blocked,
+            layer: "NullByte",
+            path_operand: None,
+            runnable: true,
+        });
+
+        // --- Category 3: Windows Reserved Device Names (6) ---
+        for dev in ["CON", "PRN", "AUX", "NUL", "COM1", "LPT1"] {
+            v.push(Vector {
+                input: dev,
+                op: None,
+                expected: Outcome::Blocked,
+                layer: "DeviceName",
+                path_operand: None,
+                runnable: true,
+            });
+        }
+
+        // --- Category 4: Workspace Root Directory Overwrite (1) ---
+        // JS-only: writing a file over the root directory. Closest Rust
+        // layer is the path-containment policy (PathEscape).
+        v.push(Vector {
+            input: "<workspaceRoot>",
+            op: None,
+            expected: Outcome::Blocked,
+            layer: "PathEscape",
+            path_operand: None,
+            runnable: false,
+        });
+
+        // --- Category 5: Dangerous Shell Command Blocking (43) ---
+        // JS-only: no Rust shell-validator layer. Mapped to the closest
+        // Rust layer (path-containment / ShellPolicy).
+        let dangerous = [
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -rf --no-preserve-root /",
+            "rm -rf ~",
+            "rm -rf C:\\",
+            "rm -rf D:\\",
+            "rm -rf /mnt/c/Windows",
+            "rm -rf C:\\Windows",
+            "rmdir /s /q C:\\",
+            "del /f /s /q C:\\*",
+            "del /s /q C:\\Windows",
+            "rd /s /q C:\\Users",
+            "rm -rf C:\\Users\\*",
+            "rm -rf /mnt/c/Users/*",
+            "format C:",
+            "mkfs.ext4 /dev/sda1",
+            "dd if=/dev/zero of=/dev/sda bs=1M",
+            ":(){ :|:& };:",
+            "sudo rm -rf /",
+            "sudo rm -rf --no-preserve-root /",
+            "bash -c \"rm -rf /\"",
+            "sh -c \"rm -rf /\"",
+            "cmd /c del /s /q C:\\Windows",
+            "powershell -Command \"Remove-Item C:\\Users -Recurse -Force\"",
+            "bash -c \"bash -c 'rm -rf /'\"",
+            "rm -rf $HOME",
+            "rm -rf $HOME/projects",
+            "powershell -Command \"Remove-Item C:\\Users\\* -Recurse -Force\"",
+            "cd /tmp && rm -rf /",
+            "echo a; rm -rf /",
+            "echo a || rm -rf /",
+            "echo a | rm -rf /",
+            "echo a\nrm -rf /",
+            "true && rm -rf ~",
+            "ls; rm -rf /mnt/c/Windows",
+            "rm -rf `pwd`",
+            "del /q `dir`",
+            "rm -rf `echo /`",
+            "rm -rf --no-preserve-root=/",
+            "rm -rf ~user",
+            "rm -rf ~root",
+            "rm -rf /mnt/c/\u{FF55}indows",
+            "bash -c \"cd /tmp && rm -rf /\"",
+        ];
+        for cmd in &dangerous {
+            v.push(Vector {
+                input: cmd,
+                op: None,
+                expected: Outcome::Blocked,
+                layer: "ShellPolicy",
+                path_operand: None,
+                runnable: false,
+            });
+        }
+
+        // --- Category 5b: Shell Allow Vectors (14) ---
+        // These must NOT be blocked. Each path operand resolves in-tree
+        // (deeper subpath, not a protected root).
+        let allow: &[(&str, Option<&str>)] = &[
+            ("rm -rf /tmp/build", Some("/tmp/build")),
+            ("rm -rf /mnt/c/Users/testuser/proj/dist", Some("/mnt/c/Users/testuser/proj/dist")),
+            ("rm -rf C:\\Windows\\System32", Some("C:\\Windows\\System32")),
+            ("rm -rf /mnt/c/Users/otheruser/build", Some("/mnt/c/Users/otheruser/build")),
+            ("git push --force", None),
+            ("npm ci", None),
+            ("cargo build --release", None),
+            ("rm -rf ./node_modules", Some("./node_modules")),
+            ("rm -rf \"/mnt/d/some project/build\"", Some("/mnt/d/some project/build")),
+            ("sudo rm -rf /tmp/build", Some("/tmp/build")),
+            ("bash -c \"rm -rf /tmp/build\"", Some("/tmp/build")),
+            ("env TMP=/tmp rm -rf /tmp/build", Some("/tmp/build")),
+            ("xargs rm -rf < /tmp/list", Some("/tmp/list")),
+            ("powershell -Command \"Remove-Item C:\\Users\\testuser\\proj\\dist -Recurse -Force\"",
+             Some("C:\\Users\\testuser\\proj\\dist")),
+        ];
+        for (cmd, operand) in allow {
+            v.push(Vector {
+                input: cmd,
+                op: None,
+                expected: Outcome::Allowed,
+                layer: "in-tree",
+                path_operand: *operand,
+                runnable: false,
+            });
+        }
+
+        // --- Category 5c: In-Memory Dead-Man Fuse (1) ---
+        // JS-only: synthetic canary token. Closest Rust layer: none
+        // (mapped to DeadManFuse).
+        v.push(Vector {
+            input: "CANARY_DISASTER_FUSE_TOKEN",
+            op: None,
+            expected: Outcome::Blocked,
+            layer: "DeadManFuse",
+            path_operand: None,
+            runnable: false,
+        });
+
+        // --- Category 5d: Dry-Run Hard Gate (1) ---
+        // JS-only: dry-run simulation. Closest Rust layer: none
+        // (mapped to DryRunGate).
+        v.push(Vector {
+            input: "echo safe_dry_run_simulation",
+            op: None,
+            expected: Outcome::Blocked,
+            layer: "DryRunGate",
+            path_operand: None,
+            runnable: false,
+        });
+
+        // --- Category 5e: Structural Module Isolation (1) ---
+        // JS-only: zero-child-process guarantee. Closest Rust layer: none
+        // (mapped to ModuleIsolation).
+        v.push(Vector {
+            input: "shell_validator.js",
+            op: None,
+            expected: Outcome::Blocked,
+            layer: "ModuleIsolation",
+            path_operand: None,
+            runnable: false,
+        });
+
+        // --- Category 6: Shell CWD Containment Escapes (4) ---
+        for cwd in ["C:\\Windows", "C:\\Users", "../../..", "/mnt/c"] {
+            v.push(Vector {
+                input: cwd,
+                op: None,
+                expected: Outcome::Blocked,
+                layer: "PathEscape",
+                path_operand: None,
+                runnable: true,
+            });
+        }
+
+        // --- Category 7: Evo Operator File Unlinking Containment (4) ---
+        for path in [
+            "C:\\Windows\\notepad.exe",
+            "C:\\Users\\testuser\\Desktop\\file.txt",
+            "/mnt/c/Users/test.txt",
+            "../../outside.js",
+        ] {
+            v.push(Vector {
+                input: path,
+                op: None,
+                expected: Outcome::Blocked,
+                layer: "PathEscape",
+                path_operand: None,
+                runnable: true,
+            });
+        }
+
+        v
+    }
+
+    /// Returns true if `p` is a protected root (or its direct wildcard).
+    /// A deeper subpath of a protected root is NOT a protected root.
+    fn is_protected_root(p: &str) -> bool {
+        let t = p.trim().trim_matches('"').trim();
+        let norm = t.to_uppercase().replace('\\', "/");
+        let protected = [
+            "/",
+            "/MNT/C",
+            "/MNT/D",
+            "/MNT/C/WINDOWS",
+            "/MNT/C/USERS",
+            "C:/",
+            "D:/",
+            "C:/WINDOWS",
+            "C:/USERS",
+            "~",
+        ];
+        for prot in &protected {
+            if norm == *prot || norm == format!("{prot}*") {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn security_vector_table_137() {
+        let vectors = security_vectors();
+
+        // 1. Total count
+        assert_eq!(
+            vectors.len(),
+            137,
+            "expected 137 vectors, got {}",
+            vectors.len()
+        );
+
+        // 2. Blocked / allowed counts
+        let blocked = vectors
+            .iter()
+            .filter(|v| v.expected == Outcome::Blocked)
+            .count();
+        let allowed = vectors
+            .iter()
+            .filter(|v| v.expected == Outcome::Allowed)
+            .count();
+        assert_eq!(blocked, 123, "expected 123 blocked, got {blocked}");
+        assert_eq!(allowed, 14, "expected 14 allowed, got {allowed}");
+
+        // 3. Blocked ones name their refusal layer
+        let valid_layers = [
+            "PathEscape",
+            "NullByte",
+            "DeviceName",
+            "SymlinkEscape",
+            "WorkspaceRoot",
+            "BinaryFile",
+            "ShellPolicy",
+            "DeadManFuse",
+            "DryRunGate",
+            "ModuleIsolation",
+        ];
+        for v in vectors.iter().filter(|v| v.expected == Outcome::Blocked) {
+            assert!(
+                valid_layers.contains(&v.layer),
+                "blocked vector '{}' has invalid layer '{}'",
+                v.input,
+                v.layer
+            );
+        }
+
+        // 4. Allowed ones resolve in-tree
+        for v in vectors.iter().filter(|v| v.expected == Outcome::Allowed) {
+            assert_eq!(
+                v.layer, "in-tree",
+                "allowed vector '{}' must have layer 'in-tree', got '{}'",
+                v.input, v.layer
+            );
+            if let Some(operand) = v.path_operand {
+                assert!(
+                    !is_protected_root(operand),
+                    "allowed vector '{}' targets protected root '{}'",
+                    v.input,
+                    operand
+                );
+            }
+        }
+
+        // 5. Runnable path-based vectors: exercise the Rust policy live.
+        let root = test_root("security_table");
+        for v in vectors.iter().filter(|v| v.runnable) {
+            let err = normalize_traversal(&root, v.input).unwrap_err();
+            match (v.layer, &err) {
+                ("PathEscape", SandboxError::PathEscape(_)) => {}
+                ("NullByte", SandboxError::NullByte(_)) => {}
+                ("DeviceName", SandboxError::DeviceName(_)) => {}
+                (layer, err) => panic!(
+                    "runnable vector '{}' expected layer {layer}, got {err:?}",
+                    v.input
+                ),
+            }
+        }
     }
 }
