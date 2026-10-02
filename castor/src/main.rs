@@ -4,6 +4,7 @@
 
 mod config;
 pub mod evo;
+pub mod evals;
 mod engine;
 mod mcp;
 mod platform;
