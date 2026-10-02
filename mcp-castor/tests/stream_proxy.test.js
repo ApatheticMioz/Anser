@@ -298,4 +298,79 @@ describe("Stream Proxy - Signal Preserving & Error Forwarding Suite", () => {
     assert.strictEqual(code, 1, `EADDRINUSE must exit(1), got ${code}`);
     await new Promise((r) => blocker.close(r));
   });
+
+  test("Real stream_proxy preserves terminal finish_reason chunk bundled with [DONE]", async () => {
+    const mockUpstream = http.createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      const bundled =
+        'data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n' +
+        'data: [DONE]\n\n';
+      res.write(bundled);
+      res.end();
+    });
+
+    await new Promise((r) => mockUpstream.listen(0, "127.0.0.1", r));
+    const upstreamPort = mockUpstream.address().port;
+
+    const proxySrv = http.createServer();
+    await new Promise((r) => proxySrv.listen(0, "127.0.0.1", r));
+    const proxyPort = proxySrv.address().port;
+    await new Promise((r) => proxySrv.close(r));
+
+    const proxyChild = spawn(
+      process.execPath,
+      [path.join(__dirname, "..", "stream_proxy.js")],
+      {
+        env: {
+          ...process.env,
+          VLLM_PORT: String(upstreamPort),
+          VLLM_PROXY_PORT: String(proxyPort),
+        },
+        stdio: "ignore",
+      }
+    );
+
+    try {
+      let up = false;
+      for (let i = 0; i < 50; i++) {
+        up = await new Promise((resolve) => {
+          const probe = http.get(`http://127.0.0.1:${proxyPort}/health`, (res) => {
+            resolve(res.statusCode > 0);
+          });
+          probe.on("error", () => resolve(false));
+          probe.setTimeout(300, () => { probe.destroy(); resolve(false); });
+        });
+        if (!up) await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.ok(up, "stream_proxy child process listening");
+
+      const output = await new Promise((resolve, reject) => {
+        let buf = "";
+        const req = http.request(
+          `http://127.0.0.1:${proxyPort}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+          },
+          (res) => {
+            res.on("data", (c) => (buf += c.toString("utf8")));
+            res.on("end", () => resolve(buf));
+            res.on("close", () => resolve(buf));
+            res.on("error", reject);
+          }
+        );
+        req.on("error", reject);
+        req.end(JSON.stringify({ model: "qwen3.8-27b", stream: true, messages: [] }));
+      });
+
+      assert.ok(
+        output.includes('"finish_reason":"stop"'),
+        "Terminal finish_reason chunk must NOT be swallowed when bundled with [DONE]"
+      );
+      assert.ok(output.includes("data: [DONE]"), "data: [DONE] must be present");
+    } finally {
+      proxyChild.kill();
+      await new Promise((r) => mockUpstream.close(r));
+    }
+  });
 });

@@ -432,6 +432,7 @@ export class VllmProviderService {
     };
 
     let currentSseEvent = null;
+    let seenDone = false;
     try {
       armIdle();
       while (true) {
@@ -476,6 +477,7 @@ export class VllmProviderService {
           }
 
           if (trimmed === "data: [DONE]") {
+            seenDone = true;
             break;
           }
 
@@ -703,6 +705,12 @@ export class VllmProviderService {
       if (toolCalls.length > 0) {
         effectiveFinish = "tool_calls";
       } else if (fullContent.length > 0) {
+        effectiveFinish = "stop";
+      } else if (hadReasoning && (seenDone || engineUsage !== null)) {
+        // When the model deliberated inside thinking tags and the stream completed
+        // cleanly (either [DONE] or engine usage received), default to "stop" so the
+        // runner's empty-stop rescue directive prompts the model to emit its conclusion
+        // directly, rather than misclassifying it as a dead/empty stream.
         effectiveFinish = "stop";
       } // else: null — dead/empty stream, honestly reported
     }

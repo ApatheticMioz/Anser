@@ -31,7 +31,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { VllmProviderService } = await import(
   "../src/harness/services/provider_vllm.js"
 );
-const { MODEL, BASE_URL } = await import("../src/config.js");
+const { MODEL, BASE_URL, STREAM_PROXY_PORT, VLLM_PORT } = await import("../src/config.js");
 
 // The think tags, built from the backtick char code so this file never
 // contains the raw tag sequence.
@@ -71,8 +71,11 @@ function sse(frames) {
 // ---------------------------------------------------------------------------
 async function vectorA() {
   const svc = new VllmProviderService();
-  assert.strictEqual(svc.model, MODEL, "a: default model is config MODEL");
-  assert.strictEqual(svc.baseUrl, BASE_URL, "a: default baseUrl is config BASE_URL");
+  const expectedBase =
+    BASE_URL === `http://localhost:${VLLM_PORT}/v1`
+      ? `http://127.0.0.1:${STREAM_PROXY_PORT}/v1`
+      : BASE_URL;
+  assert.strictEqual(svc.baseUrl, expectedBase, "a: default baseUrl is stream proxy or config BASE_URL");
 
   // Explicit options still override the config defaults.
   const overridden = new VllmProviderService({

@@ -985,7 +985,7 @@ export const SALVAGE_MAX_TOKENS = (() => {
 // Precedence: environment variables > ~/.castor/config.json > built-in defaults.
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MODEL = "Qwen3.8-27B";
+const DEFAULT_MODEL = "qwen3.8-27b";
 const DEFAULT_MAX_CONTEXT = MAX_LEN_HUGE;
 const DEFAULT_LAUNCH_COMMAND = "";
 
@@ -1016,13 +1016,17 @@ export function getEngineConfig() {
     (cfg.active_profile && cfg.profiles && cfg.profiles[cfg.active_profile]) ||
     {};
   const merged = { ...cfg, ...profile };
+  const rawModel =
+    process.env.CASTOR_MODEL ||
+    process.env.QWEN_MODEL ||
+    merged.model ||
+    DEFAULT_MODEL;
 
   return {
     model:
-      process.env.CASTOR_MODEL ||
-      process.env.QWEN_MODEL ||
-      merged.model ||
-      DEFAULT_MODEL,
+      rawModel && rawModel.toLowerCase() === "qwen3.8-27b"
+        ? "qwen3.8-27b"
+        : rawModel,
     baseURL:
       process.env.CASTOR_BASE_URL ||
       process.env.QWEN_BASE_URL ||

@@ -391,6 +391,22 @@ async function vectorI() {
   console.log("  [PASS] (i) meaningful frames reset the idle watchdog (spaced past window)");
 }
 
+// Vector (j): clean stream close with reasoning-only output defaults to "stop"
+// so the runner's empty-stop deliberation rescue directive triggers.
+async function vectorJ() {
+  const frames =
+    'data: {"choices":[{"delta":{"reasoning":"I have thought through the solution."},"finish_reason":null}]}\n\n' +
+    'data: [DONE]\n\n';
+  sseFetchMock(frames);
+  const svc = new VllmProviderService();
+  const res = await svc.streamChat({ messages: [{ role: "user", content: "q" }] });
+  assert.strictEqual(res.hadReasoning, true, "j: hadReasoning is true");
+  assert.strictEqual(res.content, "", "j: content is empty");
+  assert.strictEqual(res.toolCalls.length, 0, "j: toolCalls is empty");
+  assert.strictEqual(res.finishReason, "stop", "j: clean [DONE] with reasoning defaults finishReason to 'stop'");
+  console.log("  [PASS] (j) clean [DONE] with reasoning-only output -> finishReason 'stop'");
+}
+
 // ---------------------------------------------------------------------------
 // Run all vectors.
 // ---------------------------------------------------------------------------
@@ -408,6 +424,7 @@ async function main() {
     ["(g)", vectorG],
     ["(h)", vectorH],
     ["(i)", vectorI],
+    ["(j)", vectorJ],
   ];
   for (const [label, fn] of vectors) {
     try {

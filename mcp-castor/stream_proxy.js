@@ -160,13 +160,6 @@ function forwardToUpstream(req, res, reqBodyBuffer) {
         lifecycle.bytes += Buffer.byteLength(text);
 
         lineBuffer += text;
-        if (lineBuffer.includes("data: [DONE]")) {
-          hasDone = true;
-          if (pingInterval) clearInterval(pingInterval);
-          res.write("data: [DONE]\n\n");
-          res.end();
-          return;
-        }
         const lines = lineBuffer.split("\n");
         lineBuffer = lines.pop(); // Retain incomplete trailing line
 

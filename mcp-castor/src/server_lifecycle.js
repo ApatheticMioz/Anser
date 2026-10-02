@@ -28,6 +28,9 @@ import { getApiKeySync, runWslCommand } from "./wsl_bridge.js";
 import { streamProxyPath, launcherScriptPath } from "./platform.js";
 import { wslAvailable } from "./wsl_env.js";
 
+const CANARY_MODEL =
+  MODEL && MODEL.toLowerCase() === "qwen3.8-27b" ? "qwen3.8-27b" : MODEL;
+
 // Indirection for the WSL command runner; tests inject a stub to run offline.
 let wslRun = runWslCommand;
 export function setWslRunner(fn) {
@@ -207,7 +210,7 @@ export async function canaryProbe(force = false) {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: MODEL,
+        model: CANARY_MODEL,
         // Cap on total generated tokens (content + reasoning).
         max_tokens: 512,
         messages: [{ role: "user", content: "Reply with: ok" }],
@@ -437,7 +440,7 @@ async function warmEngine() {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: MODEL,
+        model: CANARY_MODEL,
         messages: [{ role: "user", content: "ping" }],
         max_tokens: 1,
         temperature: 0.0,
