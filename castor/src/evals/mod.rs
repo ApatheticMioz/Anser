@@ -4,8 +4,10 @@
 //! Data model only — no harness, runner, or scorer logic in this module.
 
 pub mod fixture;
+pub mod replay;
 
 pub use fixture::{
     Check, Scorer, Task, TaskConfig, TaskError, ToolCallFunction, ToolCallRef, Trace, TraceError,
     TraceStep,
 };
+pub use replay::ReplayEngine;
