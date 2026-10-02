@@ -3,7 +3,7 @@
 //! Subcommands: mcp (default), proxy, status, server, config, install, clean, evo.
 
 mod config;
-mod evo;
+pub mod evo;
 mod engine;
 mod mcp;
 mod platform;
