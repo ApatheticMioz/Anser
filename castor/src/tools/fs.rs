@@ -1,0 +1,682 @@
+//! Filesystem tools on the runner's `ToolExecutor` surface.
+//!
+//! Tools: `read_file`, `write_file`, `edit_file`, `list_dir`, `search_code`.
+//! All paths flow through the sandbox layers in [`super::sandbox`].
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use async_trait::async_trait;
+use serde_json::Value;
+use thiserror::Error;
+
+use crate::runner::{ToolError, ToolExecutor, ToolOutcome};
+
+use super::sandbox::{self, SandboxError};
+
+#[derive(Debug, Error)]
+pub enum FsError {
+    #[error("{0}")]
+    Sandbox(#[from] SandboxError),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    InvalidArgs(String),
+    #[error("{0}")]
+    EditError(String),
+}
+
+pub struct FsExecutor {
+    root: PathBuf,
+}
+
+impl FsExecutor {
+    pub fn new(root: &Path) -> Result<Self, FsError> {
+        let resolved = sandbox::resolve_workspace_root(root)?;
+        Ok(Self { root: resolved })
+    }
+
+    fn resolve(&self, input: &str) -> Result<PathBuf, FsError> {
+        let normalized = sandbox::normalize_traversal(&self.root, input)?;
+        sandbox::refuse_out_of_tree(&self.root, &normalized)?;
+        sandbox::verify_symlink_containment(&normalized, &self.root)?;
+        Ok(normalized)
+    }
+
+    fn read_file(
+        &self,
+        path: &str,
+        start_line: usize,
+        end_line: Option<usize>,
+    ) -> Result<String, FsError> {
+        let resolved = self.resolve(path)?;
+        if !resolved.exists() {
+            return Err(FsError::InvalidArgs(format!("File not found: {path}")));
+        }
+        let meta = fs::metadata(&resolved)?;
+        if meta.is_dir() {
+            return Err(FsError::InvalidArgs(format!(
+                "Path is a directory, not a file: {path}"
+            )));
+        }
+        sandbox::check_binary(&resolved)?;
+        let content = fs::read_to_string(&resolved)?;
+        let lines: Vec<&str> = content.split('\n').collect();
+        let total = lines.len();
+        let start = start_line.saturating_sub(1);
+        let end = end_line
+            .map(|e| e.min(total))
+            .unwrap_or_else(|| (start + 800).min(total));
+        let slice = &lines[start.min(total)..end];
+        let numbered: Vec<String> = slice
+            .iter()
+            .enumerate()
+            .map(|(i, line)| format!("{}: {}", start + i + 1, line))
+            .collect();
+        Ok(format!(
+            "{} (total: {} lines, showing: {}-{})\n{}",
+            resolved.display(),
+            total,
+            start + 1,
+            end,
+            numbered.join("\n")
+        ))
+    }
+
+    fn write_file(
+        &self,
+        path: &str,
+        content: &str,
+        overwrite: bool,
+    ) -> Result<String, FsError> {
+        let resolved = self.resolve(path)?;
+        if resolved == self.root {
+            return Err(FsError::InvalidArgs(format!(
+                "Target path '{path}' resolves to the workspace root directory, not a file"
+            )));
+        }
+        if resolved.exists() {
+            let meta = fs::metadata(&resolved)?;
+            if meta.is_dir() {
+                return Err(FsError::InvalidArgs(format!(
+                    "Target path '{path}' is an existing directory, cannot overwrite as file"
+                )));
+            }
+            if !overwrite {
+                return Err(FsError::InvalidArgs(format!(
+                    "File already exists and overwrite is false: {path}"
+                )));
+            }
+        }
+        self.atomic_write(&resolved, content)?;
+        Ok(format!(
+            "Wrote {} bytes to {}",
+            content.len(),
+            resolved.display()
+        ))
+    }
+
+    fn edit_file(
+        &self,
+        path: &str,
+        target: &str,
+        replacement: &str,
+        replace_all: bool,
+    ) -> Result<String, FsError> {
+        if target.is_empty() {
+            return Err(FsError::EditError("target_content cannot be empty".into()));
+        }
+        let resolved = self.resolve(path)?;
+        if !resolved.exists() {
+            return Err(FsError::InvalidArgs(format!("File not found for edit: {path}")));
+        }
+        let original = fs::read_to_string(&resolved)?;
+
+        let crlf_target = target.replace("\r\n", "\n").replace('\n', "\r\n");
+        let lf_target = target.replace("\r\n", "\n");
+
+        let (effective_target, local_style) = if original.contains(target) {
+            (target.to_string(), line_ending_style(target))
+        } else if crlf_target != target && original.contains(&crlf_target) {
+            (crlf_target, Some("crlf"))
+        } else if lf_target != target && original.contains(&lf_target) {
+            (lf_target, Some("lf"))
+        } else {
+            return Err(FsError::EditError(format!(
+                "Target content not found in file: {path}. No write performed."
+            )));
+        };
+
+        let count = original.matches(&effective_target).count();
+        if count == 0 {
+            return Err(FsError::EditError(format!(
+                "Target content not found in file: {path}. No write performed."
+            )));
+        }
+        if count > 1 && !replace_all {
+            return Err(FsError::EditError(format!(
+                "AmbiguousTargetError: target_content found {count} times in file: {path}. \
+                 Provide a longer unique target or pass replace_all: true. No write performed."
+            )));
+        }
+
+        let effective_replacement = normalize_line_endings(replacement, local_style);
+        let updated = if replace_all {
+            original.replace(&effective_target, &effective_replacement)
+        } else {
+            original.replacen(&effective_target, &effective_replacement, 1)
+        };
+
+        self.atomic_write(&resolved, &updated)?;
+        Ok(format!(
+            "Replaced {} occurrence(s) in {}",
+            if replace_all { count } else { 1 },
+            resolved.display()
+        ))
+    }
+
+    fn list_dir(&self, path: &str, max_depth: usize) -> Result<String, FsError> {
+        let resolved = self.resolve(path)?;
+        if !resolved.exists() {
+            return Err(FsError::InvalidArgs(format!("Directory not found: {path}")));
+        }
+        let meta = fs::metadata(&resolved)?;
+        if !meta.is_dir() {
+            return Err(FsError::InvalidArgs(format!("Path is not a directory: {path}")));
+        }
+
+        let mut items: Vec<(String, String)> = Vec::new();
+        let mut partial = false;
+        self.walk(&resolved, &resolved, 1, max_depth, &mut items, &mut partial)?;
+
+        let mut out = format!("{} ({} items):\n", resolved.display(), items.len());
+        for (kind, rel) in &items {
+            out.push_str(&format!("  [{kind}] {rel}\n"));
+        }
+        if partial {
+            out.push_str("  [partial: some directories were unreadable]\n");
+        }
+        Ok(out)
+    }
+
+    fn walk(
+        &self,
+        base: &Path,
+        current: &Path,
+        depth: usize,
+        max_depth: usize,
+        items: &mut Vec<(String, String)>,
+        partial: &mut bool,
+    ) -> Result<(), FsError> {
+        if depth > max_depth {
+            return Ok(());
+        }
+        let entries = match fs::read_dir(current) {
+            Ok(e) => e,
+            Err(_) => {
+                *partial = true;
+                return Ok(());
+            }
+        };
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if IGNORED_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            let full = entry.path();
+            let rel = full.strip_prefix(base).unwrap_or(&full);
+            let rel_str = rel.to_string_lossy().to_string();
+            let ft = entry.file_type()?;
+            if ft.is_dir() {
+                items.push(("dir".into(), rel_str));
+                self.walk(base, &full, depth + 1, max_depth, items, partial)?;
+            } else {
+                items.push(("file".into(), rel_str));
+            }
+        }
+        Ok(())
+    }
+
+    fn search_code(
+        &self,
+        query: &str,
+        path: &str,
+        max_results: usize,
+    ) -> Result<String, FsError> {
+        let resolved = self.resolve(path)?;
+        let search_dir = if resolved.is_file() {
+            resolved.parent().unwrap_or(&self.root).to_path_buf()
+        } else {
+            resolved
+        };
+
+        if self.is_inside_git_repo(&search_dir) {
+            return self.git_grep(query, &search_dir, max_results);
+        }
+        self.fallback_search(query, &search_dir, max_results)
+    }
+
+    fn is_inside_git_repo(&self, dir: &Path) -> bool {
+        let mut d = dir.to_path_buf();
+        loop {
+            if d.join(".git").exists() {
+                return true;
+            }
+            match d.parent() {
+                Some(p) if p != &d => d = p.to_path_buf(),
+                _ => return false,
+            }
+        }
+    }
+
+    fn git_grep(
+        &self,
+        query: &str,
+        search_dir: &Path,
+        max_results: usize,
+    ) -> Result<String, FsError> {
+        let rel = search_dir.strip_prefix(&self.root).unwrap_or(search_dir);
+        let rel_str = rel.to_string_lossy().to_string();
+
+        let mut args = vec!["grep", "-n", "-I", "-F", "--untracked", "-e", query];
+        if !rel_str.is_empty() && rel_str != "." {
+            args.push("--");
+            args.push(&rel_str);
+        }
+
+        let output = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&self.root)
+            .output()?;
+
+        if output.status.code() == Some(1) {
+            return Ok("No matches found.".into());
+        }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(FsError::InvalidArgs(format!("git grep failed: {stderr}")));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<&str> = stdout.lines().collect();
+        let matches: Vec<String> = lines
+            .iter()
+            .take(max_results)
+            .map(|l| l.to_string())
+            .collect();
+
+        let mut out = format!("{} match(es) for '{query}':\n", matches.len());
+        for m in &matches {
+            out.push_str(&format!("  {m}\n"));
+        }
+        if lines.len() > max_results {
+            out.push_str(&format!(
+                "  ... ({} more matches truncated)\n",
+                lines.len() - max_results
+            ));
+        }
+        Ok(out)
+    }
+
+    fn fallback_search(
+        &self,
+        query: &str,
+        search_dir: &Path,
+        max_results: usize,
+    ) -> Result<String, FsError> {
+        let mut matches: Vec<String> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
+        self.walk_search(
+            search_dir,
+            search_dir,
+            query,
+            max_results,
+            &mut matches,
+            &mut skipped,
+        )?;
+
+        let mut out = format!("{} match(es) for '{query}':\n", matches.len());
+        for m in &matches {
+            out.push_str(&format!("  {m}\n"));
+        }
+        for s in &skipped {
+            out.push_str(&format!("  [skipped: {s}]\n"));
+        }
+        Ok(out)
+    }
+
+    fn walk_search(
+        &self,
+        base: &Path,
+        current: &Path,
+        query: &str,
+        max_results: usize,
+        matches: &mut Vec<String>,
+        skipped: &mut Vec<String>,
+    ) -> Result<(), FsError> {
+        if matches.len() >= max_results {
+            return Ok(());
+        }
+        let entries = match fs::read_dir(current) {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+        for entry in entries {
+            if matches.len() >= max_results {
+                break;
+            }
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if IGNORED_DIRS.contains(&name.as_str()) || is_env_file(&name) {
+                continue;
+            }
+            let full = entry.path();
+            let ft = entry.file_type()?;
+            if ft.is_dir() {
+                self.walk_search(base, &full, query, max_results, matches, skipped)?;
+            } else if ft.is_file() {
+                let size = entry.metadata()?.len();
+                if size < 500_000 {
+                    if is_binary_extension(&name) {
+                        let rel = full.strip_prefix(base).unwrap_or(&full);
+                        skipped.push(format!(
+                            "{} (skipped-binary: extension '{}')",
+                            rel.to_string_lossy(),
+                            name
+                        ));
+                        continue;
+                    }
+                    if let Ok(content) = fs::read_to_string(&full) {
+                        let rel = full.strip_prefix(base).unwrap_or(&full);
+                        let rel_str = rel.to_string_lossy().to_string();
+                        for (i, line) in content.lines().enumerate() {
+                            if matches.len() >= max_results {
+                                break;
+                            }
+                            if line.contains(query) {
+                                matches.push(format!("{rel_str}:{}:{}", i + 1, line));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn atomic_write(&self, target: &Path, content: &str) -> Result<(), FsError> {
+        let parent = target.parent().unwrap_or(Path::new("."));
+        fs::create_dir_all(parent)?;
+        let tmp = parent.join(format!(
+            ".castor_tmp_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&tmp, content)?;
+        if let Err(e) = fs::rename(&tmp, target) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e.into());
+        }
+        Ok(())
+    }
+}
+
+const IGNORED_DIRS: &[&str] = &[
+    ".venv", "venv", "node_modules", ".git", "__pycache__",
+    "target", "dist", "build", "vendor", ".idea", ".vscode",
+];
+
+fn is_env_file(name: &str) -> bool {
+    name == ".env" || name.starts_with(".env.")
+}
+
+fn is_binary_extension(name: &str) -> bool {
+    let dot = match name.rfind('.') {
+        Some(d) if d < name.len() - 1 => d,
+        _ => return false,
+    };
+    let ext = &name[dot + 1..];
+    matches!(
+        ext.to_lowercase().as_str(),
+        "pdf" | "png" | "jpg" | "jpeg" | "webp" | "gif" | "ico"
+            | "zip" | "gz" | "tar" | "7z" | "bz2" | "xz" | "wasm"
+            | "exe" | "dll" | "so" | "dylib" | "bin"
+            | "mp3" | "mp4" | "avi" | "mov" | "wav"
+            | "woff" | "woff2" | "ttf" | "otf"
+            | "sqlite" | "db"
+    )
+}
+
+fn line_ending_style(text: &str) -> Option<&'static str> {
+    let has_crlf = text.contains("\r\n");
+    let has_bare_lf = text.replace("\r\n", "").contains('\n');
+    if has_crlf && has_bare_lf {
+        Some("mixed")
+    } else if has_crlf {
+        Some("crlf")
+    } else if has_bare_lf {
+        Some("lf")
+    } else {
+        None
+    }
+}
+
+fn normalize_line_endings(text: &str, style: Option<&str>) -> String {
+    match style {
+        Some("crlf") => text.replace("\r\n", "\n").replace('\n', "\r\n"),
+        Some("lf") => text.replace("\r\n", "\n"),
+        _ => text.to_string(),
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for FsExecutor {
+    async fn execute(&self, name: &str, args_json: &str) -> Result<ToolOutcome, ToolError> {
+        let args: Value = serde_json::from_str(args_json).map_err(|e| ToolError::Execute {
+            name: name.to_string(),
+            message: format!("invalid JSON args: {e}"),
+        })?;
+
+        let result = match name {
+            "read_file" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let start_line = args
+                    .get("start_line")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1) as usize;
+                let end_line = args
+                    .get("end_line")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                self.read_file(path, start_line, end_line)
+            }
+            "write_file" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let overwrite = args
+                    .get("overwrite")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                self.write_file(path, content, overwrite)
+            }
+            "edit_file" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let target = args
+                    .get("target_content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let replacement = args
+                    .get("replacement_content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let replace_all = args
+                    .get("replace_all")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                self.edit_file(path, target, replacement, replace_all)
+            }
+            "list_dir" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let max_depth = args
+                    .get("max_depth")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(2) as usize;
+                self.list_dir(path, max_depth)
+            }
+            "search_code" => {
+                let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                let path = args
+                    .get("path")
+                    .or(args.get("dirPath"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".");
+                let max_results = args
+                    .get("max_results")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50) as usize;
+                self.search_code(query, path, max_results)
+            }
+            _ => Err(FsError::InvalidArgs(format!("unknown tool: {name}"))),
+        };
+
+        result
+            .map(|text| ToolOutcome { text })
+            .map_err(|e| ToolError::Execute {
+                name: name.to_string(),
+                message: e.to_string(),
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "castor_fs_{}_{}",
+            std::process::id(),
+            name
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn executor(root: &Path) -> FsExecutor {
+        FsExecutor::new(root).unwrap()
+    }
+
+    #[test]
+    fn edit_zero_occurrences_error_untouched() {
+        let root = test_root("edit_zero");
+        let file = root.join("a.txt");
+        fs::write(&file, "hello world\n").unwrap();
+        let ex = executor(&root);
+
+        let err = ex
+            .edit_file("a.txt", "not present", "x", false)
+            .unwrap_err();
+        assert!(matches!(err, FsError::EditError(_)));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "hello world\n");
+    }
+
+    #[test]
+    fn edit_two_occurrences_error_untouched() {
+        let root = test_root("edit_two");
+        let file = root.join("a.txt");
+        fs::write(&file, "foo bar foo\n").unwrap();
+        let ex = executor(&root);
+
+        let err = ex.edit_file("a.txt", "foo", "baz", false).unwrap_err();
+        assert!(matches!(err, FsError::EditError(_)));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "foo bar foo\n");
+    }
+
+    #[test]
+    fn edit_one_occurrence_applied() {
+        let root = test_root("edit_one");
+        let file = root.join("a.txt");
+        fs::write(&file, "hello world\n").unwrap();
+        let ex = executor(&root);
+
+        ex.edit_file("a.txt", "world", "there", false)
+            .unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "hello there\n");
+    }
+
+    #[test]
+    fn edit_crlf_preserved() {
+        let root = test_root("edit_crlf");
+        let file = root.join("a.txt");
+        fs::write(&file, "line1\r\nline2\r\nline3\r\n").unwrap();
+        let ex = executor(&root);
+
+        ex.edit_file("a.txt", "line2", "LINE2", false)
+            .unwrap();
+        assert_eq!(
+            fs::read(&file).unwrap(),
+            b"line1\r\nLINE2\r\nline3\r\n"
+        );
+    }
+
+    #[test]
+    fn edit_lf_preserved() {
+        let root = test_root("edit_lf");
+        let file = root.join("a.txt");
+        fs::write(&file, "line1\nline2\nline3\n").unwrap();
+        let ex = executor(&root);
+
+        ex.edit_file("a.txt", "line2", "LINE2", false)
+            .unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"line1\nLINE2\nline3\n");
+    }
+
+    #[test]
+    fn atomic_write_failure_leaves_target_untouched() {
+        let root = test_root("atomic_fail");
+        let file = root.join("a.txt");
+        fs::write(&file, "original\n").unwrap();
+        let ex = executor(&root);
+
+        let err = ex
+            .write_file("a.txt/sub.txt", "new content", true)
+            .unwrap_err();
+        assert!(matches!(err, FsError::Io(_)));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "original\n");
+    }
+
+    #[test]
+    fn binary_read_fail_fast() {
+        let root = test_root("binary");
+        let png = root.join("img.png");
+        fs::write(
+            &png,
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0],
+        )
+        .unwrap();
+        let ex = executor(&root);
+
+        let err = ex.read_file("img.png", 1, None).unwrap_err();
+        assert!(matches!(
+            err,
+            FsError::Sandbox(SandboxError::BinaryFile { .. })
+        ));
+    }
+
+    #[test]
+    fn out_of_tree_path_refused() {
+        let root = test_root("outofree");
+        let ex = executor(&root);
+
+        let err = ex.read_file("/etc/passwd", 1, None).unwrap_err();
+        assert!(matches!(
+            err,
+            FsError::Sandbox(SandboxError::PathEscape(_))
+        ));
+    }
+}
