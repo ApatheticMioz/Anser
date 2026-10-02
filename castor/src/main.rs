@@ -7,6 +7,7 @@ mod evo;
 mod engine;
 mod mcp;
 mod platform;
+pub mod pruner;
 mod proxy;
 mod runner;
 pub mod skills;
