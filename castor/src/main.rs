@@ -12,7 +12,7 @@ mod runner;
 pub mod skills;
 mod state;
 mod task;
-mod telemetry;
+pub mod telemetry;
 mod tools;
 
 use clap::{Parser, Subcommand};
