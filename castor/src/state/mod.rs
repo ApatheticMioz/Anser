@@ -346,6 +346,18 @@ impl WedgeCounter {
         fs::rename(&tmp, &self.path)?;
         Ok(next)
     }
+
+    /// Reset the counter to zero.
+    pub fn reset(&self) -> io::Result<()> {
+        let _g = COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&self.path, "0")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
