@@ -1,16 +1,26 @@
-//! Pure in-memory shell command policy validator, ported from
-//! `mcp-castor/src/harness/services/shell_validator.js`.
+//! Shell command policy validator and sandboxed executor, ported from
+//! `mcp-castor/src/harness/services/shell_validator.js` and
+//! `mcp-castor/src/harness/services/shell_executor.js`.
 //!
-//! No execution, no config, no env, no globals. `validate` classifies a
-//! command string and returns a typed refusal error for dangerous classes
-//! (fork bombs, disk wipes, `rm`/`del` on protected roots, `dd` to devices,
-//! `sudo`/wrapper unwrapping, unexpanded shell references, dead-man fuse).
-//! Benign commands pass.
+//! `validate` classifies a command string and returns a typed refusal error
+//! for dangerous classes (fork bombs, disk wipes, `rm`/`del` on protected
+//! roots, `dd` to devices, `sudo`/wrapper unwrapping, unexpanded shell
+//! references, dead-man fuse). Benign commands pass.
+//!
+//! `run` executes a validated command: policy validation first (typed
+//! refusal, nothing spawns), cwd resolved through the sandbox layers, spawn
+//! via `tokio::process` with `process_group(0)`, stdout/stderr captured with
+//! byte caps, and timeout kills the whole process group.
 
-use std::sync::OnceLock;
+use std::path::Path;
+use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use thiserror::Error;
+use tokio::io::AsyncReadExt;
 
 #[derive(Debug, Error)]
 pub enum ShellPolicyError {
@@ -274,8 +284,30 @@ fn posix_normalize(p: &str) -> String {
     format!("/{}", parts.join("/"))
 }
 
+/// Unicode/homoglyph defense: fold fullwidth & compatibility forms to their
+/// canonical ASCII equivalents (e.g. fullwidth `Ｗ` U+FF37 -> `W`) so a
+/// homoglyph path cannot dodge the protected-root string comparison.
+/// Mirrors `String.prototype.normalize("NFKC")` from the JS source for the
+/// fullwidth Latin block (U+FF01–U+FF5E -> U+0021–U+007E) and the fullwidth
+/// space (U+3000 -> U+0020).
+fn nfkc_fold(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            let cp = c as u32;
+            if (0xFF01..=0xFF5E).contains(&cp) {
+                char::from_u32(cp - 0xFF01 + 0x0021).unwrap_or(c)
+            } else if cp == 0x3000 {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 fn normalize_operand(operand: &str, cwd: &str, is_win: bool) -> String {
     let p = expand_tilde(operand, is_win);
+    let p = nfkc_fold(&p);
     let mut posix = to_posix(&p);
     let mut wildcard = "";
     if posix.ends_with("/*") {
@@ -503,6 +535,198 @@ pub fn validate(cmd: &str) -> Result<(), ShellPolicyError> {
 }
 
 // ---------------------------------------------------------------------------
+// Executor
+// ---------------------------------------------------------------------------
+
+/// Per-stream capture ceiling (mirrors the JS executor's 256KB buffer cap).
+const MAX_CAPTURE_BYTES: usize = 256 * 1024;
+
+/// Result of a sandboxed shell execution.
+#[derive(Debug)]
+pub struct ShellOutput {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    /// True when either stream exceeded the capture cap and was truncated.
+    pub truncated: bool,
+    /// Wall-clock duration in milliseconds (sub-ms precision).
+    pub duration_ms: f64,
+}
+
+#[derive(Debug, Error)]
+pub enum ShellError {
+    #[error("policy: {0}")]
+    Policy(#[from] ShellPolicyError),
+    #[error("cwd: {0}")]
+    Cwd(#[from] super::sandbox::SandboxError),
+    #[error("spawn: {0}")]
+    Spawn(#[from] std::io::Error),
+}
+
+/// Executes a shell command with layered safety:
+///
+/// 1. `validate` — typed policy refusal; nothing is ever spawned on refusal.
+/// 2. `cwd` resolved through the sandbox layers (canonicalized real path).
+/// 3. Spawn `bash -c <cmd>` with `process_group(0)` so the child leads its
+///    own process group; on timeout the whole group is SIGKILL'd (no
+///    orphaned grandchildren) and the result reports exit code 124.
+///
+/// stdout/stderr are captured with a per-stream byte cap; streams beyond
+/// the cap are drained and `truncated` is set.
+pub fn run(cmd: &str, cwd: &Path, timeout: Duration) -> Result<ShellOutput, ShellError> {
+    // Layer 1: policy validation — typed refusal, nothing spawns.
+    validate(cmd)?;
+    // Layer 2: resolve the cwd through the sandbox layers (real path).
+    let cwd = super::sandbox::resolve_workspace_root(cwd)?;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(execute(cmd, &cwd, timeout))
+}
+
+/// Drains an async stream into a byte-capped buffer, continuing to read
+/// (and discarding) past the cap so the child's pipe never deadlocks.
+async fn capture_capped<R: tokio::io::AsyncRead + Unpin>(mut r: R, cap: usize) -> (Vec<u8>, bool) {
+    let mut out = Vec::new();
+    let mut truncated = false;
+    let mut buf = [0u8; 8192];
+    loop {
+        match r.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => {
+                if out.len() < cap {
+                    let room = cap - out.len();
+                    if n > room {
+                        out.extend_from_slice(&buf[..room]);
+                        truncated = true;
+                    } else {
+                        out.extend_from_slice(&buf[..n]);
+                    }
+                } else {
+                    // Buffer already at the cap: discard (drain the pipe) and
+                    // mark the stream truncated.
+                    truncated = true;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    (out, truncated)
+}
+
+async fn execute(cmd: &str, cwd: &Path, timeout: Duration) -> Result<ShellOutput, ShellError> {
+    let t0 = Instant::now();
+    let mut child = tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(cwd)
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let pid = child.id().unwrap_or(0);
+
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+
+    let out_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let err_buf = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let out_trunc = Arc::new(AtomicBool::new(false));
+    let err_trunc = Arc::new(AtomicBool::new(false));
+
+    let out_task = {
+        let (buf, flag) = (Arc::clone(&out_buf), Arc::clone(&out_trunc));
+        tokio::spawn(async move {
+            let (b, t) = capture_capped(stdout, MAX_CAPTURE_BYTES).await;
+            *buf.lock().unwrap() = b;
+            flag.store(t, Ordering::SeqCst);
+        })
+    };
+    let err_task = {
+        let (buf, flag) = (Arc::clone(&err_buf), Arc::clone(&err_trunc));
+        tokio::spawn(async move {
+            let (b, t) = capture_capped(stderr, MAX_CAPTURE_BYTES).await;
+            *buf.lock().unwrap() = b;
+            flag.store(t, Ordering::SeqCst);
+        })
+    };
+
+    // Wait for the child with a deadline, polling `try_wait` so the child
+    // handle stays owned (needed to kill the process group on timeout).
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut status = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(s)) => {
+                status = Some(s);
+                break;
+            }
+            Ok(None) => {
+                if tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(e) => {
+                return Err(ShellError::Spawn(e));
+            }
+        }
+    }
+
+    let (exit_code, out, err) = match status {
+        Some(status) => {
+            let _ = tokio::join!(out_task, err_task);
+            let out = std::mem::take(&mut *out_buf.lock().unwrap());
+            let mut err =
+                String::from_utf8_lossy(&std::mem::take(&mut *err_buf.lock().unwrap())).into_owned();
+            if status.code().is_none() {
+                err.push_str("\n[Process terminated by signal]");
+            }
+            (
+                if status.success() {
+                    0
+                } else {
+                    status.code().unwrap_or(1)
+                },
+                out,
+                err,
+            )
+        }
+        None => {
+            // Timeout: kill the whole process group, then reap the zombie.
+            #[cfg(unix)]
+            unsafe {
+                libc::killpg(pid as i32, libc::SIGKILL);
+                let mut st: libc::c_int = 0;
+                libc::waitpid(pid as i32, &mut st, 0);
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = child.kill().await;
+            }
+            let _ = tokio::join!(out_task, err_task);
+            let out = std::mem::take(&mut *out_buf.lock().unwrap());
+            let mut err =
+                String::from_utf8_lossy(&std::mem::take(&mut *err_buf.lock().unwrap())).into_owned();
+            err.push_str(&format!(
+                "\n[Command timed out after {}ms]",
+                timeout.as_millis()
+            ));
+            (124, out, err)
+        }
+    };
+
+    Ok(ShellOutput {
+        exit_code,
+        stdout: String::from_utf8_lossy(&out).into_owned(),
+        stderr: err,
+        truncated: out_trunc.load(Ordering::SeqCst) || err_trunc.load(Ordering::SeqCst),
+        duration_ms: t0.elapsed().as_secs_f64() * 1000.0,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -630,5 +854,110 @@ mod tests {
         assert!(validate("echo hello").is_ok());
         assert!(validate("cat file.txt").is_ok());
         assert!(validate("git status").is_ok());
+    }
+
+    #[test]
+    fn homoglyph_fullwidth_w_blocked() {
+        // GAP 8: fullwidth `Ｗ` (U+FF37) folds to `W` under NFKC, so the
+        // protected-root string comparison still matches `/mnt/c/windows`.
+        assert!(matches!(
+            validate("rm -rf /mnt/c/\u{FF37}indows"),
+            Err(ShellPolicyError::ProtectedRoot(_, _))
+        ));
+    }
+
+}
+
+// ---------------------------------------------------------------------------
+// Executor tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod run_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "castor_shell_test_{tag}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn benign_echo_runs_and_captures() {
+        let dir = tmp_dir("echo");
+        let out = run("echo hello", &dir, Duration::from_secs(10)).unwrap();
+        assert_eq!(out.exit_code, 0);
+        assert_eq!(out.stdout.trim(), "hello");
+        assert!(out.stderr.is_empty());
+        assert!(!out.truncated);
+        assert!(out.duration_ms >= 0.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refusal_rm_rf_root_never_spawns() {
+        let dir = tmp_dir("refusal");
+        // Marker: if the refused command were ever spawned, this file would
+        // eventually be destroyed; it must remain untouched.
+        let marker = dir.join("marker.txt");
+        std::fs::write(&marker, "alive").unwrap();
+        let res = run("rm -rf /", &dir, Duration::from_secs(10));
+        assert!(matches!(
+            res,
+            Err(ShellError::Policy(ShellPolicyError::ProtectedRoot(_, _)))
+        ));
+        assert!(marker.exists(), "refused command must never spawn");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refusal_canary_never_spawns_marker() {
+        let dir = tmp_dir("canary");
+        // Stronger proof: the refused command would CREATE the marker file
+        // if it were ever spawned. It must not exist afterwards.
+        let marker = dir.join("marker.txt");
+        let cmd = format!(
+            "echo {CANARY_DISASTER_FUSE_TOKEN} > {}",
+            marker.display()
+        );
+        let res = run(&cmd, &dir, Duration::from_secs(10));
+        assert!(matches!(
+            res,
+            Err(ShellError::Policy(ShellPolicyError::DeadManFuse))
+        ));
+        assert!(!marker.exists(), "refused command must never spawn");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn timeout_kills_process_group() {
+        let dir = tmp_dir("timeout");
+        let out = run("sleep 30", &dir, Duration::from_millis(300)).unwrap();
+        assert_eq!(out.exit_code, 124);
+        assert!(out.stderr.contains("timed out"));
+        // The group kill must land well before the 30s sleep completes.
+        assert!(out.duration_ms < 5000.0, "duration was {}", out.duration_ms);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn output_cap_truncates() {
+        let dir = tmp_dir("cap");
+        // 300KB of 'a' exceeds the 256KB capture cap.
+        let out = run(
+            "head -c 300000 /dev/zero | tr '\\0' 'a'",
+            &dir,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(out.exit_code, 0);
+        assert!(out.truncated);
+        assert_eq!(out.stdout.len(), MAX_CAPTURE_BYTES);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
