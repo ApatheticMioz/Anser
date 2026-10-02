@@ -29,7 +29,17 @@ enum Command {
     /// Run the MCP server (default subcommand)
     Mcp,
     /// Run the stream proxy
-    Proxy,
+    Proxy {
+        /// Override the state dir root
+        #[arg(long)]
+        state_dir: Option<String>,
+        /// Override the listen port
+        #[arg(long)]
+        port: Option<u16>,
+        /// Override the upstream engine port
+        #[arg(long)]
+        engine_port: Option<u16>,
+    },
     /// Run the status / long-poll HTTP server (singleton)
     Status {
         /// Override the state dir root
@@ -70,9 +80,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let state = state::StateDir::from_config(&loaded.config);
             let _ = state.ensure();
             task::wait::ensure_status_server(&state, loaded.config.ports.status).await;
+            // Best-effort, non-blocking bring-up of the stream proxy.
+            proxy::ensure_proxy_server(
+                &state,
+                loaded.config.ports.proxy,
+                loaded.config.ports.engine,
+            )
+            .await;
             mcp::serve(&loaded.config.tool_prefix).await?;
         }
-        Command::Proxy => unimplemented!("castor proxy"),
+        Command::Proxy {
+            state_dir,
+            port,
+            engine_port,
+        } => {
+            let loaded = config::load().map_err(|e| format!("config: {e}"))?;
+            let state = match state_dir {
+                Some(dir) => state::StateDir::new(dir),
+                None => state::StateDir::from_config(&loaded.config),
+            };
+            let _ = state.ensure();
+            let port = port.unwrap_or(loaded.config.ports.proxy);
+            let engine_port = engine_port.unwrap_or(loaded.config.ports.engine);
+            let upstream = std::net::SocketAddr::from(([127, 0, 0, 1], engine_port));
+            let server = proxy::ProxyServer::new(&state, upstream);
+            if !server.try_acquire_lock() {
+                // Another live process holds the singleton lock: exit 0 with a
+                // single stderr line (never fight a live keeper).
+                eprintln!("proxy already running");
+                return Ok(());
+            }
+            server.serve(port).await?;
+        }
         Command::Status { state_dir, port } => {
             let loaded = config::load().map_err(|e| format!("config: {e}"))?;
             let state = match state_dir {

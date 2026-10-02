@@ -21,6 +21,7 @@ tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 clap = { version = "4.6.7", features = ["derive"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "stream", "json"] }
 encoding_rs = "0.8.42"
+futures-util = "0.3"
 thiserror = "2.0.21"
 schemars = "1.2.2"
 async-trait = "0.1.92"
