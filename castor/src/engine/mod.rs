@@ -4,4 +4,4 @@ pub mod lifecycle;
 pub mod provider;
 
 pub use lifecycle::{EngineLifecycle, LifecycleError};
-pub use provider::{Completion, EngineClient, EngineError, Message, Metrics, ToolCall};
+pub use provider::{Completion, EngineClient, EngineError, Message, Metrics, ToolCall, ToolSchema};

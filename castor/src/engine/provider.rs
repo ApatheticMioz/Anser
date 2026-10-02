@@ -27,10 +27,37 @@ pub enum EngineError {
     Malformed(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Message {
     pub role: String,
     pub content: String,
+    /// Present on assistant messages that carry tool calls.
+    pub tool_calls: Vec<ToolCall>,
+    /// Present on tool-role messages; the id of the tool call being answered.
+    pub tool_call_id: Option<String>,
+}
+
+impl Message {
+    /// Serialize to the OpenAI chat-completion message shape.
+    pub fn to_json(&self) -> Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("role".into(), json!(self.role));
+        if self.role == "assistant" && self.content.is_empty() {
+            obj.insert("content".into(), Value::Null);
+        } else {
+            obj.insert("content".into(), json!(self.content));
+        }
+        if !self.tool_calls.is_empty() {
+            obj.insert(
+                "tool_calls".into(),
+                json!(self.tool_calls.iter().map(|tc| tc.to_json()).collect::<Vec<_>>()),
+            );
+        }
+        if let Some(id) = &self.tool_call_id {
+            obj.insert("tool_call_id".into(), json!(id));
+        }
+        Value::Object(obj)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -39,6 +66,41 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+}
+
+impl ToolCall {
+    /// Serialize to the OpenAI tool-call shape (for assistant messages).
+    pub fn to_json(&self) -> Value {
+        json!({
+            "id": self.id,
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "arguments": self.arguments,
+            },
+        })
+    }
+}
+
+/// An OpenAI function tool schema, sent to the engine in the `tools` field.
+#[derive(Debug, Clone)]
+pub struct ToolSchema {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+impl ToolSchema {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +150,7 @@ impl EngineClient {
     pub async fn chat(
         &self,
         messages: &[Message],
+        tools: &[ToolSchema],
         stream: bool,
     ) -> Result<Completion, EngineError> {
         let url = format!(
@@ -96,12 +159,13 @@ impl EngineClient {
         );
         let mut body = json!({
             "model": self.model,
-            "messages": messages
-                .iter()
-                .map(|m| json!({ "role": m.role, "content": m.content }))
-                .collect::<Vec<_>>(),
+            "messages": messages.iter().map(|m| m.to_json()).collect::<Vec<_>>(),
             "stream": stream,
         });
+        if !tools.is_empty() {
+            body["tools"] = json!(tools.iter().map(|t| t.to_json()).collect::<Vec<_>>());
+            body["tool_choice"] = json!("auto");
+        }
         if stream {
             body["stream_options"] = json!({ "include_usage": true });
         }
@@ -357,6 +421,8 @@ mod tests {
         Message {
             role: "user".into(),
             content: "hi".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         }
     }
 
@@ -446,7 +512,7 @@ mod tests {
         let app = Router::new().route("/chat/completions", post(stream_handler));
         let base = start(app).await;
         let client = EngineClient::from_config(&test_config(&base)).unwrap();
-        let out = client.chat(&[msg()], true).await.unwrap();
+        let out = client.chat(&[msg()], &[], true).await.unwrap();
         assert_eq!(out.content, "Hello world");
         assert_eq!(out.finish_reason.as_deref(), Some("stop"));
         assert!(out.tool_calls.is_empty());
@@ -457,7 +523,7 @@ mod tests {
         let app = Router::new().route("/chat/completions", post(tools_handler));
         let base = start(app).await;
         let client = EngineClient::from_config(&test_config(&base)).unwrap();
-        let out = client.chat(&[msg()], true).await.unwrap();
+        let out = client.chat(&[msg()], &[], true).await.unwrap();
         assert_eq!(out.tool_calls.len(), 1);
         assert_eq!(out.tool_calls[0].id, "call_1");
         assert_eq!(out.tool_calls[0].name, "get_weather");
@@ -470,7 +536,7 @@ mod tests {
         let app = Router::new().route("/chat/completions", post(metrics_handler));
         let base = start(app).await;
         let client = EngineClient::from_config(&test_config(&base)).unwrap();
-        let out = client.chat(&[msg()], true).await.unwrap();
+        let out = client.chat(&[msg()], &[], true).await.unwrap();
         assert!(out.metrics.ttft_ms.is_some());
         assert!(out.metrics.tokens_per_sec.is_some());
         assert!(out.metrics.total_ms > 0.0);
@@ -482,7 +548,7 @@ mod tests {
         let app = Router::new().route("/chat/completions", post(err400_handler));
         let base = start(app).await;
         let client = EngineClient::from_config(&test_config(&base)).unwrap();
-        let err = client.chat(&[msg()], true).await.unwrap_err();
+        let err = client.chat(&[msg()], &[], true).await.unwrap_err();
         match err {
             EngineError::Http { status, body } => {
                 assert_eq!(status, 400);
@@ -494,7 +560,7 @@ mod tests {
         let app = Router::new().route("/chat/completions", post(err500_handler));
         let base = start(app).await;
         let client = EngineClient::from_config(&test_config(&base)).unwrap();
-        let err = client.chat(&[msg()], true).await.unwrap_err();
+        let err = client.chat(&[msg()], &[], true).await.unwrap_err();
         match err {
             EngineError::Http { status, body } => {
                 assert_eq!(status, 500);
@@ -509,7 +575,7 @@ mod tests {
         let app = Router::new().route("/chat/completions", post(split_handler));
         let base = start(app).await;
         let client = EngineClient::from_config(&test_config(&base)).unwrap();
-        let out = client.chat(&[msg()], true).await.unwrap();
+        let out = client.chat(&[msg()], &[], true).await.unwrap();
         assert_eq!(out.content, "Hello");
         assert_eq!(out.finish_reason.as_deref(), Some("stop"));
     }
@@ -521,7 +587,7 @@ mod tests {
         drop(listener);
         let client =
             EngineClient::from_config(&test_config(&format!("http://{addr}"))).unwrap();
-        let err = client.chat(&[msg()], true).await.unwrap_err();
+        let err = client.chat(&[msg()], &[], true).await.unwrap_err();
         assert!(matches!(err, EngineError::Connect { .. }), "{err:?}");
     }
 
@@ -530,7 +596,7 @@ mod tests {
         let app = Router::new().route("/chat/completions", post(non_stream_handler));
         let base = start(app).await;
         let client = EngineClient::from_config(&test_config(&base)).unwrap();
-        let out = client.chat(&[msg()], false).await.unwrap();
+        let out = client.chat(&[msg()], &[], false).await.unwrap();
         assert_eq!(out.content, "pong");
         assert_eq!(out.finish_reason.as_deref(), Some("stop"));
         assert_eq!(out.metrics.completion_tokens, Some(7));
