@@ -19,11 +19,28 @@ mod tools;
 
 use clap::{Parser, Subcommand};
 
+use crate::evals::runner::{Outcome, Variant};
+use crate::evo::lineage::Lineage;
+use crate::evo::{optimizer, watchdog};
+use crate::evo::watchdog::WatchdogVerdict;
+
 #[derive(Parser)]
 #[command(name = "castor", version, about = "Castor: Rust MCP toolchain, proxy, and evo engine")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum EvoAction {
+    /// Score the current artifact over the evals dir and commit it to the lineage
+    Run {
+        /// Override the evals dir (default: `<repo>/evals` if present)
+        #[arg(long)]
+        evals: Option<String>,
+    },
+    /// Show the lineage head / best parent / fitness and the watchdog verdict
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -71,7 +88,10 @@ enum Command {
         yes: bool,
     },
     /// Evo engine
-    Evo,
+    Evo {
+        #[command(subcommand)]
+        action: EvoAction,
+    },
     /// (test helper) hold a task slot for a few seconds
     #[command(name = "__sem_child", hide = true)]
     __SemChild {
@@ -133,6 +153,136 @@ pub fn run_clean(state_dir: &std::path::Path, yes: bool) -> Result<String, Strin
     }
     out.push_str(&format!("deleted {deleted} item(s)\n"));
     Ok(out)
+}
+
+/// The lineage file location under the state dir.
+fn evo_lineage_path(state: &state::StateDir) -> std::path::PathBuf {
+    state.evo().join("lineage.jsonl")
+}
+
+/// Resolve the evals dir: an explicit override, else the repo's `evals/`
+/// (checked relative to the current dir, then one level up for the crate
+/// layout). A missing dir is a typed, actionable error.
+fn resolve_evals_dir(override_dir: Option<&str>) -> Result<std::path::PathBuf, String> {
+    if let Some(dir) = override_dir {
+        let p = std::path::PathBuf::from(dir);
+        if p.is_dir() {
+            return Ok(p);
+        }
+        return Err(format!(
+            "evo: evals dir not found: {} (pass a valid --evals path)",
+            p.display()
+        ));
+    }
+    for candidate in ["evals", "../evals"] {
+        let p = std::path::PathBuf::from(candidate);
+        if p.is_dir() {
+            return Ok(p);
+        }
+    }
+    Err(
+        "evo: no evals dir found (looked for ./evals and ../evals); \
+         pass --evals <dir> pointing at a dir of task subdirectories"
+            .to_string(),
+    )
+}
+
+/// Run the `evo run` subcommand: score the current artifact over the evals
+/// dir, commit it into `<state>/evo/lineage.jsonl`, and return the report
+/// text to print.
+pub fn run_evo(evals_override: Option<&str>, state: &state::StateDir) -> Result<String, String> {
+    let evals_dir = resolve_evals_dir(evals_override)?;
+    let report = optimizer::score_artifact(&evals_dir, Variant::Golden)
+        .map_err(|e| format!("evo: {e}"))?;
+
+    let path = evo_lineage_path(state);
+    let mut lineage = Lineage::load(&path).map_err(|e| format!("evo: {e}"))?;
+    let now_ms = now_epoch_ms();
+    let artifact_ref = format!("artifact://{}@{}", evals_dir.display(), now_ms);
+    let id = optimizer::commit_artifact(&mut lineage, artifact_ref, &report, now_ms)
+        .map_err(|e| format!("evo: {e}"))?;
+    lineage.save().map_err(|e| format!("evo: {e}"))?;
+
+    let mut out = String::new();
+    out.push_str(&format!("evo run: evals={}\n", evals_dir.display()));
+    for e in &report.entries {
+        let (label, fitness) = match &e.outcome {
+            Outcome::Pass => ("pass", "1.0".to_string()),
+            Outcome::Fail(_) => ("fail", "0.0".to_string()),
+            Outcome::Error(reason) => {
+                out.push_str(&format!("  {}  error  ({reason})\n", e.task_id));
+                continue;
+            }
+        };
+        out.push_str(&format!("  {}  {}  fitness={fitness}\n", e.task_id, label));
+    }
+    let mean = report
+        .mean_fitness()
+        .map(|f| format!("{f:.4}"))
+        .unwrap_or_else(|| "n/a (no scoreable tasks)".to_string());
+    out.push_str(&format!("mean fitness: {mean}\n"));
+    out.push_str(&format!("committed: {id} -> {}\n", path.display()));
+    Ok(out)
+}
+
+/// Run the `evo status` subcommand: load the lineage and return the report
+/// text (head / best parent / fitness + the watchdog verdict).
+pub fn evo_status(state: &state::StateDir) -> Result<String, String> {
+    let path = evo_lineage_path(state);
+    let lineage = Lineage::load(&path).map_err(|e| format!("evo: {e}"))?;
+
+    let mut out = String::new();
+    out.push_str(&format!("evo status: lineage={}\n", path.display()));
+    out.push_str(&format!("nodes: {}\n", lineage.nodes().len()));
+
+    if lineage.nodes().is_empty() {
+        out.push_str("verdict: empty (no commits yet)\n");
+        return Ok(out);
+    }
+
+    let head = lineage.head();
+    let best = lineage.best_parent();
+    out.push_str(&format!(
+        "head: {}\n",
+        head
+            .map(|n| format!("{} (fitness={})", n.id, fmt_fitness(n.fitness)))
+            .unwrap_or_else(|| "n/a (no scored leaf)".to_string())
+    ));
+    out.push_str(&format!(
+        "best_parent: {}\n",
+        best
+            .map(|n| format!("{} (fitness={})", n.id, fmt_fitness(n.fitness)))
+            .unwrap_or_else(|| "n/a (no scored node)".to_string())
+    ));
+
+    let verdict = watchdog::evaluate(&lineage, now_epoch_ms());
+    out.push_str(&format!("watchdog: {}\n", fmt_verdict(&verdict)));
+    Ok(out)
+}
+
+fn fmt_fitness(f: Option<f64>) -> String {
+    f.map(|x| format!("{x:.4}")).unwrap_or_else(|| "n/a".to_string())
+}
+
+fn fmt_verdict(v: &WatchdogVerdict) -> String {
+    match v {
+        WatchdogVerdict::Empty => "empty (no commits yet)".to_string(),
+        WatchdogVerdict::Healthy => "healthy".to_string(),
+        WatchdogVerdict::StalledOld => {
+            "stalled (newest commit older than 7 days)".to_string()
+        }
+        WatchdogVerdict::StalledNoImprovement => {
+            "stalled (no fitness improvement in the last 5 commits)".to_string()
+        }
+    }
+}
+
+/// Current wall-clock time as epoch milliseconds.
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Run the `server` subcommand against the engine lifecycle.
@@ -410,7 +560,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Command::Evo => unimplemented!("castor evo"),
+        Command::Evo { action } => {
+            let loaded = config::load().map_err(|e| format!("config: {e}"))?;
+            let state = state::StateDir::from_config(&loaded.config);
+            let _ = state.ensure();
+            // `run_task` builds its own current-thread tokio runtime, so the
+            // evo work must run outside the `#[tokio::main]` runtime. We
+            // spawn a plain std thread for that.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let state2 = state.clone();
+            std::thread::spawn(move || {
+                let result = match action {
+                    EvoAction::Run { evals } => run_evo(evals.as_deref(), &state2),
+                    EvoAction::Status => evo_status(&state2),
+                };
+                let _ = tx.send(result);
+            });
+            match rx.recv() {
+                Ok(Ok(text)) => print!("{text}"),
+                Ok(Err(msg)) => {
+                    eprintln!("castor: {msg}");
+                    std::process::exit(1);
+                }
+                Err(_) => {
+                    eprintln!("castor: evo worker thread panicked");
+                    std::process::exit(1);
+                }
+            }
+        }
         Command::__SemChild { state_dir, task_id } => {
             let state = state::StateDir::new(state_dir);
             let _ = state.ensure();
@@ -446,10 +623,10 @@ mod tests {
             "clean",
             "evo",
         ] {
-            let args: Vec<&str> = if name == "server" {
-                vec!["castor", "server", "status"]
-            } else {
-                vec!["castor", name]
+            let args: Vec<&str> = match name {
+                "server" => vec!["castor", "server", "status"],
+                "evo" => vec!["castor", "evo", "status"],
+                _ => vec!["castor", name],
             };
             let cli = Cli::parse_from(args);
             assert!(cli.command.is_some(), "subcommand {name} should parse");
@@ -550,6 +727,127 @@ mod tests {
         assert!(out.contains("s_old"), "deletion line should name the session: {out}");
         // The session is actually gone.
         assert!(!session.exists(), "apply must delete the session");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // --- run_evo / evo_status behavior tests ---------------------------------
+
+    static EVO_TMP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    fn evo_tmp_dir() -> std::path::PathBuf {
+        let n = EVO_TMP.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let p = std::env::temp_dir().join(format!(
+            "castor-evo-{}-{}",
+            std::process::id(),
+            n
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// Write a minimal passing task dir (same pattern as optimizer tests).
+    fn write_pass_task(task_dir: &std::path::Path) {
+        std::fs::create_dir_all(task_dir.join("fixture")).unwrap();
+        std::fs::write(
+            task_dir.join("task.toml"),
+            "id = \"t1\"\nprompt = \"p\"\ntimeout_s = 10\ntags = []\n[scorer]\nchecks = []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            task_dir.join("trace.jsonl"),
+            "{\"timestamp\":\"t\",\"sessionId\":\"s\",\"type\":\"assistant_message\",\"content\":\"done\",\"toolCalls\":[]}\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn run_evo_appends_node_and_prints_fitness() {
+        let root = evo_tmp_dir();
+        let state = state::StateDir::new(&root);
+        let _ = state.ensure();
+
+        // Temp evals dir with one passing task.
+        let evals = root.join("evals");
+        std::fs::create_dir_all(&evals).unwrap();
+        write_pass_task(&evals.join("t1"));
+
+        let out = run_evo(Some(&evals.to_string_lossy()), &state)
+            .expect("run_evo should succeed");
+        assert!(out.contains("mean fitness: 1.0000"), "{out}");
+        assert!(out.contains("committed:"), "{out}");
+
+        // The lineage file now has one node.
+        let lin = Lineage::load(&evo_lineage_path(&state)).unwrap();
+        assert_eq!(lin.nodes().len(), 1);
+        assert_eq!(lin.nodes()[0].fitness, Some(1.0));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn evo_status_empty_lineage() {
+        let root = evo_tmp_dir();
+        let state = state::StateDir::new(&root);
+        let _ = state.ensure();
+
+        let out = evo_status(&state).expect("status should succeed");
+        assert!(out.contains("nodes: 0"), "{out}");
+        assert!(out.contains("verdict: empty"), "{out}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn evo_status_stalled_old() {
+        let root = evo_tmp_dir();
+        let state = state::StateDir::new(&root);
+        let _ = state.ensure();
+
+        // Fabricate a lineage with a very old commit.
+        let path = evo_lineage_path(&state);
+        std::fs::write(
+            &path,
+            "{\"id\":\"a\",\"parents\":[],\"fitness\":1.0,\"artifact_ref\":\"x\",\"created_at\":\"2020-01-01T00:00:00.000Z\"}\n",
+        )
+        .unwrap();
+
+        let out = evo_status(&state).expect("status should succeed");
+        assert!(out.contains("stalled"), "{out}");
+        assert!(out.contains("older than 7 days"), "{out}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn evo_status_stalled_no_improvement() {
+        let root = evo_tmp_dir();
+        let state = state::StateDir::new(&root);
+        let _ = state.ensure();
+
+        // Fabricate 5 recent commits (within the last day, so the
+        // StalledOld rule cannot fire) with the same fitness (no improvement).
+        let now = now_epoch_ms();
+        let mut lines = String::new();
+        for i in 0..5 {
+            let parents = if i == 0 {
+                "[]".to_string()
+            } else {
+                format!("[\"n{}\"]", i - 1)
+            };
+            let created = optimizer::iso8601_utc(now - (5 - i) * 3_600_000);
+            lines.push_str(&format!(
+                "{{\"id\":\"n{}\",\"parents\":{},\"fitness\":0.5,\"artifact_ref\":\"x\",\"created_at\":\"{}\"}}\n",
+                i, parents, created
+            ));
+        }
+        let path = evo_lineage_path(&state);
+        std::fs::write(&path, &lines).unwrap();
+
+        let out = evo_status(&state).expect("status should succeed");
+        assert!(out.contains("stalled"), "{out}");
+        assert!(out.contains("no fitness improvement"), "{out}");
+
         let _ = std::fs::remove_dir_all(&root);
     }
 

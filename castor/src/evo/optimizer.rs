@@ -178,7 +178,7 @@ pub fn recommend(lineage: &Lineage) -> Option<&LineageNode> {
 /// (`YYYY-MM-DDTHH:MM:SS.mmmZ`). ISO-8601 strings compare
 /// lexicographically, which is what [`Lineage::best_parent`] relies on for
 /// tie-breaking.
-fn iso8601_utc(ms: u64) -> String {
+pub fn iso8601_utc(ms: u64) -> String {
     let secs = ms / 1000;
     let millis = ms % 1000;
     let days = (secs / 86400) as i64;
