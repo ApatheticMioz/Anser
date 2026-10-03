@@ -1,14 +1,37 @@
 {
-  "name": "castor",
+  "name": "mcp-castor",
   "version": "1.0.0",
-  "description": "Castor: Rust MCP toolchain, proxy, and evo engine",
+  "description": "Castor: Universal 245K Agent Microkernel & MCP Pair-Programming Harness in Rust",
   "type": "module",
   "bin": {
-    "castor": "bin/castor.js"
+    "castor": "bin/castor.js",
+    "mcp-castor": "bin/castor.js"
   },
   "files": [
     "bin",
-    "skills"
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ApatheticMioz/Castor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ApatheticMioz/Castor/issues"
+  },
+  "homepage": "https://github.com/ApatheticMioz/Castor#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "castor",
+    "agent-harness",
+    "rust",
+    "pair-programming",
+    "vllm",
+    "qwen",
+    "claude-code",
+    "antigravity"
   ],
   "engines": {
     "node": ">=22"

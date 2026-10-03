@@ -1,11 +1,11 @@
 # ============================================================================
 # Castor — Automated Release Pipeline
 # ============================================================================
-# Triggered on version tags (e.g. `v2026.3.0`).
+# Triggered on version tags (e.g. `v1.0.0`).
 #
-# 1. Runs the full cross-platform test matrix (Node 22/24 × Ubuntu/Windows).
-# 2. Creates the GitHub Release with extracted changelog notes.
-# 3. Publishes `mcp-castor` to npm registry (if NPM_TOKEN is provided).
+# 1. Runs the Rust test gate and clippy check.
+# 2. Creates the GitHub Release with generated release notes.
+# 3. Publishes `mcp-castor` to npm with OIDC Trusted Publishing (--provenance).
 # ============================================================================
 
 name: Release
@@ -14,6 +14,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,35 +22,32 @@ permissions:
 
 jobs:
   test:
-    name: Verify · Node ${{ matrix.node-version }} · ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Verify · Rust stable · ubuntu-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        node-version: [22, 24]
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-          cache-dependency-path: mcp-castor/package-lock.json
+          components: clippy
 
-      - name: Install dependencies (npm ci)
-        working-directory: mcp-castor
-        run: npm ci
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
 
-      - name: Run Authoritative Test Gate
-        working-directory: mcp-castor
-        run: npm run test:all
-        env:
-          TEST_OFFLINE: '1'
-          ALLOW_ENGINE_INTERRUPT: '0'
+      - name: Run clippy (-D warnings)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests (authoritative gate)
+        run: cargo test --verbose
+
+      - name: Test Node shim
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node bin/castor.js --help
 
   publish:
     name: GitHub Release & NPM Publish
@@ -58,12 +56,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
@@ -86,10 +84,7 @@ jobs:
             --draft=false \
             --prerelease=false
 
-      - name: Publish to NPM
-        if: env.NPM_TOKEN != ''
-        working-directory: mcp-castor
-        run: npm publish --access public --provenance
+      - name: Publish to NPM (OIDC Trusted Publishing or Token)
+        run: npm publish --access public --provenance --tag latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

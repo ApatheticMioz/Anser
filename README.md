@@ -76,31 +76,55 @@ Castor implements a **5-layer defense-in-depth boundary** ensuring neither the c
 
 ## Quickstart
 
-### Building from Source
+### 1-Command Setup (via npm / npx)
+```bash
+# Register with Claude Code & Antigravity IDE automatically
+npx -y mcp-castor install --client all
 
+# Or install globally
+npm install -g mcp-castor
+castor install --client all
+```
+
+### Building from Source (Rust)
 ```bash
 git clone https://github.com/ApatheticMioz/Castor.git
 cd Castor
 
 # Build the Rust binary
-cargo build
+cargo build --release
 
 # Run unit and integration tests (243 tests, ~7s)
 cargo test
 
 # Register with Claude Code and Antigravity IDE
-./target/debug/castor install --client all
+./target/release/castor install --client all
 ```
 
 ### Running the MCP Server
-
 ```bash
-# Directly
-./target/debug/castor mcp
+# Directly via compiled binary
+./target/release/castor mcp
 
-# Or via cross-platform Node shim
+# Or via cross-platform Node distribution shim
 node bin/castor.js mcp
 ```
+
+---
+
+## CLI Command Reference
+Complementing `castor --help`:
+
+| Command | Action | Key Options |
+|---|---|---|
+| `castor mcp` | Launch standard Model Context Protocol stdio server | *(default subcommand)* |
+| `castor install` | Auto-register server in Claude (`.claude.json`) and Antigravity (`mcp_config.json`) | `--client <all\|claude\|antigravity>` |
+| `castor config` | Inspect resolved configuration hierarchy (`CASTOR_*` env > `config.json` > defaults) | *(prints effective values & sources)* |
+| `castor server` | Manage serving engine lifecycle (boot, canary health, shutdown) | `<status\|start\|stop>` |
+| `castor clean` | Prune stale sessions, leases, and tasks per retention policy | `--yes` (dry-run by default) |
+| `castor proxy` | Run stateful SSE UTF-8 stream sanitizer proxy (`:18022` $\to$ `:18020`) | `--port`, `--engine-port` |
+| `castor status` | Run zero-turn long-poll HTTP wait endpoint (`:18021`) | `--port` |
+| `castor evo` | Run offline batch evaluations and view lineage DAG | `<run\|status>` |
 
 ---
 

@@ -9,40 +9,64 @@ const root = path.resolve(__dirname, "..");
 const isWin = process.platform === "win32";
 const args = process.argv.slice(2);
 
-const releasePath = path.join(root, "target", "release", "castor");
-const debugPath = path.join(root, "target", "debug", "castor");
+const winReleaseExe = path.join(root, "target", "release", "castor.exe");
+const winDebugExe = path.join(root, "target", "debug", "castor.exe");
+const linuxReleaseBin = path.join(root, "target", "release", "castor");
+const linuxDebugBin = path.join(root, "target", "debug", "castor");
+
+function handleSpawn(child) {
+  child.on("error", (err) => {
+    if (err.code === "ENOENT") {
+      console.error(
+        `\x1b[31m[Castor Error]\x1b[0m Castor binary not found.\n\n` +
+        `To build or install Castor:\n` +
+        `  - Build from source: cargo build --release\n` +
+        `  - Install to PATH:   cargo install --path .\n` +
+        `  - Releases & Docs:   https://github.com/ApatheticMioz/Castor\n`
+      );
+      process.exit(1);
+    }
+    console.error(err);
+    process.exit(1);
+  });
+  child.on("exit", (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    process.exit(code ?? 1);
+  });
+}
 
 if (isWin) {
-  const wslRoot = root
-    .replace(/^([a-zA-Z]):/, (_, drive) => `/mnt/${drive.toLowerCase()}`)
-    .replace(/\\/g, "/");
+  if (fs.existsSync(winReleaseExe)) {
+    handleSpawn(spawn(winReleaseExe, args, { stdio: "inherit" }));
+  } else if (fs.existsSync(winDebugExe)) {
+    handleSpawn(spawn(winDebugExe, args, { stdio: "inherit" }));
+  } else {
+    // Forward to WSL2
+    const wslRoot = root
+      .replace(/^([a-zA-Z]):/, (_, drive) => `/mnt/${drive.toLowerCase()}`)
+      .replace(/\\/g, "/");
 
-  let wslBin = "castor";
-  if (fs.existsSync(releasePath)) {
-    wslBin = `${wslRoot}/target/release/castor`;
-  } else if (fs.existsSync(debugPath)) {
-    wslBin = `${wslRoot}/target/debug/castor`;
+    let wslBin = "castor";
+    if (fs.existsSync(linuxReleaseBin)) {
+      wslBin = `${wslRoot}/target/release/castor`;
+    } else if (fs.existsSync(linuxDebugBin)) {
+      wslBin = `${wslRoot}/target/debug/castor`;
+    }
+
+    handleSpawn(
+      spawn("wsl.exe", ["--", wslBin, ...args], {
+        stdio: "inherit",
+        windowsHide: true,
+      })
+    );
   }
-
-  const child = spawn("wsl.exe", ["--", wslBin, ...args], {
-    stdio: "inherit",
-    windowsHide: true,
-  });
-  child.on("exit", (code, signal) => {
-    if (signal) process.kill(process.pid, signal);
-    process.exit(code ?? 1);
-  });
 } else {
   let bin = "castor";
-  if (fs.existsSync(releasePath)) {
-    bin = releasePath;
-  } else if (fs.existsSync(debugPath)) {
-    bin = debugPath;
+  if (fs.existsSync(linuxReleaseBin)) {
+    bin = linuxReleaseBin;
+  } else if (fs.existsSync(linuxDebugBin)) {
+    bin = linuxDebugBin;
   }
 
-  const child = spawn(bin, args, { stdio: "inherit" });
-  child.on("exit", (code, signal) => {
-    if (signal) process.kill(process.pid, signal);
-    process.exit(code ?? 1);
-  });
+  handleSpawn(spawn(bin, args, { stdio: "inherit" }));
 }
