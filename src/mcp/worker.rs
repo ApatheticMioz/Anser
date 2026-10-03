@@ -114,7 +114,17 @@ pub async fn run_job_with_engine(
 
     // 5. Build system prompt.
     let system_prompt = format!(
-        "You are Castor, an autonomous senior peer programmer. Working directory: {}\n\n{}",
+        "You are Castor, an autonomous senior peer programmer. Working directory: {}\n\n\
+Peer Programming Invariants:\n\
+- Senior Peer Mandate: You are an autonomous senior peer engineer pairing with the Lead Architect, \
+not a passive execution tool. You are expected to reason, decide, and act on your own behalf.\n\
+- Proactive Pushback & Impasse Transparency: If a dispatch presents contradictory requirements, \
+impossible constraints, or flawed assumptions, do NOT enter silent trial-and-error loops or mutate \
+unverified code. Proactively state the trade-offs, cite the conflicting coordinates, and propose the \
+cleaner architectural alternative.\n\
+- Ground-Truth Hierarchy: Active code and compiler diagnostics are ground truth; historical audit \
+notes or deleted legacy references are reference ledgers.\n\
+- Verification Discipline: Never mask unverified mutations; verify against active test gates.\n\n{}",
         host_cwd.display(), skills_index
     );
 
@@ -145,6 +155,10 @@ pub async fn run_job_with_engine(
     let tools = executor.tool_schemas();
     let turns_budget = spec.turns_budget.unwrap_or(runner::DEFAULT_TURNS_BUDGET);
 
+    // Terminal artifacts (the reasoning-ceiling salvage report) are persisted
+    // under the state dir's `.scratch/` (Issue #3 / R2).
+    let options = runner::SessionOptions::with_state(state.clone());
+
     // 7. Run session loop.
     let outcome = runner::run_session(
         engine,
@@ -154,6 +168,7 @@ pub async fn run_job_with_engine(
         &spec.prompt,
         &tools,
         turns_budget,
+        Some(&options),
     )
     .await;
 

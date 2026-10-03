@@ -45,6 +45,13 @@ fn now_ms() -> u64 {
 /// Liveness probe for a pid (signal 0). Conservative: a probe that errors with
 /// EPERM means the process exists (owned by another user) and is treated as
 /// alive, so a live worker is never falsely declared dead.
+///
+/// On Linux a successful `kill(pid, 0)` also reports for **zombie**
+/// (`<defunct>`) processes. A zombie has already exited — it cannot execute
+/// code, heartbeat, or release its slot — so we re-inspect
+/// `/proc/{pid}/status` and treat `State: Z` as dead. Otherwise a defunct
+/// worker would keep a slot (e.g. `slot_0.json`) locked forever, deadlocking
+/// every other tenant.
 #[cfg(unix)]
 pub fn pid_alive(pid: u32) -> bool {
     if pid == 0 {
@@ -55,9 +62,38 @@ pub fn pid_alive(pid: u32) -> bool {
     }
     let r = unsafe { libc::kill(pid as i32, 0) };
     if r == 0 {
-        return true;
+        #[cfg(target_os = "linux")]
+        {
+            return !is_linux_zombie(pid);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            return true;
+        }
     }
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Whether a Linux pid is a zombie (`State: Z` in `/proc/{pid}/status`).
+/// A zombie cannot run code or release a semaphore slot, so it is treated as
+/// dead. If `/proc/{pid}/status` is unreadable (process raced away) we
+/// conservatively report `false` (not a zombie).
+#[cfg(target_os = "linux")]
+fn is_linux_zombie(pid: u32) -> bool {
+    let path = format!("/proc/{pid}/status");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    content
+        .lines()
+        .find(|l| l.starts_with("State:"))
+        .map(|l| {
+            l.trim_start_matches("State:")
+                .trim_start()
+                .starts_with('Z')
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(not(unix))]
@@ -501,6 +537,64 @@ mod tests {
             .unwrap()
             .to_path_buf();
         debug_dir.join("castor")
+    }
+
+    /// A defunct (zombie) worker must be treated as DEAD so it cannot hold a
+    /// slot (e.g. `slot_0.json`) and deadlock other tenants.
+    ///
+    /// Spawns a trivial child, lets it exit, but does NOT reap it — the kernel
+    /// keeps it as a `<defunct>` zombie. On Linux `kill(pid, 0)` still returns
+    /// 0 for a zombie, so this exercises the `/proc/{pid}/status` `State: Z`
+    /// re-inspection in [`pid_alive`].
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn zombie_pid_is_treated_dead() {
+        // Deliberately do NOT call .wait() before the probe: an unreaped,
+        // exited child stays a zombie.
+        let mut child = std::process::Command::new("true")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn `true`");
+        let pid = child.id();
+        assert!(pid > 0);
+
+        // Poll until /proc/{pid}/status reports State: Z (i.e. it has exited
+        // and become a zombie). This is an independent confirmation that the
+        // process is a zombie, so the assertion below truly tests pid_alive.
+        let status_path = format!("/proc/{pid}/status");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let is_zombie = std::fs::read_to_string(&status_path)
+                .ok()
+                .and_then(|c| {
+                    c.lines()
+                        .find(|l| l.starts_with("State:"))
+                        .map(|l| {
+                            l.trim_start_matches("State:")
+                                .trim_start()
+                                .starts_with('Z')
+                        })
+                })
+                .unwrap_or(false);
+            if is_zombie {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("child {pid} did not become a zombie within 5s");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // The fix: a zombie must be reported as not alive.
+        assert!(
+            !pid_alive(pid),
+            "zombie pid {pid} must be treated as dead (it cannot release its slot)"
+        );
+
+        // Reap so nothing is left around; after reaping the pid is gone.
+        let _ = child.wait();
+        assert!(!pid_alive(pid), "reaped pid {pid} must be dead");
     }
 
     #[test]

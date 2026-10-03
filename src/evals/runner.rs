@@ -198,6 +198,7 @@ pub fn run_task(task_dir: &Path, variant: Variant) -> EvalReport {
             &config.prompt,
             &[],
             0, // use the default turn budget
+            Some(&crate::runner::SessionOptions::with_workspace(workspace.clone())),
         ))
     };
     let _ = fs::remove_dir_all(&state_root);

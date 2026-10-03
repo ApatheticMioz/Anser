@@ -7,6 +7,7 @@
 
 #![allow(dead_code)]
 
+pub mod dgi;
 pub mod worker;
 
 use rmcp::model::{
@@ -58,7 +59,10 @@ pub struct CoworkerParams {
     /// Task timeout in ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
-    /// Explicit override allowing a prompt up to 2,500 chars.
+    /// (Deprecated) Kept for schema/backward compatibility. The static length
+    /// ceiling this once bypassed has been replaced by the DGI Gatekeeper
+    /// (`mcp::dgi`), which rejects on calibrated monolith signatures rather
+    /// than raw length; the field no longer gates dispatch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_large_prompt: Option<bool>,
 }
@@ -165,11 +169,29 @@ impl CastorMcpServer {
             return CallToolResult::error(vec![ContentBlock::text("Error: Prompt cannot be empty.")]);
         }
 
-        if params.prompt.len() > 1500 && params.allow_large_prompt != Some(true) {
-            return CallToolResult::error(vec![ContentBlock::text(
-                "MonolithicDispatchRejected: Prompt exceeds 1,500 chars (pass allow_large_prompt: true if intentional)",
-            )]);
+        // DGI Gatekeeper: deterministic decomposition-granularity gate that
+        // replaces the legacy static `len > 1500` ceiling. Hard monolith
+        // signatures fail fast; the advisory score flags a decomposition note
+        // but does not block.
+        let dgi = dgi::evaluate(&params.prompt);
+        if let dgi::DgiVerdict::Reject(sigs) = &dgi {
+            let body = sigs
+                .iter()
+                .map(|s| format!("  - {s}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return CallToolResult::error(vec![ContentBlock::text(format!(
+                "DecompositionGateRejected: dispatch matches {n} calibrated monolith signature(s):\n{body}\n\
+                 Decompose into a single-concern slice (one subsystem, one verification gate) and re-dispatch.",
+                n = sigs.len(),
+            ))]);
         }
+        let dgi_note = match &dgi {
+            dgi::DgiVerdict::Review(s) => Some(format!(
+                "- **DGI**: advisory score {s} — flag for decomposition; dispatch proceeding."
+            )),
+            _ => None,
+        };
 
         let loaded = match crate::config::load() {
             Ok(c) => c,
@@ -261,15 +283,11 @@ impl CastorMcpServer {
         }
 
         let status_port = loaded.config.ports.status;
-        let wait_cmd_win = format!(
-            "curl.exe -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:{status_port}/task/{task_id}/wait"
-        );
-        let wait_cmd_wsl = format!(
-            "curl -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:{status_port}/task/{task_id}/wait"
-        );
+        let (wait_cmd_win, wait_cmd_wsl) =
+            wait_commands(status_port, &task_id);
         let status_cmd = format!("{}_task(action: \"status\", task_id: \"{task_id}\")", self.prefix);
 
-        let text = format!(
+        let mut text = format!(
             "### Castor Task Dispatched (Background Execution)\n\
              - **Task ID**: `{task_id}` | **Session**: `{session_id}` | **Status**: `queued`\n\
              - **Working Directory**: `{cwd}`\n\
@@ -279,6 +297,10 @@ impl CastorMcpServer {
              - **Wait Command**: `{wait_cmd_win}` (WSL: `{wait_cmd_wsl}`)\n\
              - **Status Command**: `{status_cmd}`"
         );
+
+        if let Some(note) = dgi_note {
+            text.push_str(&format!("\n{note}"));
+        }
 
         CallToolResult::success(vec![ContentBlock::text(text)])
     }
@@ -549,10 +571,58 @@ pub async fn serve(prefix: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Build the user-facing long-poll wait commands (Windows `curl.exe` and
+/// WSL `curl`) for a dispatched task.
+///
+/// Both embed an explicit `?timeout_s=3600` (1 hour). Without it the status
+/// server falls back to its 30 s default and returns
+/// `{status:"executing", timed_out:true}` with HTTP 200 (curl exits 0) while
+/// the task is still running — a false "done" signal that makes callers
+/// believe the task finished early.
+pub fn wait_commands(status_port: u16, task_id: &str) -> (String, String) {
+    let win = format!(
+        "curl.exe -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:{status_port}/task/{task_id}/wait?timeout_s=3600"
+    );
+    let wsl = format!(
+        "curl -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:{status_port}/task/{task_id}/wait?timeout_s=3600"
+    );
+    (win, wsl)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ------------------------------------------------------------------
+    // Long-poll wait command: must embed an explicit `?timeout_s=3600`
+    // (otherwise the status server's 30 s default yields a premature
+    // `{status:"executing", timed_out:true}` 200 response).
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wait_command_embeds_explicit_long_poll_timeout() {
+        let (win, wsl) = wait_commands(8788, "task_abc123");
+
+        for (name, cmd) in [("win", &win), ("wsl", &wsl)] {
+            assert!(
+                cmd.contains("http://127.0.0.1:8788/task/task_abc123/wait"),
+                "{name} wait command must hit the status wait endpoint: {cmd}"
+            );
+            assert!(
+                cmd.contains("?timeout_s=3600"),
+                "{name} wait command must pass an explicit ?timeout_s=3600 (1 h) so a \
+                 still-running task is not misreported as done via the 30 s default: {cmd}"
+            );
+            assert!(
+                cmd.contains("--retry 5") && cmd.contains("--retry-connrefused"),
+                "{name} wait command must retry connection refusals: {cmd}"
+            );
+        }
+        // Windows flavor uses the .exe binary; WSL uses the bare curl.
+        assert!(win.starts_with("curl.exe"));
+        assert!(wsl.starts_with("curl "));
+    }
 
     // ------------------------------------------------------------------
     // In-process: tools/list parity vs manifest constants

@@ -12,10 +12,15 @@
 pub mod events;
 pub mod loop_detector;
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use async_trait::async_trait;
 use thiserror::Error;
+use tracing::warn;
 
 use crate::engine::{EngineClient, EngineError, Message, ToolSchema};
+use crate::state::StateDir;
 
 use events::EventLogger;
 use loop_detector::{LoopDetector, LoopState};
@@ -25,6 +30,36 @@ pub const DEFAULT_TURNS_BUDGET: u32 = 80;
 
 /// Turns before the end of the budget at which a landing notice is injected.
 const LANDING_WINDOW: u32 = 5;
+
+/// `finish_reason` value the engine reports when a response is truncated at
+/// its reasoning/output token ceiling. This is the signal for a
+/// `reasoning_budget_exhausted` termination (Issue #3 / R2).
+const REASONING_CEILING_FINISH: &str = "length";
+
+/// Non-coercive salvage prompt injected when the reasoning ceiling is hit.
+///
+/// It asks the model to *summarize what it already has* — findings, tables,
+/// and remaining gaps — rather than to "finish" or to take further actions.
+/// The wording deliberately never pressures the model into a false claim of
+/// completion: the session is already known to be `reasoning_budget_exhausted`
+/// and the status is never masked as a success (see the honest-status
+/// invariant in [`run_session`]).
+const SALVAGE_PROMPT: &str = "[Salvage] Your reasoning budget is exhausted; this is your final \
+    response and you may not take further actions. Do NOT attempt to complete or resume the task. \
+    Summarize, as plain text only, (1) the findings and conclusions you have reached so far, \
+    (2) any tables, data, or structured results you have produced, and (3) the remaining gaps or \
+    open questions. Be concise and honest about what is unfinished.";
+
+/// A terminal turn where the engine stopped at its reasoning/output ceiling:
+/// no further tool calls were issued and the finish reason is the ceiling
+/// sentinel (`"length"`).
+fn is_reasoning_ceiling(completion: &crate::engine::Completion) -> bool {
+    completion.tool_calls.is_empty()
+        && completion
+            .finish_reason
+            .as_deref()
+            .is_some_and(|f| f == REASONING_CEILING_FINISH)
+}
 
 /// Sliding-window size for loop detection (action hashes).
 const LOOP_WINDOW: usize = 6;
@@ -90,7 +125,13 @@ pub struct SessionResult {
     pub turns: u32,
     /// The effective turn budget that was applied.
     pub budget: u32,
-    /// `"completed"`, `"completed_budget_exhausted"`, or `"failed"`.
+    /// Terminal status: `"completed"`, `"completed_budget_exhausted"`,
+    /// `"reasoning_budget_exhausted"`, or `"failed"`.
+    ///
+    /// `"reasoning_budget_exhausted"` is the honest terminal status for a
+    /// session that stopped at its reasoning ceiling. It is *never* masked as a
+    /// success; the salvage pass that recovers a plain-text report on that path
+    /// is annotated in [`final_text`].
     pub status: String,
 }
 
@@ -114,12 +155,90 @@ fn msg(role: &str, content: impl Into<String>) -> Message {
     }
 }
 
+/// State / workspace context the runner uses for terminal artifacts.
+///
+/// This is deliberately *only* the durable-location context — not the engine,
+/// executor, or budget — because those already flow through [`run_session`]
+/// directly. It exists so a session can persist a salvage report outside the
+/// event ledger at terminal (Issue #3 / R2).
+#[derive(Debug, Clone)]
+pub struct SessionOptions {
+    /// The castor state directory. `.scratch/` salvage reports are written here
+    /// (falling back to the workspace when unset).
+    pub state: Option<StateDir>,
+    /// The session's working directory. Used as the fallback `.scratch/`
+    /// location when no state dir is available.
+    pub workspace: Option<PathBuf>,
+}
+
+impl SessionOptions {
+    /// Build options from just a state directory (the common worker case).
+    pub fn with_state(state: StateDir) -> Self {
+        Self { state: Some(state), workspace: None }
+    }
+
+    /// Build options from just a workspace path (e.g. an offline replay).
+    pub fn with_workspace(workspace: PathBuf) -> Self {
+        Self { state: None, workspace: Some(workspace) }
+    }
+
+    /// The directory `.scratch/` salvage reports are written under: the state
+    /// dir when available, otherwise the workspace. `None` when neither is
+    /// set (the salvage is then skipped with a clean log, not a crash).
+    pub fn scratch_root(&self) -> Option<PathBuf> {
+        self.state
+            .as_ref()
+            .map(|s| s.root().to_path_buf())
+            .or_else(|| self.workspace.clone())
+    }
+}
+
+/// Compute the salvage-report path for a session:
+/// `<state_or_workspace>/.scratch/salvage_<session_id>.md`.
+///
+/// Returns `None` when there is no usable base directory — the caller then
+/// logs the salvage outcome without writing a file (no crash).
+fn salvage_report_path(options: Option<&SessionOptions>, session_id: &str) -> Option<PathBuf> {
+    let base = options?.scratch_root()?;
+    Some(base.join(".scratch").join(format!("salvage_{session_id}.md")))
+}
+
+/// Render the full salvage report (header + the model's plain-text summary)
+/// to a Markdown file, creating the `.scratch/` directory on demand.
+///
+/// Never panics on I/O: a failure to create the directory or write the file is
+/// returned as an error so the caller can log it cleanly.
+fn write_salvage_report(path: &Path, session_id: &str, turns: u32, body: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let report = format!(
+        "# Salvage report — session `{session_id}`\n\n\
+         - **status:** `reasoning_budget_exhausted`\n\
+         - **turns consumed:** {turns}\n\n\
+         The model reached its reasoning ceiling before completing the task. The \
+         conversation history is preserved in the session event ledger; the plain-text \
+         summary below was extracted in a single non-coercive salvage turn (tools \
+         disabled, low effort).\n\n---\n\n{body}\n"
+    );
+    fs::write(path, report)
+}
+
 /// Run a multi-turn agent session.
 ///
 /// Builds the message list (tool schemas last, for the vLLM APC contract),
 /// calls the engine, executes any tool calls via the [`ToolExecutor`], appends
 /// the results as tool messages, and continues until the model produces a
 /// final or the turn budget is exhausted.
+///
+/// `options` supplies the state / workspace context the runner needs for
+/// terminal artifacts. It is optional: pass `None` for callers that only
+/// care about the in-band [`SessionResult`] (e.g. the offline eval replay).
+/// When present and the session terminates at its reasoning ceiling, the
+/// salvage pass writes a plain-text report to
+/// `<state_or_workspace>/.scratch/salvage_<session_id>.md` (see
+/// [`SessionOptions`] and the deliberation-ceiling salvage path below).
+#[allow(clippy::too_many_arguments)] // each argument is a distinct session dependency
 pub async fn run_session(
     engine: &dyn ChatEngine,
     executor: &dyn ToolExecutor,
@@ -128,12 +247,14 @@ pub async fn run_session(
     user_prompt: &str,
     tools: &[ToolSchema],
     turns_budget: u32,
+    options: Option<&SessionOptions>,
 ) -> Result<SessionResult, RunnerError> {
     let budget = if turns_budget == 0 {
         DEFAULT_TURNS_BUDGET
     } else {
         turns_budget
     };
+    let session_id = logger.session_id();
 
     let mut messages = vec![msg("system", system_prompt), msg("user", user_prompt)];
     let mut loop_detector = LoopDetector::new(LOOP_WINDOW, LOOP_THRESHOLD);
@@ -190,9 +311,122 @@ pub async fn run_session(
         });
 
         if completion.tool_calls.is_empty() {
+            // Compute the ceiling signal before moving `completion.content`.
+            let ceiling_hit = is_reasoning_ceiling(&completion);
+
             // Final content.
             final_text = completion.content;
             final_produced = true;
+
+            // Deliberation-ceiling salvage pass (Issue #3 / R2): the model
+            // stopped at its reasoning ceiling on a non-tool turn. We keep the
+            // honest status, never wipe the accumulated conversation history,
+            // and extract a plain-text salvage report in one non-coercive,
+            // tool-free, low-effort call.
+            if ceiling_hit {
+                status = "reasoning_budget_exhausted".to_string();
+
+                // 1. History is preserved: the full `messages` (system prompt,
+                //    user prompt, every assistant turn and tool result so far)
+                //    is passed intact to the salvage call — never cleared.
+                // 2. Inject the non-coercive salvage prompt.
+                messages.push(msg("user", SALVAGE_PROMPT));
+                // 3. Call the engine with tools disabled and low effort to
+                //    extract the plain text. The `ChatEngine` API exposes no
+                //    per-call reasoning-effort knob (effort is a dispatch-level
+                //    `JobSpec` setting, not a per-turn parameter), so "low
+                //    effort" here is expressed by the constrained invocation:
+                //    tools stripped (`&[]`), non-streaming single-shot
+                //    (`false`), and the bounded non-coercive prompt above
+                //    which asks only for a summary — never a fresh
+                //    multi-step deliberation.
+                let salvage = engine.chat(&messages, &[], false).await;
+                match salvage {
+                    Ok(sc) => {
+                        // Ledger the salvage turn (history stays in `messages`).
+                        let _ = logger.append(serde_json::json!({
+                            "type": "salvage",
+                            "turn": turns + 1,
+                            "reason": "reasoning_ceiling",
+                            "content": sc.content,
+                        }));
+                        let trimmed = sc.content.trim();
+                        if trimmed.is_empty() {
+                            // Salvage produced no text: honest status, clean log,
+                            // no crash, and the prior turn's content (if any) is
+                            // kept as the in-band note.
+                            warn!(
+                                session = %session_id,
+                                "salvage produced no content; preserving honest status \
+                                 reasoning_budget_exhausted"
+                            );
+                            final_text = "The session terminated at its reasoning ceiling \
+                                         (reasoning_budget_exhausted). The salvage pass returned \
+                                         no content, so no summary is available; the conversation \
+                                         history is preserved in the session event ledger."
+                                .to_string();
+                        } else {
+                            // 4. Persist the salvage report to .scratch/.
+                            let written_path = match salvage_report_path(options, session_id) {
+                                Some(p) => match write_salvage_report(&p, session_id, turns, trimmed) {
+                                    Ok(()) => Some(p),
+                                    Err(e) => {
+                                        warn!(
+                                            session = %session_id,
+                                            "failed to write salvage report: {e}"
+                                        );
+                                        None
+                                    }
+                                },
+                                None => {
+                                    warn!(
+                                        session = %session_id,
+                                        "no state/workspace available for the salvage report"
+                                    );
+                                    None
+                                }
+                            };
+                            let path_note = match written_path {
+                                Some(p) => format!(
+                                    "Salvage report written to: {}\n\nSalvage summary:\n{}",
+                                    p.display(),
+                                    trimmed
+                                ),
+                                None => format!("Salvage summary:\n{trimmed}"),
+                            };
+                            // 5. Honest status is never masked as success; the
+                            //    salvage path is annotated in final_text.
+                            final_text = format!(
+                                "The session terminated at its reasoning ceiling \
+                                 (status: reasoning_budget_exhausted); a salvage pass recovered the \
+                                 summary below.\n\n{path_note}"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        // 6. Salvage call failed: log cleanly, never crash, and
+                        //    keep the honest status.
+                        warn!(
+                            session = %session_id,
+                            "salvage call failed: {e}; preserving honest status \
+                             reasoning_budget_exhausted"
+                        );
+                        let _ = logger.append(serde_json::json!({
+                            "type": "salvage",
+                            "turn": turns + 1,
+                            "reason": "reasoning_ceiling",
+                            "error": e.to_string(),
+                        }));
+                        final_text = format!(
+                            "The session terminated at its reasoning ceiling \
+                             (status: reasoning_budget_exhausted); the salvage pass failed ({e}), \
+                             so no summary is available. The conversation history is preserved in \
+                             the session event ledger."
+                        );
+                    }
+                }
+                break;
+            }
 
             // Degenerate final: empty/whitespace after real tool activity.
             if final_text.trim().is_empty() && tool_activity {
@@ -257,11 +491,18 @@ pub async fn run_session(
             match loop_detector.record(&tc.name, &tc.arguments) {
                 LoopState::Ok => {}
                 LoopState::Advisory => {
-                    let advisory = format!(
-                        "[Loop Advisory] You have repeated the same action '{}' multiple times in a \
-                         row. Change your approach or synthesize your findings.",
-                        tc.name
-                    );
+                    let advisory = if tc.name == "read_file" {
+                        "[Read Advisory] You have repeated the exact same read on this coordinate \
+multiple times. If you are facing contradictory requirements across files or an architectural \
+impasse, state your findings and ask for alignment rather than continuing to re-read."
+                            .to_string()
+                    } else {
+                        format!(
+                            "[Loop Advisory] You have repeated the same action '{}' multiple times in a \
+                             row. Change your approach or synthesize your findings.",
+                            tc.name
+                        )
+                    };
                     messages.push(msg("user", advisory));
                 }
                 LoopState::LoopDetected => {
@@ -293,8 +534,11 @@ pub async fn run_session(
             .map_err(RunnerError::Io)?;
         final_text = completion.content;
         status = "completed_budget_exhausted".to_string();
-    } else if turns >= budget {
-        // The model landed on the last turn (cooperative landing).
+    } else if status == "completed" && turns >= budget {
+        // The model landed on the last turn (cooperative landing). Only
+        // reclassify a plain "completed" result — never a more specific
+        // terminal status such as `reasoning_budget_exhausted`, which must
+        // never be masked (honest-status invariant).
         status = "completed_budget_exhausted".to_string();
     }
 
@@ -323,10 +567,20 @@ mod tests {
     use crate::state::StateDir;
     use std::collections::VecDeque;
 
-    /// A recorder that captures engine calls (messages + tools) for assertions.
+    /// One recorded engine call: the message history, the tool schemas, and
+    /// the stream flag (the flag lets tests verify the salvage call runs
+    /// non-streaming, i.e. the low-effort extraction).
+    #[derive(Default, Clone)]
+    struct RecordedCall {
+        messages: Vec<Message>,
+        tools: Vec<ToolSchema>,
+        stream: bool,
+    }
+
+    /// A recorder that captures engine calls for assertions.
     #[derive(Default)]
     struct CallRecorder {
-        calls: tokio::sync::Mutex<Vec<(Vec<Message>, Vec<ToolSchema>)>>,
+        calls: tokio::sync::Mutex<Vec<RecordedCall>>,
     }
 
     /// A scripted engine that records calls via a shared recorder.
@@ -350,13 +604,17 @@ mod tests {
             &self,
             messages: &[Message],
             tools: &[ToolSchema],
-            _stream: bool,
+            stream: bool,
         ) -> Result<Completion, EngineError> {
             self.recorder
                 .calls
                 .lock()
                 .await
-                .push((messages.to_vec(), tools.to_vec()));
+                .push(RecordedCall {
+                    messages: messages.to_vec(),
+                    tools: tools.to_vec(),
+                    stream,
+                });
             self.responses
                 .lock()
                 .await
@@ -476,6 +734,7 @@ mod tests {
             "do the thing",
             &[tool_schema("bash")],
             80,
+            None,
         )
         .await
         .unwrap();
@@ -491,7 +750,7 @@ mod tests {
         assert_eq!(calls[0].0, "bash");
 
         // The tool result was appended as a tool message (visible in the 2nd call).
-        let second_call_msgs = &recorder.calls.lock().await[1].0;
+        let second_call_msgs = &recorder.calls.lock().await[1].messages;
         assert!(second_call_msgs
             .iter()
             .any(|m| m.role == "tool" && m.content == "file1\nfile2"));
@@ -524,6 +783,7 @@ mod tests {
             "read two files",
             &[tool_schema("read")],
             80,
+            None,
         )
         .await
         .unwrap();
@@ -564,6 +824,7 @@ mod tests {
             "work",
             &[tool_schema("bash")],
             3,
+            None,
         )
         .await
         .unwrap();
@@ -576,12 +837,12 @@ mod tests {
         let calls = recorder.calls.lock().await;
         let notice_injected = calls
             .iter()
-            .any(|(msgs, _)| msgs.iter().any(|m| m.content.contains("[Budget Notice]")));
+            .any(|c| c.messages.iter().any(|m| m.content.contains("[Budget Notice]")));
         assert!(notice_injected, "landing notice must be present in messages");
 
         // The best-effort synthesis call had no tools (stripped).
         let last_call = calls.last().unwrap();
-        assert!(last_call.1.is_empty(), "final synthesis must strip tools");
+        assert!(last_call.tools.is_empty(), "final synthesis must strip tools");
     }
 
     #[tokio::test]
@@ -608,6 +869,7 @@ mod tests {
             "work",
             &[tool_schema("bash")],
             80,
+            None,
         )
         .await
         .unwrap();
@@ -619,7 +881,7 @@ mod tests {
         let calls = recorder.calls.lock().await;
         let salvage_injected = calls
             .iter()
-            .any(|(msgs, _)| msgs.iter().any(|m| m.content.contains("[Salvage]")));
+            .any(|c| c.messages.iter().any(|m| m.content.contains("[Salvage]")));
         assert!(salvage_injected, "salvage prompt must be present in messages");
     }
 
@@ -648,6 +910,7 @@ mod tests {
             "work",
             &[tool_schema("bash")],
             80,
+            None,
         )
         .await
         .unwrap_err();
@@ -661,7 +924,7 @@ mod tests {
         let calls = recorder.calls.lock().await;
         let advisory_injected = calls
             .iter()
-            .any(|(msgs, _)| msgs.iter().any(|m| m.content.contains("[Loop Advisory]")));
+            .any(|c| c.messages.iter().any(|m| m.content.contains("[Loop Advisory]")));
         assert!(advisory_injected, "loop advisory must be present in messages");
     }
 
@@ -708,6 +971,7 @@ mod tests {
             "work",
             &[tool_schema("bash")],
             80,
+            None,
         )
         .await
         .unwrap();
@@ -717,7 +981,7 @@ mod tests {
 
         // The tool error became a message (visible in the 2nd call).
         let calls = recorder.calls.lock().await;
-        let second_call_msgs = &calls[1].0;
+        let second_call_msgs = &calls[1].messages;
         assert!(second_call_msgs
             .iter()
             .any(|m| m.role == "tool" && m.content.contains("Error:")));
@@ -740,6 +1004,7 @@ mod tests {
             "work",
             &tools,
             80,
+            None,
         )
         .await
         .unwrap();
@@ -749,9 +1014,307 @@ mod tests {
 
         // The tools were sent in the request.
         let calls = recorder.calls.lock().await;
-        let first_call_tools = &calls[0].1;
+        let first_call_tools = &calls[0].tools;
         assert_eq!(first_call_tools.len(), 2);
         assert_eq!(first_call_tools[0].name, "bash");
         assert_eq!(first_call_tools[1].name, "read");
+    }
+
+    /// A completion with a chosen `finish_reason` (used to emit the
+    /// reasoning-ceiling sentinel `"length"`).
+    fn comp_finish(content: &str, finish: &str) -> Completion {
+        Completion {
+            content: content.into(),
+            tool_calls: Vec::new(),
+            finish_reason: Some(finish.into()),
+            metrics: Metrics {
+                ttft_ms: None,
+                total_ms: 1.0,
+                tokens_per_sec: None,
+                completion_tokens: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn reasoning_ceiling_on_last_turn_is_not_reclassified_as_cooperative() {
+        let state = tmp_state();
+        let logger = logger_for(&state);
+        let recorder = std::sync::Arc::new(CallRecorder::default());
+        // Budget of 1: the single loop turn hits the ceiling (turns == budget
+        // after the turn), then the salvage call. Without the honest-status
+        // guard, the trailing "landed on the last turn" branch would mask
+        // `reasoning_budget_exhausted` as `completed_budget_exhausted`.
+        let engine = RecordingEngine::new(
+            vec![
+                comp_finish("died on the last allowed turn", "length"),
+                comp_finish("gap: did not finish", "stop"),
+            ],
+            recorder.clone(),
+        );
+        let executor = MockExecutor::new(Vec::new());
+
+        let res = run_session(
+            &engine,
+            &executor,
+            &logger,
+            "SYS",
+            "THE-PROMPT",
+            &[tool_schema("bash")],
+            1, // exactly one allowed turn
+            Some(&SessionOptions::with_state(state.clone())),
+        )
+        .await
+        .unwrap();
+
+        // The honest status survives the last-turn cooperative-landing branch.
+        assert_eq!(
+            res.status, "reasoning_budget_exhausted",
+            "the reasoning ceiling must not be reclassified as cooperative landing"
+        );
+        assert_eq!(res.budget, 1);
+        assert_eq!(res.turns, 1);
+
+        let _ = std::fs::remove_dir_all(state.root());
+    }
+
+    /// A scripted engine that errors on a chosen call index (0-based).
+    ///
+    /// Used to verify the salvage path logs a failed salvage cleanly without
+    /// propagating an error out of `run_session`.
+    struct FailAtEngine {
+        responses: tokio::sync::Mutex<VecDeque<Completion>>,
+        fail_at: usize,
+        calls: tokio::sync::Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl ChatEngine for FailAtEngine {
+        async fn chat(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolSchema],
+            _stream: bool,
+        ) -> Result<Completion, EngineError> {
+            let n = *self.calls.lock().await;
+            if n == self.fail_at {
+                return Err(EngineError::Malformed("salvage engine blew up".into()));
+            }
+            *self.calls.lock().await = n + 1;
+            self.responses
+                .lock()
+                .await
+                .pop_front()
+                .ok_or_else(|| EngineError::Malformed("no scripted response".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn reasoning_ceiling_salvage_preserves_history_and_writes_report() {
+        let state = tmp_state();
+        let logger = logger_for(&state);
+        let recorder = std::sync::Arc::new(CallRecorder::default());
+        // Two tool turns (building history), then the model hits its reasoning
+        // ceiling on a non-tool turn (finish_reason "length"), then the salvage
+        // call returns a plain-text report.
+        let engine = RecordingEngine::new(
+            vec![
+                comp("", vec![tc("c1", "bash", "a")]),
+                comp("", vec![tc("c2", "read", "b")]),
+                comp_finish("partial reasoning, then the ceiling", "length"),
+                comp_finish(
+                    "Findings: X=42. Table: [row1, row2]. Gap: did not run the tests.",
+                    "stop",
+                ),
+            ],
+            recorder.clone(),
+        );
+        let executor = MockExecutor::new(vec!["RESULT-A".into(), "RESULT-B".into()]);
+
+        let res = run_session(
+            &engine,
+            &executor,
+            &logger,
+            "SYS",
+            "THE-PROMPT",
+            &[tool_schema("bash")],
+            80,
+            Some(&SessionOptions::with_state(state.clone())),
+        )
+        .await
+        .unwrap();
+
+        // (5) Honest status invariant: never masked as success.
+        assert_eq!(res.status, "reasoning_budget_exhausted");
+        // The salvage path is annotated in final_text.
+        assert!(
+            res.final_text.contains("reasoning_budget_exhausted"),
+            "final_text must annotate the honest status: {}",
+            res.final_text
+        );
+
+        let calls = recorder.calls.lock().await;
+        // calls: 0=turn1(tool), 1=turn2(tool), 2=ceiling turn, 3=salvage.
+        let salvage_call = &calls[3];
+        // (3) The salvage call used tools disabled and low effort (non-streaming).
+        assert!(salvage_call.tools.is_empty(), "salvage must pass &[] (no tools)");
+        assert!(!salvage_call.stream, "salvage must run non-streaming (low effort)");
+        // The normal loop turns ran streaming (contrast).
+        assert!(calls[0].stream, "turn 1 must be streaming");
+
+        // (1) Conversation history is preserved: the salvage call sees the full
+        //     history — the original user prompt, both tool results, and the
+        //     injected non-coercive salvage prompt.
+        let salvage_msgs = &salvage_call.messages;
+        let has = |needle: &str| {
+            salvage_msgs
+                .iter()
+                .any(|m| m.content.contains(needle))
+        };
+        assert!(has("THE-PROMPT"), "original user prompt must be preserved");
+        assert!(has("RESULT-A"), "first tool result must be preserved");
+        assert!(has("RESULT-B"), "second tool result must be preserved");
+        assert!(
+            has("[Salvage]"),
+            "the non-coercive salvage prompt must be injected"
+        );
+        // (2) The salvage prompt is non-coercive: it explicitly forbids
+        //     resuming the work (a "Do NOT ..." guard) and only asks the model
+        //     to summarize what it already has. It must never carry the
+        //     budget-notice's imperative "Land now" instruction.
+        let salvage_prompt = salvage_msgs
+            .iter()
+            .find(|m| m.content.contains("[Salvage]"))
+            .expect("salvage prompt present");
+        let p = salvage_prompt.content.to_lowercase();
+        assert!(
+            p.contains("do not attempt to"),
+            "salvage prompt must carry the non-coercive guard: {salvage_prompt:?}"
+        );
+        assert!(
+            p.contains("summarize"),
+            "salvage prompt must ask for a summary: {salvage_prompt:?}"
+        );
+        assert!(
+            !p.contains("land now"),
+            "salvage prompt must not carry a coercive 'land now' imperative"
+        );
+
+        // (4) The report was written to <state>/.scratch/salvage_<session_id>.md.
+        let report = state
+            .root()
+            .join(".scratch")
+            .join("salvage_test_session.md");
+        assert!(report.exists(), "salvage report must be written: {report:?}");
+        let body = std::fs::read_to_string(&report).unwrap();
+        assert!(body.contains("reasoning_budget_exhausted"));
+        assert!(body.contains("Findings: X=42"));
+        assert!(body.contains("Gap: did not run the tests"));
+
+        // The ledger recorded a salvage event tagged with the ceiling reason.
+        let events = logger.read_all();
+        assert!(
+            events.iter().any(|e| e["type"] == "salvage" && e["reason"] == "reasoning_ceiling"),
+            "a salvage event tagged reasoning_ceiling must be in the ledger"
+        );
+
+        let _ = std::fs::remove_dir_all(state.root());
+    }
+
+    #[tokio::test]
+    async fn reasoning_ceiling_salvage_empty_does_not_crash_or_mask() {
+        let state = tmp_state();
+        let logger = logger_for(&state);
+        let recorder = std::sync::Arc::new(CallRecorder::default());
+        // Tool turn, then ceiling, then a salvage that returns whitespace.
+        let engine = RecordingEngine::new(
+            vec![
+                comp("", vec![tc("c1", "bash", "a")]),
+                comp_finish("died mid-thought", "length"),
+                comp("   ", Vec::new()),
+            ],
+            recorder.clone(),
+        );
+        let executor = MockExecutor::new(vec!["ok".into()]);
+
+        let res = run_session(
+            &engine,
+            &executor,
+            &logger,
+            "SYS",
+            "THE-PROMPT",
+            &[tool_schema("bash")],
+            80,
+            Some(&SessionOptions::with_state(state.clone())),
+        )
+        .await
+        .unwrap();
+
+        // Honest status is preserved (never flipped to "failed" or success).
+        assert_eq!(res.status, "reasoning_budget_exhausted");
+        // The in-band note is honest about the empty salvage.
+        assert!(
+            res.final_text.contains("no content"),
+            "final_text must say no salvage content was available: {}",
+            res.final_text
+        );
+        // No report file is written when the salvage is empty.
+        let report = state
+            .root()
+            .join(".scratch")
+            .join("salvage_test_session.md");
+        assert!(!report.exists(), "no report when the salvage is empty");
+
+        // The ledger still records the (empty) salvage attempt.
+        let events = logger.read_all();
+        assert!(events
+            .iter()
+            .any(|e| e["type"] == "salvage" && e["reason"] == "reasoning_ceiling"));
+
+        let _ = std::fs::remove_dir_all(state.root());
+    }
+
+    #[tokio::test]
+    async fn reasoning_ceiling_salvage_error_is_logged_not_propagated() {
+        let state = tmp_state();
+        let logger = logger_for(&state);
+        // Tool turn (call 0), ceiling turn (call 1), salvage errors (call 2).
+        let engine = FailAtEngine {
+            responses: tokio::sync::Mutex::new(VecDeque::from(vec![
+                comp("", vec![tc("c1", "bash", "a")]),
+                comp_finish("hit the ceiling", "length"),
+            ])),
+            fail_at: 2,
+            calls: tokio::sync::Mutex::new(0),
+        };
+        let executor = MockExecutor::new(vec!["ok".into()]);
+
+        // Must return Ok (not Err): a failed salvage is logged, not propagated.
+        let res = run_session(
+            &engine,
+            &executor,
+            &logger,
+            "SYS",
+            "THE-PROMPT",
+            &[tool_schema("bash")],
+            80,
+            Some(&SessionOptions::with_state(state.clone())),
+        )
+        .await
+        .expect("a failed salvage must not propagate as an error");
+
+        assert_eq!(res.status, "reasoning_budget_exhausted");
+        assert!(
+            res.final_text.contains("salvage"),
+            "final_text must annotate that the salvage failed: {}",
+            res.final_text
+        );
+        // The failed salvage is recorded in the ledger with the error.
+        let events = logger.read_all();
+        assert!(events
+            .iter()
+            .any(|e| e["type"] == "salvage" && e["reason"] == "reasoning_ceiling" && e.get("error").is_some()));
+
+        let _ = std::fs::remove_dir_all(state.root());
     }
 }

@@ -35,6 +35,11 @@ impl EventLogger {
         &self.path
     }
 
+    /// The session id this ledger is scoped to.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
     /// Append one event, stamped with a timestamp and the session id.
     pub fn append(&self, event: Value) -> std::io::Result<()> {
         let mut entry = event;
