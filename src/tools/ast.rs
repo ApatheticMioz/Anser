@@ -79,6 +79,7 @@ fn infer_lang_by_extension(path: &Path) -> Option<&'static str> {
         "ts" | "mts" | "cts" => "ts",
         "tsx" => "tsx",
         "py" | "pyw" => "python",
+        "rs" => "rust",
         _ => return None,
     })
 }
@@ -155,9 +156,8 @@ fn resolve_target(root: &Path, raw: &str) -> Result<PathBuf, AstError> {
 
 /// Search for a syntactic pattern under `root`.
 ///
-/// `lang` is a language alias (e.g. `"ts"`, `"js"`, `"python"`). When the
-/// target is a directory, the language is inferred per-file by extension and
-/// `lang` is used only as a fallback.
+/// `lang` is the target language alias (e.g. `"ts"`, `"js"`, `"python"`, `"rs"`).
+/// Files whose language does not match `lang` are skipped.
 pub fn ast_search(root: &Path, pattern: &str, lang: &str) -> Result<Vec<Match>, AstError> {
     if pattern.trim().is_empty() {
         return Err(AstError::InvalidArgs("AST search requires a non-empty pattern".into()));
@@ -165,26 +165,31 @@ pub fn ast_search(root: &Path, pattern: &str, lang: &str) -> Result<Vec<Match>, 
     let target = resolve_target(root, &root.to_string_lossy())?;
     let files = resolve_files(&target)?;
 
+    let target_lang = parse_lang(lang)?;
+    let pat = Pattern::try_new(pattern, target_lang)
+        .map_err(|e| AstError::Pattern(e.to_string()))?;
+
     let mut matches = Vec::new();
     for file in &files {
         if matches.len() >= MAX_MATCHES {
             break;
         }
-        let file_lang = infer_lang_by_extension(file).unwrap_or(lang);
-        let lang = match parse_lang(file_lang) {
-            Ok(l) => l,
-            Err(_) => continue, // language unavailable -> skip this file
+        let file_lang = match infer_lang_by_extension(file) {
+            Some(l) => match parse_lang(l) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            },
+            None => target_lang,
         };
+        if file_lang != target_lang {
+            continue;
+        }
         let content = match fs::read_to_string(file) {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let doc = lang.ast_grep(&content);
-        let pat = match Pattern::try_new(pattern, lang) {
-            Ok(p) => p,
-            Err(e) => return Err(AstError::Pattern(e.to_string())),
-        };
-        for m in doc.root().find_all(pat) {
+        let doc = target_lang.ast_grep(&content);
+        for m in doc.root().find_all(&pat) {
             if matches.len() >= MAX_MATCHES {
                 break;
             }
@@ -203,8 +208,8 @@ pub fn ast_search(root: &Path, pattern: &str, lang: &str) -> Result<Vec<Match>, 
 /// Replace a syntactic pattern under `root`, applying the rewrite per file
 /// with a syntax gate (reparse + ERROR-node check) and per-file rollback.
 ///
-/// `lang` is a language alias; when the target is a directory the language is
-/// inferred per-file by extension (falling back to `lang`).
+/// `lang` is the target language alias. Files whose language does not match
+/// `lang` are skipped.
 pub fn ast_replace(
     root: &Path,
     pattern: &str,
@@ -216,6 +221,11 @@ pub fn ast_replace(
     }
     let target = resolve_target(root, &root.to_string_lossy())?;
     let files = resolve_files(&target)?;
+    let target_lang = parse_lang(lang)?;
+
+    // Validate pattern syntax upfront.
+    Pattern::try_new(pattern, target_lang)
+        .map_err(|e| AstError::Pattern(e.to_string()))?;
 
     let mut summary = ReplaceSummary {
         files_scanned: files.len(),
@@ -223,30 +233,30 @@ pub fn ast_replace(
     };
 
     for file in &files {
-        let file_lang = infer_lang_by_extension(file).unwrap_or(lang);
-        let lang = match parse_lang(file_lang) {
-            Ok(l) => l,
-            Err(e) => {
-                summary.files_rolled_back += 1;
-                summary.rolled_back.push(file.to_string_lossy().to_string());
-                let _ = e;
-                continue;
-            }
+        let file_lang = match infer_lang_by_extension(file) {
+            Some(l) => match parse_lang(l) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            },
+            None => target_lang,
         };
+        if file_lang != target_lang {
+            continue;
+        }
 
         let original = match fs::read_to_string(file) {
             Ok(c) => c,
             Err(_) => continue,
         };
 
-        let result = replace_in_memory(&original, pattern, replacement, lang);
+        let result = replace_in_memory(&original, pattern, replacement, target_lang);
         match result {
             Ok((new_content, replacements)) => {
                 if new_content == original {
                     continue; // no match -> not counted
                 }
                 // Syntax gate: reparse the new content; any ERROR node -> rollback.
-                if syntax_gate(&new_content, lang) {
+                if syntax_gate(&new_content, target_lang) {
                     // Verified invalid: leave the file unchanged (never written).
                     summary.files_rolled_back += 1;
                     summary.rolled_back.push(file.to_string_lossy().to_string());
@@ -361,6 +371,55 @@ mod tests {
         assert_eq!(m.line, 0);
         assert_eq!(m.col, 0);
         assert!(m.text.contains("greet"), "match text: {}", m.text);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_finds_pattern_in_rust_fixture() {
+        let root = test_root("search_rust");
+        let file = root.join("src").join("lib.rs");
+        fs::write(
+            &file,
+            "fn compute_sum(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        .unwrap();
+
+        let matches = ast_search(&root, "fn $NAME($$$ARGS) -> $RET { $$$BODY }", "rs").unwrap();
+        assert!(!matches.is_empty(), "expected at least one match");
+        let m = &matches[0];
+        assert_eq!(m.file, file.to_string_lossy());
+        assert!(m.text.contains("compute_sum"), "match text: {}", m.text);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_skips_unrelated_language_files() {
+        let root = test_root("mixed_langs");
+        let ts_file = root.join("src").join("app.ts");
+        let rs_file = root.join("src").join("lib.rs");
+        fs::write(
+            &ts_file,
+            "function greet(name: string): string {\n  return `hi ${name}`;\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            &rs_file,
+            "fn compute_sum(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        .unwrap();
+
+        // Searching Rust pattern must succeed across mixed dir, ignoring the .ts file without error.
+        let rs_matches =
+            ast_search(&root, "fn $NAME($$$ARGS) -> $RET { $$$BODY }", "rs").unwrap();
+        assert_eq!(rs_matches.len(), 1);
+        assert_eq!(rs_matches[0].file, rs_file.to_string_lossy());
+
+        // Searching TS pattern must succeed across mixed dir, ignoring the .rs file without error.
+        let ts_matches =
+            ast_search(&root, "function $NAME($$$ARGS): $RET { $$$BODY }", "ts").unwrap();
+        assert_eq!(ts_matches.len(), 1);
+        assert_eq!(ts_matches[0].file, ts_file.to_string_lossy());
+
         let _ = fs::remove_dir_all(&root);
     }
 

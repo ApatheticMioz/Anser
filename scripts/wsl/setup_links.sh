@@ -41,6 +41,16 @@ ln -sf "$REPO_ROOT/CLAUDE.md" ~/.claude/CLAUDE.md
 rm -rf ~/.gemini/antigravity-ide/mcp/castor
 ln -sfn "$WIN_HOME/.gemini/antigravity-ide/mcp/castor" ~/.gemini/antigravity-ide/mcp/castor
 
+# Symlink Castor unified state directory to Windows master
+mkdir -p "$WIN_HOME/.castor"
+if [ ! -L ~/.castor ]; then
+  if [ -d ~/.castor ]; then
+    cp -rn ~/.castor/* "$WIN_HOME/.castor/" 2>/dev/null || true
+    rm -rf ~/.castor
+  fi
+fi
+ln -sfn "$WIN_HOME/.castor" ~/.castor
+
 # WSL-specific MCP config pointing to Castor binary (break any symlink to Windows master)
 CASTOR_BIN="$REPO_ROOT/target/release/castor"
 if [ ! -f "$CASTOR_BIN" ]; then

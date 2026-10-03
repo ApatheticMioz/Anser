@@ -174,7 +174,12 @@ impl TaskRegistry {
 
     /// Path of the disk mirror for a task id.
     pub fn task_path(&self, id: &str) -> PathBuf {
-        self.state.tasks().join(format!("task_{id}.json"))
+        let filename = if id.starts_with("task_") {
+            format!("{id}.json")
+        } else {
+            format!("task_{id}.json")
+        };
+        self.state.tasks().join(filename)
     }
 
     /// Atomically write a record to its disk mirror (write-temp-then-rename).
@@ -182,8 +187,9 @@ impl TaskRegistry {
         let dir = self.state.tasks();
         fs::create_dir_all(&dir)?;
         let path = self.task_path(&rec.id);
+        let prefix = if rec.id.starts_with("task_") { "" } else { "task_" };
         let tmp = dir.join(format!(
-            "task_{}.tmp_{}_{}",
+            "{prefix}{}.tmp_{}_{}",
             rec.id,
             std::process::id(),
             now_ms()
@@ -264,16 +270,13 @@ impl TaskRegistry {
         if let Ok(entries) = fs::read_dir(self.state.tasks()) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
-                let Some(stem) = name.strip_prefix("task_") else {
+                if !name.ends_with(".json") || !name.starts_with("task_") {
                     continue;
-                };
-                let Some(stem) = stem.strip_suffix(".json") else {
-                    continue;
-                };
+                }
                 if let Ok(raw) = fs::read_to_string(entry.path())
                     && let Ok(rec) = serde_json::from_str::<TaskRecord>(&raw)
                 {
-                    map.insert(stem.to_string(), rec);
+                    map.insert(rec.id.clone(), rec);
                 }
             }
         }
@@ -474,6 +477,7 @@ mod tests {
         // Disk mirror exists and round-trips.
         let path = reg.task_path(&id);
         assert!(path.exists());
+        assert_eq!(path.file_name().unwrap(), format!("{id}.json").as_str());
         let raw = fs::read_to_string(&path).unwrap();
         let from_disk: TaskRecord = serde_json::from_str(&raw).unwrap();
         assert_eq!(from_disk.id, id);

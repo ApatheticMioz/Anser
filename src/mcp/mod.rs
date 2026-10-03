@@ -227,16 +227,7 @@ impl CastorMcpServer {
         }
 
         // Spawn detached worker process.
-        let mut bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("castor"));
-        if !bin.exists() {
-            let s = bin.to_string_lossy();
-            if let Some(clean) = s.strip_suffix(" (deleted)") {
-                let clean_path = std::path::PathBuf::from(clean);
-                if clean_path.exists() {
-                    bin = clean_path;
-                }
-            }
-        }
+        let bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("castor"));
         let mut cmd = tokio::process::Command::new(&bin);
         cmd.arg("__worker").arg(&spec_path);
         cmd.stdin(std::process::Stdio::null());
@@ -446,6 +437,11 @@ impl CastorMcpServer {
                         CallToolResult::error(vec![ContentBlock::text(format!("Failed to extend budget: {e}"))])
                     }
                 }
+            }
+            "stats" => {
+                let stats = crate::telemetry::derive_stats(state.root());
+                let text = serde_json::to_string_pretty(&stats).unwrap_or_else(|_| "{}".to_string());
+                CallToolResult::success(vec![ContentBlock::text(text)])
             }
             other => CallToolResult::error(vec![ContentBlock::text(format!(
                 "Unknown action '{other}' for {}_task.",
@@ -897,6 +893,19 @@ mod tests {
         let cancel_resp = read_jsonrpc_line(&mut reader).await;
         let cancel_text = cancel_resp["result"]["content"][0]["text"].as_str().unwrap();
         assert!(cancel_text.contains("cancelled"), "cancel response must confirm cancellation, got: {cancel_text}");
+
+        // 4. Query stats
+        send_line(
+            &mut stdin,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"castor_task","arguments":{"action":"stats"}}}"#,
+        )
+        .await;
+        let stats_resp = read_jsonrpc_line(&mut reader).await;
+        let stats_text = stats_resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            stats_text.contains("total_tasks"),
+            "stats response must serialize Stats struct, got: {stats_text}"
+        );
 
         drop(stdin);
         let status = child.wait().await.expect("child wait");
