@@ -56,6 +56,9 @@ jobs:
     name: GitHub Release & NPM Publish
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -67,6 +70,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Upgrade npm for OIDC Trusted Publishing
+        run: npm install -g npm@latest
 
       - name: Extract Tag Version
         id: meta
