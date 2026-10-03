@@ -37,14 +37,14 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Build all targets
+        run: cargo build --all-targets
+
       - name: Run clippy (-D warnings)
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Run tests (authoritative gate)
         run: cargo test --verbose
-
-      - name: Build Castor binary
-        run: cargo build
 
       - name: Test Node shim
         uses: actions/setup-node@v4

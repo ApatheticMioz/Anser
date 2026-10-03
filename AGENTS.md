@@ -147,6 +147,7 @@ src/
   pruner.rs              # State dir retention pruner
   mcp/
     mod.rs               # rmcp stdio transport, tool schemas, and server
+    dgi.rs               # Decomposition Granularity Index (DGI) semantic gatekeeper
     worker.rs            # Detached worker process execution loop
   task/
     mod.rs               # Task management subsystem
@@ -177,7 +178,7 @@ src/
     lineage.rs           # DAG of scored commits and parent pointers
     optimizer.rs         # Reflective batch evaluation against task suites
     watchdog.rs          # Lineage stagnation and health detector
-evals/                   # Tier A offline replay and golden test tasks
+evals/                   # Tier A offline replay, golden test tasks, and DGI 187-prompt benchmark
 skills/                  # Reusable SKILL.md workflow recipes
 ```
 

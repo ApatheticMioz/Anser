@@ -706,8 +706,9 @@ mod tests {
         tokio::io::BufReader<tokio::process::ChildStdout>,
         tokio::process::ChildStdin,
     ) {
+        let ext = std::env::consts::EXE_SUFFIX;
         let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/debug/castor");
+            .join(format!("target/debug/castor{ext}"));
         let mut cmd = tokio::process::Command::new(&bin);
         cmd.args(args);
         cmd.stdin(std::process::Stdio::piped());
