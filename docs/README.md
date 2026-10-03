@@ -57,7 +57,7 @@ docs/
 
 ## Key Architecture References
 
-- **MCP Server Architecture**: [`mcp-castor/index.js`](../mcp-castor/index.js)
+- **MCP Server Architecture**: [`src/mcp/mod.rs`](../src/mcp/mod.rs) & [`src/main.rs`](../src/main.rs)
 - **Engineering Decisions & Benchmark Changelog**: [`docs/archive/DEVELOPMENT_NOTES_2026.md`](archive/DEVELOPMENT_NOTES_2026.md)
 - **[OLD] SWE-rebench Validation Suite (Early Prototype Runner)**: [`benchmarks/swe-rebench/README.md`](../benchmarks/swe-rebench/README.md)
 - **Upstream vLLM Wedge Repro Report**: [`benchmarks/wedge-repro/RESULTS.md`](../benchmarks/wedge-repro/RESULTS.md)

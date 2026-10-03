@@ -1,8 +1,8 @@
 # scripts/
 
-Repo-level tooling that lives **outside** the self-contained `mcp-castor` npm
-package. These are not part of `mcp-castor`'s build or test chain; they operate
-on the Castor harness's on-disk telemetry (task files + session event logs).
+Repo-level tooling, launchers, and utility scripts that live outside the
+core Rust crate. These operate on the Castor harness's on-disk telemetry,
+WSL launchers, and development workflows.
 
 ## qwen_tasks_analysis.mjs
 
@@ -77,17 +77,11 @@ emptyStreamRetries, engineEmptyResponses
    "derived" flag, so this derivation is documented here (and in the
    exporter's header) rather than encoded in a field.
 
-### Test
+### Verification
 
-The exporter is a repo-level tool, so its test is a **standalone** repo-level
-test (not part of `mcp-castor`'s `npm test` chain, which imports only from
-`mcp-castor/src/` and never reaches the repo root):
+Telemetry parsing, statistics derivation, and event ledger operations are verified
+as part of the authoritative test gate:
 
 ```sh
-node tests/qwen_tasks_exporter.test.js
+cargo test telemetry
 ```
-
-It builds a tiny fixture in a temp dir (2 dispatches sharing one session + a
-tiny synthetic `events.jsonl`, plus one no-events session), runs the exporter
-as a child process, and asserts all three corrected semantics plus
-field-compatibility. No vLLM, no network, no dependencies.

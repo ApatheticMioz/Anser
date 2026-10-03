@@ -5,7 +5,7 @@
 [![CI](https://img.shields.io/badge/CI-Passing-success?logo=githubactions&logoColor=white)](#testing--verification)
 [![Rust](https://img.shields.io/badge/Rust-2024%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-[![Test Gate: 242/242](https://img.shields.io/badge/Test%20Gate-242%2F242%20Tests%20Green-success.svg)](#testing--verification)
+[![Test Gate: 243/243](https://img.shields.io/badge/Test%20Gate-243%2F243%20Tests%20Green-success.svg)](#testing--verification)
 [![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#model-serving--speculative-decoding)
 [![Engine](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#model-serving--speculative-decoding)
 [![Security](https://img.shields.io/badge/Security-137%20Containment%20Vectors-success.svg)](#zero-trust-sandboxed-file-operations)
@@ -85,7 +85,7 @@ cd Castor
 # Build the Rust binary
 cargo build
 
-# Run unit and integration tests (242 tests, ~7s)
+# Run unit and integration tests (243 tests, ~7s)
 cargo test
 
 # Register with Claude Code and Antigravity IDE

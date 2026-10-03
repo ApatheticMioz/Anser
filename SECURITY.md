@@ -78,8 +78,8 @@ in-scope and treated as security issues:
   / root account.
 - Theoretical issues with no realistic attack path in a local-first
   deployment.
-- Vulnerabilities in **upstream** projects (Node.js, vLLM, the LLM
-  weights, `@ast-grep`, the MCP SDK) — please report those to the
+- Vulnerabilities in **upstream** projects (Rust, Cargo, vLLM, the LLM
+  weights, `ast-grep`, `rmcp`) — please report those to the
   respective maintainers; we will coordinate if it affects Castor.
 
 ## Our Commitments
@@ -106,8 +106,8 @@ in-scope and treated as security issues:
 ## If You Find a Vulnerability in a Dependency
 
 Report it to the dependency's maintainer first, and let us know so we can
-pin / patch on our side. We track dependencies via `package-lock.json` and
-`npm audit` in CI.
+pin / patch on our side. We track dependencies via `Cargo.lock` and
+`cargo audit` in CI.
 
 ---
 

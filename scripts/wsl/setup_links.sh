@@ -27,8 +27,6 @@ ln -sf "$SOURCE_DIR/start_huge.sh" ~/qwen-serving/launchers/start_huge.sh
 ln -sf "$SOURCE_DIR/start_fast.sh" ~/qwen-serving/launchers/start_fast.sh
 ln -sf "$SOURCE_DIR/status.sh" ~/qwen-serving/launchers/status.sh
 ln -sf "$SOURCE_DIR/stop_server.sh" ~/qwen-serving/launchers/stop_server.sh
-ln -sf "$REPO_ROOT/mcp-castor/stream_proxy.js" ~/qwen-serving/stream_proxy.js
-
 # Link home helpers
 ln -sf "$SOURCE_DIR/wait_ready.sh" ~/wait_ready.sh
 ln -sf "$SOURCE_DIR/run_qb.sh" ~/run_qb.sh
@@ -40,20 +38,21 @@ ln -sf "$REPO_ROOT/GEMINI.md" ~/.gemini/GEMINI.md
 ln -sf "$REPO_ROOT/CLAUDE.md" ~/.claude/CLAUDE.md
 
 # Symlink Antigravity IDE lazy MCP schemas & instructions from Windows canonical master
-rm -rf ~/.gemini/antigravity-ide/mcp/qwen38-local
-ln -sfn "$WIN_HOME/.gemini/antigravity-ide/mcp/qwen38-local" ~/.gemini/antigravity-ide/mcp/qwen38-local
+rm -rf ~/.gemini/antigravity-ide/mcp/castor
+ln -sfn "$WIN_HOME/.gemini/antigravity-ide/mcp/castor" ~/.gemini/antigravity-ide/mcp/castor
 
-# WSL-specific MCP config pointing to POSIX index.js (break any symlink to Windows master)
+# WSL-specific MCP config pointing to Castor binary (break any symlink to Windows master)
+CASTOR_BIN="$REPO_ROOT/target/release/castor"
+if [ ! -f "$CASTOR_BIN" ]; then
+  CASTOR_BIN="$REPO_ROOT/target/debug/castor"
+fi
 rm -f ~/.gemini/config/mcp_config.json
 cat << EOF > ~/.gemini/config/mcp_config.json
 {
   "mcpServers": {
-    "qwen38-local": {
-      "command": "node",
-      "args": ["$REPO_ROOT/mcp-castor/index.js"],
-      "env": {
-        "QWEN_RACE_MS": "150000"
-      }
+    "castor": {
+      "command": "$CASTOR_BIN",
+      "args": ["mcp"]
     }
   }
 }

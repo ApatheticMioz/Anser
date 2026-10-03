@@ -41,18 +41,17 @@ export REQ_METRICS=1
 # accuracy lift over off, without xhigh's verbosity tax on simple delegated tasks.
 export EXTRA_ARGS='--default-chat-template-kwargs {"reasoning_effort":"medium"}'
 # Universal Stateful UTF-8 & SSE Stream Sanitizer Proxy (port 18022 -> 18020)
-# Derive the proxy script path from this script's own location so the repo is
-# portable (no hardcoded /mnt/d/ drive mount). This script lives at
-# <ecosystem>/scripts/wsl/start_huge.sh; the proxy at <ecosystem>/mcp-castor/stream_proxy.js.
+# Derive the proxy binary from this script's own location so the repo is
+# portable (no hardcoded /mnt/d/ drive mount).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ECOSYSTEM_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-STREAM_PROXY_SCRIPT="${STREAM_PROXY_PATH:-${ECOSYSTEM_ROOT}/mcp-castor/stream_proxy.js}"
-if [ ! -f "$STREAM_PROXY_SCRIPT" ] && [ -f ~/qwen-serving/stream_proxy.js ]; then
-  STREAM_PROXY_SCRIPT=~/qwen-serving/stream_proxy.js
+CASTOR_BIN="${ECOSYSTEM_ROOT}/target/release/castor"
+if [ ! -f "$CASTOR_BIN" ]; then
+  CASTOR_BIN="${ECOSYSTEM_ROOT}/target/debug/castor"
 fi
-if [ -f "$STREAM_PROXY_SCRIPT" ]; then
-  pkill -9 -f 'stream_proxy.js' 2>/dev/null || true
-  setsid node "$STREAM_PROXY_SCRIPT" < /dev/null > /tmp/stream_proxy.log 2>&1 &
+if [ -f "$CASTOR_BIN" ]; then
+  pkill -9 -f 'castor proxy' 2>/dev/null || true
+  setsid "$CASTOR_BIN" proxy < /dev/null > /tmp/stream_proxy.log 2>&1 &
 fi
 exec bash single-user/start_qwen.sh
 
