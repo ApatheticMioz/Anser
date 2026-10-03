@@ -28,18 +28,31 @@ pub struct CompositeExecutor {
     workspace_root: PathBuf,
     fs: FsExecutor,
     web: WebClient,
+    brave_api_key: Option<String>,
     extensions: Option<ExtensionBridge>,
 }
 
 impl CompositeExecutor {
     /// Create a new executor for the given workspace root, with optional extension bridge.
     pub fn new(workspace_root: impl Into<PathBuf>, extensions: Option<ExtensionBridge>) -> Result<Self, fs::FsError> {
-        let root = workspace_root.into();
+        Self::with_config(workspace_root, None, None, extensions)
+    }
+
+    /// Create a new executor with explicit search configuration.
+    pub fn with_config(
+        workspace_root: impl Into<PathBuf>,
+        searxng_url: Option<String>,
+        brave_api_key: Option<String>,
+        extensions: Option<ExtensionBridge>,
+    ) -> Result<Self, fs::FsError> {
+        let root = crate::platform::to_host_path(workspace_root.into());
         let fs = FsExecutor::new(&root)?;
+        let web = WebClient::with_base_urls(searxng_url, None, None);
         Ok(Self {
             fs,
             workspace_root: root,
-            web: WebClient::new(),
+            web,
+            brave_api_key,
             extensions,
         })
     }
@@ -297,7 +310,8 @@ impl ToolExecutor for CompositeExecutor {
             // Web tools
             "web_search" => {
                 let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                match self.web.web_search(query, None).await {
+                let limit = args.get("num_results").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+                match self.web.web_search(query, self.brave_api_key.as_deref()).await {
                     Ok(outcome) => {
                         if outcome.results.is_empty() {
                             Ok(ToolOutcome {
@@ -305,7 +319,7 @@ impl ToolExecutor for CompositeExecutor {
                             })
                         } else {
                             let mut lines = Vec::new();
-                            for (i, r) in outcome.results.iter().enumerate() {
+                            for (i, r) in outcome.results.iter().take(limit).enumerate() {
                                 lines.push(format!("{}. [{}]({})\n   {}", i + 1, r.title, r.url, r.snippet));
                             }
                             Ok(ToolOutcome {

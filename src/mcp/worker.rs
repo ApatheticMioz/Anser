@@ -125,7 +125,12 @@ pub async fn run_job_with_engine(
         None
     };
 
-    let executor = match CompositeExecutor::new(&host_cwd, ext_bridge) {
+    let executor = match CompositeExecutor::with_config(
+        &host_cwd,
+        config.searxng_url.clone(),
+        config.brave_api_key.clone(),
+        ext_bridge,
+    ) {
         Ok(exec) => exec,
         Err(e) => {
             let err_msg = format!("failed to initialize executor: {e}");
