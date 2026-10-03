@@ -573,7 +573,7 @@ mod tests {
         let path = state.tasks().join("task_corrupt.json");
         std::fs::write(&path, "{ not valid json !").unwrap();
 
-        let (status, body) = http_get(&addr, "/task/corrupt/status").await;
+        let (status, body) = http_get(&addr, "/task/task_corrupt/status").await;
         assert_eq!(status, 400, "malformed file must be 400, not 500");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(

@@ -174,12 +174,7 @@ impl TaskRegistry {
 
     /// Path of the disk mirror for a task id.
     pub fn task_path(&self, id: &str) -> PathBuf {
-        let filename = if id.starts_with("task_") {
-            format!("{id}.json")
-        } else {
-            format!("task_{id}.json")
-        };
-        self.state.tasks().join(filename)
+        self.state.tasks().join(format!("{id}.json"))
     }
 
     /// Atomically write a record to its disk mirror (write-temp-then-rename).
@@ -187,9 +182,8 @@ impl TaskRegistry {
         let dir = self.state.tasks();
         fs::create_dir_all(&dir)?;
         let path = self.task_path(&rec.id);
-        let prefix = if rec.id.starts_with("task_") { "" } else { "task_" };
         let tmp = dir.join(format!(
-            "{prefix}{}.tmp_{}_{}",
+            "{}.tmp_{}_{}",
             rec.id,
             std::process::id(),
             now_ms()
