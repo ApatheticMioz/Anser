@@ -63,6 +63,7 @@ pub struct Config {
     pub searxng_url: Option<String>,
     /// Secret: never print the value.
     pub brave_api_key: Option<String>,
+    pub boot_timeout_secs: u64,
     pub state_dir: PathBuf,
 }
 
@@ -90,6 +91,7 @@ pub struct Sources {
     pub tool_prefix: Source,
     pub searxng_url: Source,
     pub brave_api_key: Source,
+    pub boot_timeout_secs: Source,
     pub state_dir: Source,
 }
 
@@ -132,6 +134,7 @@ struct FileConfig {
     tool_prefix: Option<String>,
     searxng_url: Option<String>,
     brave_api_key: Option<String>,
+    boot_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -201,9 +204,23 @@ pub fn load_with(get_env: impl Fn(&str) -> Option<String>) -> Result<LoadedConfi
             _ => Ok(None),
         }
     };
+    let env_u64 = |key: &str| -> Result<Option<u64>, ConfigError> {
+        match get_env(key) {
+            Some(v) if !v.is_empty() => v
+                .parse::<u64>()
+                .map(Some)
+                .map_err(|e| ConfigError::InvalidValue {
+                    key: key.to_string(),
+                    value: v,
+                    reason: e.to_string(),
+                }),
+            _ => Ok(None),
+        }
+    };
 
     let env_max_context = env_u32("CASTOR_MAX_CONTEXT")?;
     let env_max_concurrent = env_u32("CASTOR_MAX_CONCURRENT_TASKS")?;
+    let env_boot_timeout = env_u64("CASTOR_BOOT_TIMEOUT_SECS")?;
     let env_port_engine = env_u16("CASTOR_PORT_ENGINE")?;
     let env_port_status = env_u16("CASTOR_PORT_STATUS")?;
     let env_port_proxy = env_u16("CASTOR_PORT_PROXY")?;
@@ -239,6 +256,11 @@ pub fn load_with(get_env: impl Fn(&str) -> Option<String>) -> Result<LoadedConfi
         file.and_then(|f| f.tool_prefix.clone()),
         "castor".to_string(),
     );
+    let (boot_timeout_secs, src_boot_timeout_secs) = pick_u64(
+        env_boot_timeout,
+        file.and_then(|f| f.boot_timeout_secs),
+        180,
+    );
 
     let (ports, (src_port_engine, src_port_status, src_port_proxy)) = {
         let (engine, src_port_engine) =
@@ -271,6 +293,7 @@ pub fn load_with(get_env: impl Fn(&str) -> Option<String>) -> Result<LoadedConfi
             tool_prefix,
             searxng_url,
             brave_api_key,
+            boot_timeout_secs,
             state_dir,
         },
         sources: Sources {
@@ -288,6 +311,7 @@ pub fn load_with(get_env: impl Fn(&str) -> Option<String>) -> Result<LoadedConfi
             tool_prefix: src_tool_prefix,
             searxng_url: src_searxng_url,
             brave_api_key: src_brave_api_key,
+            boot_timeout_secs: src_boot_timeout_secs,
             state_dir: state_dir_src,
         },
     })
@@ -328,6 +352,12 @@ pub fn format_loaded(loaded: &LoadedConfig) -> String {
         "brave_api_key",
         &display_secret(c.brave_api_key.as_deref()),
         s.brave_api_key,
+    );
+    row(
+        &mut out,
+        "boot_timeout_secs",
+        &c.boot_timeout_secs.to_string(),
+        s.boot_timeout_secs,
     );
     row(&mut out, "state_dir", &c.state_dir.display().to_string(), s.state_dir);
     out
@@ -381,6 +411,14 @@ fn pick_opt_u32(env: Option<u32>, file: Option<u32>) -> (Option<u32>, Source) {
         (Some(_), _) => (env, Source::Env),
         (None, Some(_)) => (file, Source::File),
         (None, None) => (None, Source::Default),
+    }
+}
+
+fn pick_u64(env: Option<u64>, file: Option<u64>, default: u64) -> (u64, Source) {
+    match (env, file) {
+        (Some(_), _) => (env.unwrap(), Source::Env),
+        (None, Some(_)) => (file.unwrap(), Source::File),
+        (None, None) => (default, Source::Default),
     }
 }
 
@@ -501,7 +539,8 @@ mod tests {
             "max_concurrent_tasks": 7,
             "tool_prefix": "cast",
             "searxng_url": "https://searxng.example",
-            "brave_api_key": "bkey"
+            "brave_api_key": "bkey",
+            "boot_timeout_secs": 240
         }"#;
         let l = load_case(&[], Some(json));
         assert_eq!(l.config.model.as_deref(), Some("m1"));
@@ -516,6 +555,7 @@ mod tests {
         assert_eq!(l.config.tool_prefix, "cast");
         assert_eq!(l.config.searxng_url.as_deref(), Some("https://searxng.example"));
         assert_eq!(l.config.brave_api_key.as_deref(), Some("bkey"));
+        assert_eq!(l.config.boot_timeout_secs, 240);
         // every file-provided field is annotated as File
         assert_eq!(l.sources.model, Source::File);
         assert_eq!(l.sources.base_url, Source::File);
@@ -531,6 +571,7 @@ mod tests {
         assert_eq!(l.sources.tool_prefix, Source::File);
         assert_eq!(l.sources.searxng_url, Source::File);
         assert_eq!(l.sources.brave_api_key, Source::File);
+        assert_eq!(l.sources.boot_timeout_secs, Source::File);
         // state dir comes from the env pin in load_case
         assert_eq!(l.sources.state_dir, Source::Env);
     }

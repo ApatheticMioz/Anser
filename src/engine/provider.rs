@@ -417,6 +417,7 @@ mod tests {
             tool_prefix: String::new(),
             searxng_url: None,
             brave_api_key: None,
+            boot_timeout_secs: 180,
             state_dir: PathBuf::from("/tmp/castor-test"),
         }
     }

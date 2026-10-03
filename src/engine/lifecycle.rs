@@ -67,7 +67,7 @@ impl EngineLifecycle {
             wedge: WedgeCounter::from_state(state, "engine"),
             client,
             child: Mutex::new(None),
-            boot_timeout: Duration::from_secs(60),
+            boot_timeout: Duration::from_secs(config.boot_timeout_secs),
         }
     }
 
@@ -307,6 +307,7 @@ mod tests {
             tool_prefix: String::new(),
             searxng_url: None,
             brave_api_key: None,
+            boot_timeout_secs: 180,
             state_dir: state.root().to_path_buf(),
         }
     }
