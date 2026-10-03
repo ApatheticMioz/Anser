@@ -176,7 +176,6 @@ async fn wait_handler(
     tokio::select! {
         _ = wait_for_terminal(rx, reg, &id, timeout) => {}
     };
-    ();
 
     // Re-read after the wait: the task may have gone terminal.
     if let Some(rec) = reg.get(&id).await
@@ -446,13 +445,6 @@ mod tests {
         let s = StateDir::new(p);
         s.ensure().unwrap();
         s
-    }
-
-    fn rt() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
     }
 
     /// A dead pid (spawn a child, wait for it to exit).

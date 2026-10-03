@@ -229,14 +229,15 @@ impl TaskRegistry {
         Ok(id)
     }
 
-    /// Fetch a task by id (in-memory first, then the disk mirror).
+    /// Fetch a task by id (disk mirror first to see cross-process updates, then in-memory).
     pub async fn get(&self, id: &str) -> Option<TaskRecord> {
-        if let Some(r) = self.inner.tasks.lock().await.get(id) {
-            return Some(r.clone());
+        if let Ok(raw) = fs::read_to_string(self.task_path(id))
+            && let Ok(rec) = serde_json::from_str::<TaskRecord>(&raw)
+        {
+            self.inner.tasks.lock().await.insert(id.to_string(), rec.clone());
+            return Some(rec);
         }
-        // Fall back to the disk mirror (task created by another instance).
-        let raw = fs::read_to_string(self.task_path(id)).ok()?;
-        serde_json::from_str(&raw).ok()
+        self.inner.tasks.lock().await.get(id).cloned()
     }
 
     /// Read a task's disk mirror, distinguishing the three execution signals:
@@ -257,11 +258,9 @@ impl TaskRegistry {
         }
     }
 
-    /// List all known tasks (in-memory plus any on-disk mirrors).
+    /// List all known tasks (refreshed from disk mirror).
     pub async fn list(&self) -> Vec<TaskRecord> {
-        let mut out: Vec<TaskRecord> = self.inner.tasks.lock().await.values().cloned().collect();
-        let seen: std::collections::HashSet<String> =
-            out.iter().map(|r| r.id.clone()).collect();
+        let mut map = self.inner.tasks.lock().await;
         if let Ok(entries) = fs::read_dir(self.state.tasks()) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
@@ -271,16 +270,14 @@ impl TaskRegistry {
                 let Some(stem) = stem.strip_suffix(".json") else {
                     continue;
                 };
-                if seen.contains(stem) {
-                    continue;
-                }
                 if let Ok(raw) = fs::read_to_string(entry.path())
-                    && let Ok(rec) = serde_json::from_str::<TaskRecord>(&raw) {
-                        out.push(rec);
-                    }
+                    && let Ok(rec) = serde_json::from_str::<TaskRecord>(&raw)
+                {
+                    map.insert(stem.to_string(), rec);
+                }
             }
         }
-        out
+        map.values().cloned().collect()
     }
 
     /// Apply a mutation to a task and mirror it to disk.
@@ -292,6 +289,11 @@ impl TaskRegistry {
         F: FnOnce(&mut TaskRecord),
     {
         let mut map = self.inner.tasks.lock().await;
+        if let Ok(raw) = fs::read_to_string(self.task_path(id))
+            && let Ok(rec) = serde_json::from_str::<TaskRecord>(&raw)
+        {
+            map.insert(id.to_string(), rec);
+        }
         let rec = map
             .get_mut(id)
             .ok_or_else(|| RegistryError::NotFound { id: id.to_string() })?;
@@ -318,6 +320,11 @@ impl TaskRegistry {
     ) -> Result<TaskRecord, RegistryError> {
         let now = now_ms();
         let mut map = self.inner.tasks.lock().await;
+        if let Ok(raw) = fs::read_to_string(self.task_path(id))
+            && let Ok(rec) = serde_json::from_str::<TaskRecord>(&raw)
+        {
+            map.insert(id.to_string(), rec);
+        }
         let rec = map
             .get_mut(id)
             .ok_or_else(|| RegistryError::NotFound { id: id.to_string() })?;
@@ -439,13 +446,6 @@ mod tests {
         let s = StateDir::new(p);
         s.ensure().unwrap();
         s
-    }
-
-    fn rt() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
     }
 
     /// A pid that is (almost certainly) dead: spawn a child and wait for it.

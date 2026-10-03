@@ -522,11 +522,11 @@ mod tests {
 
         let mut pid: Option<u32> = None;
         for _ in 0..50 {
-            if let Ok(s) = std::fs::read_to_string(&pidfile) {
-                if let Ok(p) = s.trim().parse() {
-                    pid = Some(p);
-                    break;
-                }
+            if let Ok(s) = std::fs::read_to_string(&pidfile)
+                && let Ok(p) = s.trim().parse()
+            {
+                pid = Some(p);
+                break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }

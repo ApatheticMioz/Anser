@@ -17,7 +17,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ast_grep_core::matcher::Pattern;
-use ast_grep_core::replacer::Replacer;
 use ast_grep_core::tree_sitter::LanguageExt;
 use ast_grep_core::Node;
 use ast_grep_language::SupportLang;
@@ -218,8 +217,10 @@ pub fn ast_replace(
     let target = resolve_target(root, &root.to_string_lossy())?;
     let files = resolve_files(&target)?;
 
-    let mut summary = ReplaceSummary::default();
-    summary.files_scanned = files.len();
+    let mut summary = ReplaceSummary {
+        files_scanned: files.len(),
+        ..Default::default()
+    };
 
     for file in &files {
         let file_lang = infer_lang_by_extension(file).unwrap_or(lang);

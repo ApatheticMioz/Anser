@@ -65,6 +65,7 @@ struct FrozenTool {
 /// A single spawned MCP extension server and its frozen tool set.
 struct ExtServer {
     /// Sanitized server name (used to namespace tool names).
+    #[allow(dead_code)]
     name: String,
     /// The child's PID (captured before the transport is consumed by `serve`).
     pid: Option<u32>,

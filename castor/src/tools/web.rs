@@ -178,15 +178,15 @@ impl WebClient {
         }
 
         // 2. Brave (only when a key is configured).
-        if let Some(key) = brave_api_key {
-            if !key.is_empty() {
-                let results = self.search_brave(q, key).await?;
-                return Ok(SearchOutcome {
-                    query: q.to_string(),
-                    provider: "brave".into(),
-                    results,
-                });
-            }
+        if let Some(key) = brave_api_key
+            && !key.is_empty()
+        {
+            let results = self.search_brave(q, key).await?;
+            return Ok(SearchOutcome {
+                query: q.to_string(),
+                provider: "brave".into(),
+                results,
+            });
         }
 
         // 3. DuckDuckGo HTML (last resort).
@@ -381,12 +381,11 @@ fn parse_ddg_html(html: &str) -> Vec<SearchResult> {
 /// DuckDuckGo wraps the real URL in a `uddg` query parameter on its own
 /// redirect endpoint; decode it when present.
 fn resolve_ddg_link(link: &str) -> String {
-    if let Ok(u) = reqwest::Url::parse(link) {
-        if let Some(uddg) = u.query_pairs().find(|(k, _)| k == "uddg").map(|(_, v)| v) {
-            if !uddg.is_empty() {
-                return uddg.to_string();
-            }
-        }
+    if let Ok(u) = reqwest::Url::parse(link)
+        && let Some(uddg) = u.query_pairs().find(|(k, _)| k == "uddg").map(|(_, v)| v)
+        && !uddg.is_empty()
+    {
+        return uddg.to_string();
     }
     link.to_string()
 }
@@ -555,7 +554,7 @@ fn classify(content_type: &str, bytes: & [u8]) -> Category {
 /// A NUL byte in the first 8KB is a strong signal of binary content.
 fn has_nul_byte(bytes: &[u8]) -> bool {
     let limit = bytes.len().min(8192);
-    bytes[..limit].iter().any(|&b| b == 0)
+    bytes[..limit].contains(&0)
 }
 
 /// Truncate to the output cap, cutting at a clean boundary and appending a
@@ -593,7 +592,6 @@ fn cap_output(text: &str, full_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use axum::routing::{get, post};

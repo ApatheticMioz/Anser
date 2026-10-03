@@ -430,6 +430,7 @@ mod tests {
 
     struct Vector {
         input: &'static str,
+        #[allow(dead_code)]
         op: Option<&'static str>,
         expected: Outcome,
         layer: &'static str,

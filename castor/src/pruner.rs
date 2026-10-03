@@ -755,7 +755,7 @@ mod tests {
 
     /// A time 1 day before `now` (well within the 14-day retention).
     fn new_time(now: u64) -> SystemTime {
-        UNIX_EPOCH + Duration::from_millis(now - 1 * 86_400_000)
+        UNIX_EPOCH + Duration::from_millis(now - 86_400_000)
     }
 
     fn policy_now(now: u64) -> PrunePolicy {

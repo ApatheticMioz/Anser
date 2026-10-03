@@ -2,20 +2,20 @@
 //!
 //! Subcommands: mcp (default), proxy, status, server, config, install, clean, evo.
 
-mod config;
-pub mod evo;
+pub mod config;
+pub mod engine;
 pub mod evals;
-mod engine;
-mod mcp;
-mod platform;
+pub mod evo;
+pub mod mcp;
+pub mod platform;
+pub mod proxy;
 pub mod pruner;
-mod proxy;
-mod runner;
+pub mod runner;
 pub mod skills;
-mod state;
-mod task;
+pub mod state;
+pub mod task;
 pub mod telemetry;
-mod tools;
+pub mod tools;
 
 use clap::{Parser, Subcommand};
 
@@ -99,6 +99,12 @@ enum Command {
         state_dir: String,
         /// Task id to bind to the lease
         task_id: String,
+    },
+    /// (internal) background worker process for a dispatched task
+    #[command(name = "__worker", hide = true)]
+    __Worker {
+        /// Path to the JSON JobSpec file
+        spec_path: String,
     },
 }
 
@@ -596,6 +602,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("HELD");
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             let _ = sem.release(&lease);
+        }
+        Command::__Worker { spec_path } => {
+            let loaded = config::load().map_err(|e| format!("config: {e}"))?;
+            let state = state::StateDir::from_config(&loaded.config);
+            let _ = state.ensure();
+            let raw = std::fs::read_to_string(&spec_path)
+                .map_err(|e| format!("cannot read job spec {spec_path}: {e}"))?;
+            let spec: mcp::worker::JobSpec = serde_json::from_str(&raw)
+                .map_err(|e| format!("invalid job spec JSON {spec_path}: {e}"))?;
+            mcp::worker::run_job(&spec, &state, &loaded.config)
+                .await
+                .map_err(|e| format!("worker failed: {e}"))?;
         }
     }
     Ok(())

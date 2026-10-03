@@ -693,7 +693,7 @@ mod tests {
         // Do everything inside a single block_on so spawned tasks have a
         // reactor context.
         let sem_inner = sem.clone();
-        let (first, second) = rt.block_on(async move {
+        let (_first, second) = rt.block_on(async move {
             let sem1 = sem_inner.clone();
             let sem2 = sem_inner.clone();
             let h1 = tokio::spawn(async move { sem1.acquire("first").await });

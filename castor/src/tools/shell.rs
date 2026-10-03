@@ -477,8 +477,7 @@ fn analyze_segment(cmd: &str, cwd: &str, depth: usize) -> Result<(), ShellPolicy
     if DESTRUCTIVE.contains(&name.as_str()) {
         let is_win = name != "rm";
         let mut operands = Vec::new();
-        for j in (i + 1)..tokens.len() {
-            let tok = &tokens[j];
+        for tok in tokens.iter().skip(i + 1) {
             if let Some(eq) = tok.find('=')
                 && eq > 0 && (tok.starts_with('-') || tok.starts_with('/')) {
                     let value = &tok[eq + 1..];
@@ -571,16 +570,25 @@ pub enum ShellError {
 ///
 /// stdout/stderr are captured with a per-stream byte cap; streams beyond
 /// the cap are drained and `truncated` is set.
-pub fn run(cmd: &str, cwd: &Path, timeout: Duration) -> Result<ShellOutput, ShellError> {
+/// Executes a shell command asynchronously with layered safety:
+///
+/// 1. `validate` — typed policy refusal; nothing is ever spawned on refusal.
+/// 2. `cwd` resolved through the sandbox layers (canonicalized real path).
+/// 3. Spawn `bash -c <cmd>` with `process_group(0)`.
+pub async fn run_async(cmd: &str, cwd: &Path, timeout: Duration) -> Result<ShellOutput, ShellError> {
     // Layer 1: policy validation — typed refusal, nothing spawns.
     validate(cmd)?;
     // Layer 2: resolve the cwd through the sandbox layers (real path).
     let cwd = super::sandbox::resolve_workspace_root(cwd)?;
+    execute(cmd, &cwd, timeout).await
+}
 
+/// Executes a shell command synchronously by driving `run_async` on a current-thread runtime.
+pub fn run(cmd: &str, cwd: &Path, timeout: Duration) -> Result<ShellOutput, ShellError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    rt.block_on(execute(cmd, &cwd, timeout))
+    rt.block_on(run_async(cmd, cwd, timeout))
 }
 
 /// Drains an async stream into a byte-capped buffer, continuing to read

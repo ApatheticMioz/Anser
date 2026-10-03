@@ -200,6 +200,12 @@ impl Utf8Reassembler {
     }
 }
 
+impl Default for Utf8Reassembler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SSE sanitizer
 // ---------------------------------------------------------------------------
@@ -216,6 +222,12 @@ pub struct SseSanitizer {
     detector: RepetitionDetector,
     line_buf: String,
     done: bool,
+}
+
+impl Default for SseSanitizer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SseSanitizer {
