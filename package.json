@@ -1,7 +1,7 @@
 {
   "name": "mcp-castor",
   "version": "1.0.0",
-  "description": "Castor: Universal 245K Agent Microkernel & MCP Pair-Programming Harness in Rust",
+  "description": "Universal Cloud-to-Local Agent Bridge & MCP Microkernel in Rust. Offload token-heavy AST surgery and file operations to any local LLM (Ollama, vLLM, LM Studio) at $0 cost.",
   "type": "module",
   "bin": {
     "castor": "bin/castor.js",
@@ -28,7 +28,10 @@
     "agent-harness",
     "rust",
     "pair-programming",
+    "ollama",
     "vllm",
+    "lm-studio",
+    "local-llm",
     "qwen",
     "claude-code",
     "antigravity"

@@ -1,16 +1,16 @@
 # Castor
 
-**The Universal 245K Agent Microkernel & MCP Pair-Programming Harness.**
+**The Universal Cloud-to-Local Agent Bridge & MCP Microkernel.**
 
 [![CI](https://img.shields.io/badge/CI-Passing-success?logo=githubactions&logoColor=white)](#testing--verification)
 [![Rust](https://img.shields.io/badge/Rust-2024%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Test Gate: 243/243](https://img.shields.io/badge/Test%20Gate-243%2F243%20Tests%20Green-success.svg)](#testing--verification)
-[![Context](https://img.shields.io/badge/Context-245%2C760%20Tokens-purple.svg)](#model-serving--speculative-decoding)
-[![Engine](https://img.shields.io/badge/Engine-vLLM%20%2B%20DFlash2%20%2B%20KVarN-green.svg)](#model-serving--speculative-decoding)
+[![Backend: Universal](https://img.shields.io/badge/Backend-Ollama%20%7C%20vLLM%20%7C%20LM%20Studio-blue.svg)](#backend--model-configuration)
+[![Flagship Preset](https://img.shields.io/badge/Flagship%20Rig-Qwen3.8--27B%20%2B%20245K-purple.svg)](#flagship-reference-profile-qwen38-27b--245k-context)
 [![Security](https://img.shields.io/badge/Security-137%20Containment%20Vectors-success.svg)](#zero-trust-sandboxed-file-operations)
 
-> **Castor** is a model-agnostic serving harness and in-process agent microkernel written in Rust and exposed as a standard Model Context Protocol (MCP) server. It pairs high-reasoning cloud orchestrators (Google Antigravity, Gemini 3.8 Flash, Claude Code) with locally-served execution models (**Qwen3.8-27B**, Ollama, vLLM, llama.cpp) across any repository.
+> **Castor** is a model-agnostic serving harness and in-process agent microkernel written in Rust and exposed as a standard Model Context Protocol (MCP) server. It pairs high-reasoning cloud orchestrators (Google Antigravity, Gemini 3.8 Flash, Claude Code, Cursor) with locally-served execution models (Ollama, vLLM, LM Studio, llama.cpp) across any codebase.
 > 
 > **The Ultimate API Bill Cutter:** The cloud orchestrator handles high-level architecture, task decomposition, and supervisory steering. The local coworker ingests repository context, executes structural AST refactoring, runs test loops, and mutates code at **$0 token cost**. **Zero cloud token hoarding. 90%+ API cost reduction.**
 
@@ -125,6 +125,33 @@ Complementing `castor --help`:
 | `castor proxy` | Run stateful SSE UTF-8 stream sanitizer proxy (`:18022` $\to$ `:18020`) | `--port`, `--engine-port` |
 | `castor status` | Run zero-turn long-poll HTTP wait endpoint (`:18021`) | `--port` |
 | `castor evo` | Run offline batch evaluations and view lineage DAG | `<run\|status>` |
+
+---
+
+## Backend & Model Configuration
+
+Castor connects to **any OpenAI-compatible local inference endpoint**. Configuration is loaded from `~/.castor/config.json` with environment variable overrides (`CASTOR_*`):
+
+### 1. Ollama (Default port: 11434)
+```bash
+# Point to your local Ollama instance running any coding model
+export CASTOR_BASE_URL="http://127.0.0.1:11434/v1"
+export CASTOR_MODEL="qwen2.5-coder:32b"
+```
+
+### 2. LM Studio (Default port: 1234)
+```bash
+export CASTOR_BASE_URL="http://127.0.0.1:1234/v1"
+export CASTOR_MODEL="qwen3.8-27b"
+```
+
+### 3. Flagship Reference Profile (Qwen3.8-27B + 245K Context)
+The author's recommended high-performance setup for consumer 24 GB GPUs (NVIDIA RTX 3090 / 4090):
+- **Model**: Qwen3.8-27B (hybrid dense Gated-DeltaNet + attention, 65 layers, W4A16 AutoRound).
+- **Endpoint**: `http://127.0.0.1:18020/v1` (managed via `castor server start` or `scripts/wsl/start_huge.sh`).
+- **Vision Offloading**: `VISION=1` + `VLLM_VISION_CPU_OFFLOAD_GB=1` keeps the vision encoder in host RAM while preserving all 268,000+ KV tokens in GPU VRAM.
+- **Speculative Block Drafter**: DFlash2 1.92B non-autoregressive drafter yielding 5.33 tokens/step mean acceptance (61.9% draft acceptance rate, ~61 tok/s).
+- **KVarN Tiled KV Cache**: 4-bit keys / 2-bit values per 128-token tile, sustaining a 245,760-token context ceiling.
 
 ---
 
