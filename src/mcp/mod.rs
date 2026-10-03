@@ -227,7 +227,16 @@ impl CastorMcpServer {
         }
 
         // Spawn detached worker process.
-        let bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("castor"));
+        let mut bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("castor"));
+        if !bin.exists() {
+            let s = bin.to_string_lossy();
+            if let Some(clean) = s.strip_suffix(" (deleted)") {
+                let clean_path = std::path::PathBuf::from(clean);
+                if clean_path.exists() {
+                    bin = clean_path;
+                }
+            }
+        }
         let mut cmd = tokio::process::Command::new(&bin);
         cmd.arg("__worker").arg(&spec_path);
         cmd.stdin(std::process::Stdio::null());
