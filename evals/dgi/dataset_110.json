@@ -1,0 +1,882 @@
+[
+  {
+    "id": "res_01",
+    "domain": "research",
+    "category": "single_topic_docs",
+    "expected": "ADMIT",
+    "rationale": "Single-concern research with read-only intent",
+    "prompt": "Research slice (read-only; no file writes). Investigate axum 0.8 routing breaking changes regarding Path extractor and wildcard routes. Check docs.rs and release notes. Return a concise bulleted summary of migration steps."
+  },
+  {
+    "id": "res_02",
+    "domain": "research",
+    "category": "paper_synthesis",
+    "expected": "ADMIT",
+    "rationale": "Focused paper research with read-only directive",
+    "prompt": "Research slice (strictly read-only). Search for recent 2026 papers on KV-cache compression and dynamic token eviction (e.g. SnapKV, PyramidKV). Summarize the top 3 algorithmic approaches and their measured latency tradeoffs."
+  },
+  {
+    "id": "res_03",
+    "domain": "research",
+    "category": "api_investigation",
+    "expected": "ADMIT",
+    "rationale": "Targeted API research for a single crate",
+    "prompt": "Read-only inquiry: Investigate the ast-grep Rust native API for rule-based multi-file replacement. Look at ast_grep_core::Node and Pattern. Document how to construct a metavariable matcher without using the CLI binary."
+  },
+  {
+    "id": "res_04",
+    "domain": "research",
+    "category": "codebase_audit",
+    "expected": "ADMIT",
+    "rationale": "Single subsystem inventory with read-only flag",
+    "prompt": "Audit slice (READ-ONLY, plan mode: no file writes). Inspect castor/src/tools/sandbox.rs and report all 137 security vectors categorized by layer. Do not modify files."
+  },
+  {
+    "id": "res_05",
+    "domain": "research",
+    "category": "competitive_analysis",
+    "expected": "ADMIT",
+    "rationale": "Web search research with explicit read-only constraint",
+    "prompt": "Research slice (read-only). Search the web for architectural comparisons between vLLM, SGLang, and TensorRT-LLM on speculative decoding acceptance rates with Qwen 2.5/3.0. Synthesize findings in your reply."
+  },
+  {
+    "id": "res_06",
+    "domain": "research",
+    "category": "performance_profile",
+    "expected": "ADMIT",
+    "rationale": "Single subsystem profiling",
+    "prompt": "Research slice: Profile memory consumption during streaming SSE proxy in castor/src/proxy/sanitize.rs. Read the chunk accumulation logic and check if buffer reuse can eliminate reallocation. Plan mode, no edits."
+  },
+  {
+    "id": "res_07",
+    "domain": "research",
+    "category": "monolithic_research_sprawl",
+    "expected": "REJECT",
+    "rationale": "Massive unconstrained research sprawling across 8 disjoint topics",
+    "prompt": "Broad overhaul research: Search the web and audit the repo to compare our database ORM (Diesel vs SeaORM), our web framework (Axum vs Actix), our serialization (Serde vs Borsh), our frontend framework (React vs Svelte vs Vue), our deployment target (Docker vs Nomad vs K8s), our tracing backend (Jaeger vs OpenTelemetry vs Datadog), and our caching tier (Redis vs DragonFly). Document all 7 subsystems in full architecture docs. Detailed evaluation criteria for each of the 7 layers: latency, throughput, memory, developer experience, community support, maintenance risk, security posture, and license compatibility. Detailed evaluation criteria for each of the 7 layers: latency, throughput, memory, developer experience, community support, maintenance risk, security posture, and license compatibility. Detailed evaluation criteria for each of the 7 layers: latency, throughput, memory, developer experience, community support, maintenance risk, security posture, and license compatibility. Detailed evaluation criteria for each of the 7 layers: latency, throughput, memory, developer experience, community support, maintenance risk, security posture, and license compatibility. Detailed evaluation criteria for each of the 7 layers: latency, throughput, memory, developer experience, community support, maintenance risk, security posture, and license compatibility."
+  },
+  {
+    "id": "res_08",
+    "domain": "research",
+    "category": "rich_single_research",
+    "expected": "ADMIT",
+    "rationale": "Rich research spec with exact citations under 2,000 chars",
+    "prompt": "Architecture investigation (read-only): Examine the IPC serialization between castor/src/mcp/mod.rs and detached workers in castor/src/mcp/worker.rs. Currently job specs are serialized as JSON over filesystem. Research if Unix domain sockets or anonymous pipes via tokio::process provide lower latency and automatic cleanup on process drop. Benchmark overhead of serde_json vs bincode for this specific message size. Synthesize trade-offs."
+  },
+  {
+    "id": "res_09",
+    "domain": "research",
+    "category": "library_selection",
+    "expected": "ADMIT",
+    "rationale": "Bounded library selection inquiry",
+    "prompt": "Research slice (read-only): Find mainstream, actively maintained Rust crates for HTML-to-markdown conversion. Compare html2md, html2text, and htmd. Check license (MIT/Apache preferred), dependency tree size, and whether table formatting is supported."
+  },
+  {
+    "id": "res_10",
+    "domain": "research",
+    "category": "rfc_research",
+    "expected": "ADMIT",
+    "rationale": "Focused RFC exploration with single target",
+    "prompt": "Read-only research: Study RFC 9110 HTTP Semantics regarding 408 Request Timeout vs 429 Too Many Requests vs 504 Gateway Timeout. We want to determine which status code standard curl --retry behaves best with when a long-poll server times out."
+  },
+  {
+    "id": "res_11",
+    "domain": "research",
+    "category": "security_cve_search",
+    "expected": "ADMIT",
+    "rationale": "Security research with read-only constraint",
+    "prompt": "Security research slice (read-only). Check GitHub Advisory Database and crates.io security advisories for vulnerabilities affecting tokio 1.38, hyper 1.4, or axum 0.7 in the past 6 months. List CVE IDs and remediation versions."
+  },
+  {
+    "id": "res_12",
+    "domain": "research",
+    "category": "spec_verification",
+    "expected": "ADMIT",
+    "rationale": "Verifying spec compliance against a standard",
+    "prompt": "Research slice (read-only). Review the Model Context Protocol (MCP) specification 2024-11-05 for tool execution error handling. Does the spec mandate isError: true on tool result blocks, or can error text be returned with isError: false? Check reference TypeScript SDK."
+  },
+  {
+    "id": "res_13",
+    "domain": "research",
+    "category": "unbounded_exploration_monolith",
+    "expected": "REJECT",
+    "rationale": "Over 2,500 characters of unconstrained exploration",
+    "prompt": "Perform an exhaustive architectural survey of the entire cloud and local LLM ecosystem. Explore llama.cpp, vLLM, Ollama, TGI, SGLang, ExLlamaV2, Aphrodite, LMDeploy, TensorRT-LLM, MLC-LLM, MistralRS, Candle, and llamafile. For every single engine, inspect their GitHub repositories, read their serving architectures, parse their OpenAI-compatible endpoints, test their speculative decoding support, benchmark their FP8/INT4 quantization kernels, and profile their KV-cache memory managers. Perform an exhaustive architectural survey of the entire cloud and local LLM ecosystem. Explore llama.cpp, vLLM, Ollama, TGI, SGLang, ExLlamaV2, Aphrodite, LMDeploy, TensorRT-LLM, MLC-LLM, MistralRS, Candle, and llamafile. For every single engine, inspect their GitHub repositories, read their serving architectures, parse their OpenAI-compatible endpoints, test their speculative decoding support, benchmark their FP8/INT4 quantization kernels, and profile their KV-cache memory managers. Perform an exhaustive architectural survey of the entire cloud and local LLM ecosystem. Explore llama.cpp, vLLM, Ollama, TGI, SGLang, ExLlamaV2, Aphrodite, LMDeploy, TensorRT-LLM, MLC-LLM, MistralRS, Candle, and llamafile. For every single engine, inspect their GitHub repositories, read their serving architectures, parse their OpenAI-compatible endpoints, test their speculative decoding support, benchmark their FP8/INT4 quantization kernels, and profile their KV-cache memory managers. Perform an exhaustive architectural survey of the entire cloud and local LLM ecosystem. Explore llama.cpp, vLLM, Ollama, TGI, SGLang, ExLlamaV2, Aphrodite, LMDeploy, TensorRT-LLM, MLC-LLM, MistralRS, Candle, and llamafile. For every single engine, inspect their GitHub repositories, read their serving architectures, parse their OpenAI-compatible endpoints, test their speculative decoding support, benchmark their FP8/INT4 quantization kernels, and profile their KV-cache memory managers. Perform an exhaustive architectural survey of the entire cloud and local LLM ecosystem. Explore llama.cpp, vLLM, Ollama, TGI, SGLang, ExLlamaV2, Aphrodite, LMDeploy, TensorRT-LLM, MLC-LLM, MistralRS, Candle, and llamafile. For every single engine, inspect their GitHub repositories, read their serving architectures, parse their OpenAI-compatible endpoints, test their speculative decoding support, benchmark their FP8/INT4 quantization kernels, and profile their KV-cache memory managers. Perform an exhaustive architectural survey of the entire cloud and local LLM ecosystem. Explore llama.cpp, vLLM, Ollama, TGI, SGLang, ExLlamaV2, Aphrodite, LMDeploy, TensorRT-LLM, MLC-LLM, MistralRS, Candle, and llamafile. For every single engine, inspect their GitHub repositories, read their serving architectures, parse their OpenAI-compatible endpoints, test their speculative decoding support, benchmark their FP8/INT4 quantization kernels, and profile their KV-cache memory managers. Perform an exhaustive architectural survey of the entire cloud and local LLM ecosystem. Explore llama.cpp, vLLM, Ollama, TGI, SGLang, ExLlamaV2, Aphrodite, LMDeploy, TensorRT-LLM, MLC-LLM, MistralRS, Candle, and llamafile. For every single engine, inspect their GitHub repositories, read their serving architectures, parse their OpenAI-compatible endpoints, test their speculative decoding support, benchmark their FP8/INT4 quantization kernels, and profile their KV-cache memory managers. Perform an exhaustive architectural survey of the entire cloud and local LLM ecosystem. Explore llama.cpp, vLLM, Ollama, TGI, SGLang, ExLlamaV2, Aphrodite, LMDeploy, TensorRT-LLM, MLC-LLM, MistralRS, Candle, and llamafile. For every single engine, inspect their GitHub repositories, read their serving architectures, parse their OpenAI-compatible endpoints, test their speculative decoding support, benchmark their FP8/INT4 quantization kernels, and profile their KV-cache memory managers. "
+  },
+  {
+    "id": "res_14",
+    "domain": "research",
+    "category": "hardware_audit",
+    "expected": "ADMIT",
+    "rationale": "GPU topology inquiry",
+    "prompt": "Research slice (strictly read-only). Run nvidia-smi topology and query CUDA capabilities of the RTX 3090. Verify whether FlashAttention-2 or FlashInfer are compatible with compute capability 8.6 and CUDA 12.4. Report supported kernel configurations."
+  },
+  {
+    "id": "res_15",
+    "domain": "research",
+    "category": "diff_inspection",
+    "expected": "ADMIT",
+    "rationale": "Git history research",
+    "prompt": "Audit slice (read-only). Inspect git log -n 10 --oneline on the repository. Check which files were touched during the M10 eval milestone and report if any evals/ fixtures were modified."
+  },
+  {
+    "id": "res_16",
+    "domain": "research",
+    "category": "web_search_scraping",
+    "expected": "ADMIT",
+    "rationale": "Search provider verification",
+    "prompt": "Research slice (read-only): Test live search queries against SearXNG on localhost:8080 and fallback to DuckDuckGo HTML scraping. Check if user-agent headers are causing bot blocks or rate limits."
+  },
+  {
+    "id": "res_17",
+    "domain": "research",
+    "category": "reproduction_investigation",
+    "expected": "ADMIT",
+    "rationale": "Bug reproduction inquiry",
+    "prompt": "Investigation slice (plan mode, no code edits): Reproduce the flaky test in castor/src/engine/lifecycle.rs (boot_spawns_when_canary_404s). Run the test 10 times in a loop and collect failure traces."
+  },
+  {
+    "id": "res_18",
+    "domain": "research",
+    "category": "licensing_audit",
+    "expected": "ADMIT",
+    "rationale": "License compliance check",
+    "prompt": "Audit slice (read-only). Run cargo-deny or inspect Cargo.lock for all third-party dependencies. Verify that no GPL or AGPL licensed crates are included. Output compliance matrix."
+  },
+  {
+    "id": "res_19",
+    "domain": "research",
+    "category": "multi_directive_research_sprawl",
+    "expected": "REVIEW",
+    "rationale": "Bundles 5 directive verbs across research tasks",
+    "prompt": "Research task: audit our security sandbox, investigate all Linux kernel CVEs, write a benchmark harness, compile comparative latency tables, and author an executive report for the board."
+  },
+  {
+    "id": "res_20",
+    "domain": "research",
+    "category": "ast_grep_research",
+    "expected": "ADMIT",
+    "rationale": "Single tool research",
+    "prompt": "Research slice (read-only): Read the ast-grep documentation on YAML rewrite rules. Show how to write an ast-grep rule that matches deprecated unwrap() calls on Result types and replaces them with ? operator."
+  },
+  {
+    "id": "res_21",
+    "domain": "research",
+    "category": "tokenomics_research",
+    "expected": "ADMIT",
+    "rationale": "Cost and token analysis",
+    "prompt": "Research inquiry (read-only): Calculate token consumption across our 102 dispatches using the telemetry JSONL ledger. Compare token cost if run on Claude 3.5 Sonnet ($3/$15 per MTok) versus local Qwen 3.8-27B ($0)."
+  },
+  {
+    "id": "res_22",
+    "domain": "research",
+    "category": "docker_compose_research",
+    "expected": "ADMIT",
+    "rationale": "Container architecture review",
+    "prompt": "Research slice (read-only): Review the SearXNG Docker compose configuration in mcp-castor/docker-compose.yml. Check if volume mounts and security options comply with unprivileged user execution."
+  },
+  {
+    "id": "res_23",
+    "domain": "research",
+    "category": "prompt_engineering_survey",
+    "expected": "ADMIT",
+    "rationale": "System prompt literature survey",
+    "prompt": "Research slice (read-only): Search literature for empirical studies on system prompt degradation over extended multi-turn conversations (>40 turns). Summarize findings on attention drift and prefix-caching retention."
+  },
+  {
+    "id": "res_24",
+    "domain": "research",
+    "category": "linux_kernel_procfs",
+    "expected": "ADMIT",
+    "rationale": "Linux OS internals research",
+    "prompt": "Research slice (read-only): Study Linux /proc/[pid]/status fields. Compare State: Z (zombie) vs State: T (stopped) vs State: D (disk sleep). Verify how POSIX signals (kill 0) interact with each state."
+  },
+  {
+    "id": "res_25",
+    "domain": "research",
+    "category": "multi_layer_audit_monolith",
+    "expected": "REJECT",
+    "rationale": "Coupled cross-subsystem monolith disguised as research",
+    "prompt": "Full stack audit and design: Inspect mcp-castor/src/harness/evo/evaluator.js, mcp-castor/src/harness/evo/lineage.js, castor/src/tools/fs.rs, and castor/src/engine/provider.rs. Design complete replacements for all 4 subsystems, author replacement schemas, and write an integration plan connecting all 4 layers."
+  },
+  {
+    "id": "code_01",
+    "domain": "coding",
+    "category": "single_file_micro_edit",
+    "expected": "ADMIT",
+    "rationale": "Single file, single function bug fix with verification gate",
+    "prompt": "Fix bug in castor/src/task/wait.rs: In wait_handler (~line 194), when timeout occurs, set HTTP status to 200 with timed_out: true. Gate: cargo test wait."
+  },
+  {
+    "id": "code_02",
+    "domain": "coding",
+    "category": "ast_surgery",
+    "expected": "ADMIT",
+    "rationale": "Single AST node replacement",
+    "prompt": "AST edit in castor/src/proxy/sanitize.rs: In function sanitize_stream, replace the manual byte loop with memchr for newline scanning to improve throughput. Gate: cargo test proxy."
+  },
+  {
+    "id": "code_03",
+    "domain": "coding",
+    "category": "rich_spec_over_1500_chars",
+    "expected": "ADMIT",
+    "rationale": "Well-scoped single-concern spec (1,570 chars) admitted by DGI",
+    "prompt": "ONE file: castor/src/task/wait.rs \u2014 axum status/long-poll server on config.ports.status (18021). Code-first; compiler is reference; port anchors: mcp-castor/tests/wait_endpoint.test.js + status_lifecycle.test.js (read once for error strings and status codes). Semantics to preserve: GET /task/:id/wait?timeout_s=N (long-poll, wakes on terminal transition broadcast or disk mirror poll 500ms; terminal=200 JSON success/fail unmasked; timeout=200 timed_out:true; unknown=404). GET /task/:id/status (computed elapsed_s for queued and executing; malformed=400). Singleton lock status (Locks::acquire('status', 30000)); if held, exit 0 with status server already running. Ephemeral server helper for tests (bind 127.0.0.1:0). Axum 0.8: use axum::extract::{Path, State, Query}. Tests: wait_wakes_on_completed, wait_wakes_on_failed_with_honest_status, wait_timeout_path, wait_404_unknown_id, status_elapsed_queued_and_executing, singleton_lock_held_exits_cleanly. Gate: cargo test wait."
+  },
+  {
+    "id": "code_04",
+    "domain": "coding",
+    "category": "massive_monolith_mega_prompt",
+    "expected": "REJECT",
+    "rationale": "Bundles policy, 5 tools, and a 137-vector test table across multiple files",
+    "prompt": "M7a: sandbox policy + filesystem tools (security core). Implement castor/src/tools/sandbox.rs with 5-layer containment (PathEscape, Symlink Realpath, Root Overwrite, Dangerous Shell, AST Syntax). Implement castor/src/tools/fs.rs with read_file, write_file, edit_file, list_dir, search_code. Port the full 137-vector security table (123 attack vectors blocked, 14 allow vectors): path traversal, symlink escapes, null bytes, device names, homoglyphs, fork bombs, and sudo commands. Author unit tests covering all 137 vectors. Gate: cargo test tools."
+  },
+  {
+    "id": "code_05",
+    "domain": "coding",
+    "category": "cross_subsystem_coupling_monolith",
+    "expected": "REJECT",
+    "rationale": "H3 trigger: wiring JS sub-subsystem into multiple Rust subsystems",
+    "prompt": "ONE file: castor/src/evo/optimizer.rs \u2014 the offline reflective optimizer. References (read once each): mcp-castor/src/harness/evo/evaluator.js + evo_operator.js (port their mechanics), castor/src/evo/lineage.rs (the DAG it appends to), castor/src/evals/runner.rs (run_task = the fitness scorer). Contract: Optimizer::run(evals_dir, lineage_path, opts) -> Vec<CommitRecord>. Wire the variation operator to generate prompt mutants and score them."
+  },
+  {
+    "id": "code_06",
+    "domain": "coding",
+    "category": "python_fastapi_endpoint",
+    "expected": "ADMIT",
+    "rationale": "Single Python file endpoint implementation",
+    "prompt": "Implement API endpoint in backend/routers/auth.py: Add POST /api/v1/auth/refresh to handle JWT refresh token rotation with redis blacklist check. Gate: pytest tests/test_auth.py::test_refresh_token."
+  },
+  {
+    "id": "code_07",
+    "domain": "coding",
+    "category": "python_multi_subsystem_monolith",
+    "expected": "REVIEW",
+    "rationale": "Multiple directive verbs across python backend",
+    "prompt": "Implement user authentication, write database migrations, author payment processing with Stripe webhook, and build celery background task runner in backend/."
+  },
+  {
+    "id": "code_08",
+    "domain": "coding",
+    "category": "typescript_react_component",
+    "expected": "ADMIT",
+    "rationale": "Single React component with bounded scope",
+    "prompt": "Create component in src/components/DataGrid.tsx: Implement virtualized table with sortable column headers and sticky header row using CSS variables. Gate: npm test src/components/DataGrid.test.tsx."
+  },
+  {
+    "id": "code_09",
+    "domain": "coding",
+    "category": "typescript_fullstack_monolith",
+    "expected": "REVIEW",
+    "rationale": "Fullstack feature dump",
+    "prompt": "Create full billing dashboard: write GraphQL schema, implement resolver in server/resolvers/billing.ts, create database migration in prisma/schema.prisma, and author React UI in client/pages/Billing.tsx with Stripe checkout."
+  },
+  {
+    "id": "code_10",
+    "domain": "coding",
+    "category": "go_http_middleware",
+    "expected": "ADMIT",
+    "rationale": "Single Go middleware package",
+    "prompt": "Implement middleware in internal/middleware/ratelimit.go: Token bucket rate limiter using golang.org/x/time/rate per IP address with sync.Map eviction. Gate: go test ./internal/middleware -run TestRateLimit."
+  },
+  {
+    "id": "code_11",
+    "domain": "coding",
+    "category": "c_embedded_driver",
+    "expected": "ADMIT",
+    "rationale": "Single C driver source",
+    "prompt": "Implement I2C sensor driver in drivers/sensors/bme280.c: Add temperature and pressure calibration readout according to Bosch datasheet BST-BME280-DS002. Gate: make test_bme280."
+  },
+  {
+    "id": "code_12",
+    "domain": "coding",
+    "category": "rust_clippy_mechanical_cleanup",
+    "expected": "ADMIT",
+    "rationale": "Single-concern clippy cleanup with single gate",
+    "prompt": "Clean up clippy warnings in castor/src/tools/ast.rs: Fix collapsible_if, needless_borrow, and unused_imports. Do not change public API or semantics. Gate: cargo clippy -p castor -- -D warnings."
+  },
+  {
+    "id": "code_13",
+    "domain": "coding",
+    "category": "open_ended_clippy_monolith",
+    "expected": "REVIEW",
+    "rationale": "Open ended 165 diagnostic overhaul across whole codebase",
+    "prompt": "Drive cargo clippy --all-targets to zero warnings across all crates in the workspace. Current count is 165 diagnostics: collapsible-ifs, unnecessary clone-slices, useless vec!, unused imports, dead code. Fix or delete all unreferenced code."
+  },
+  {
+    "id": "code_14",
+    "domain": "coding",
+    "category": "single_test_addition",
+    "expected": "ADMIT",
+    "rationale": "Writing a unit test in an existing test file",
+    "prompt": "Add regression unit test in castor/src/task/semaphore.rs: Test that a process in State: Z (zombie) is detected as dead by pid_alive and does not block slot acquisition. Gate: cargo test semaphore::tests::zombie."
+  },
+  {
+    "id": "code_15",
+    "domain": "coding",
+    "category": "dependency_bump",
+    "expected": "ADMIT",
+    "rationale": "Bumping a single dependency version",
+    "prompt": "Update Cargo.toml: Upgrade serde_json from 1.0.117 to 1.0.128 and run cargo update -p serde_json. Verify zero breaking changes. Gate: cargo check."
+  },
+  {
+    "id": "code_16",
+    "domain": "coding",
+    "category": "sql_migration_authoring",
+    "expected": "ADMIT",
+    "rationale": "Single migration file",
+    "prompt": "Write migration in migrations/20261003_add_session_metrics.sql: Add columns prompt_tokens (BIGINT), completion_tokens (BIGINT), and reasoning_tokens (BIGINT) to table agent_sessions with default 0."
+  },
+  {
+    "id": "code_17",
+    "domain": "coding",
+    "category": "shell_script_fix",
+    "expected": "ADMIT",
+    "rationale": "Single bash helper fix",
+    "prompt": "Fix bin/castor.js: Add proper WSL2 path translation for Windows drive letters (C:\\ -> /mnt/c/) when invoking wsl.exe. Ensure trailing arguments pass untouched. Gate: node bin/castor.js --help."
+  },
+  {
+    "id": "code_18",
+    "domain": "coding",
+    "category": "error_type_refactoring",
+    "expected": "ADMIT",
+    "rationale": "Refactoring error enum in a single module",
+    "prompt": "Refactor castor/src/engine/provider.rs: Add EngineError::HostUnreachable and EngineError::ModelEmpty variants using thiserror. Gate: cargo test engine."
+  },
+  {
+    "id": "code_19",
+    "domain": "coding",
+    "category": "inlined_table_bloat_reject",
+    "expected": "REJECT",
+    "rationale": "Inlined 150-vector table + multi-target edit",
+    "prompt": "Port security filters to castor/src/tools/sandbox.rs and castor/src/tools/fs.rs. Validate all 150 blocked vectors: vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_vector_test_case_path_traversal_payload_pattern_ and wire them into the executor. Gate: cargo test."
+  },
+  {
+    "id": "code_20",
+    "domain": "coding",
+    "category": "inlined_table_single_owner_admit",
+    "expected": "ADMIT",
+    "rationale": "Inlined table owned by a single decomposed module (m7_table pattern)",
+    "prompt": "Implement castor/src/tools/sandbox.rs: Define the static 137-vector test fixture table. Single module, no filesystem wrappers. Gate: cargo test sandbox."
+  },
+  {
+    "id": "code_21",
+    "domain": "coding",
+    "category": "dockerfile_update",
+    "expected": "ADMIT",
+    "rationale": "Single Dockerfile modification",
+    "prompt": "Edit Dockerfile: Switch base image from rust:1.80 to rust:1.85-alpine and add musl-dev build dependencies to produce a statically linked binary."
+  },
+  {
+    "id": "code_22",
+    "domain": "coding",
+    "category": "github_actions_workflow",
+    "expected": "ADMIT",
+    "rationale": "Single CI workflow file",
+    "prompt": "Update .github/workflows/ci.yml: Add cargo clippy --all-targets -- -D warnings to the pull request verification matrix on ubuntu-latest."
+  },
+  {
+    "id": "code_23",
+    "domain": "coding",
+    "category": "logging_enrichment",
+    "expected": "ADMIT",
+    "rationale": "Tracing additions to a single module",
+    "prompt": "Enrich tracing in castor/src/engine/lifecycle.rs: Add tracing::info!(engine_port, canary_url) during engine startup probe loop. Gate: cargo test lifecycle."
+  },
+  {
+    "id": "code_24",
+    "domain": "coding",
+    "category": "hard_ceiling_overflow_reject",
+    "expected": "REJECT",
+    "rationale": "Code dump exceeding 2,500 chars (H1 violation)",
+    "prompt": "Implement the following giant function in castor/src/tools/mod.rs: pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } pub fn helper_function_with_long_body() { let x = 1; println!(\"{x}\"); } "
+  },
+  {
+    "id": "code_25",
+    "domain": "coding",
+    "category": "config_serde_expansion",
+    "expected": "ADMIT",
+    "rationale": "Single config struct update",
+    "prompt": "Update castor/src/config.rs: Add field dgi_enabled: bool to Config with serde default true. Gate: cargo test config."
+  },
+  {
+    "id": "code_26",
+    "domain": "coding",
+    "category": "telemetry_ledger_field",
+    "expected": "ADMIT",
+    "rationale": "Adding metric field to telemetry aggregator",
+    "prompt": "Update castor/src/telemetry.rs: Track dgi_verdict in SessionStats and increment total_rejections on Reject. Gate: cargo test telemetry."
+  },
+  {
+    "id": "code_27",
+    "domain": "coding",
+    "category": "signal_handler_wire",
+    "expected": "ADMIT",
+    "rationale": "Signal handler in main.rs",
+    "prompt": "Wire graceful shutdown in castor/src/main.rs: Register tokio::signal::ctrl_c() in the MCP server loop and abort active background workers cleanly. Gate: cargo check."
+  },
+  {
+    "id": "code_28",
+    "domain": "coding",
+    "category": "bounded_mcp_tool_schema",
+    "expected": "ADMIT",
+    "rationale": "Tool schema registration",
+    "prompt": "In castor/src/mcp/mod.rs: Add optional field allow_large_prompt to CoworkerParams with schemars Description. Gate: cargo test mcp."
+  },
+  {
+    "id": "code_29",
+    "domain": "coding",
+    "category": "unit_test_mock_engine",
+    "expected": "ADMIT",
+    "rationale": "Unit test mock helper",
+    "prompt": "In castor/src/runner/mod.rs tests: Add MockEngine helper that simulates a stream terminating with finish_reason: length after 1 chunk. Gate: cargo test runner."
+  },
+  {
+    "id": "code_30",
+    "domain": "coding",
+    "category": "string_sanitizer_fast_path",
+    "expected": "ADMIT",
+    "rationale": "Performance optimization in single function",
+    "prompt": "In castor/src/proxy/sanitize.rs: Short-circuit UTF-8 validation when buffer is pure ASCII (validate with byte scan). Gate: cargo test proxy."
+  },
+  {
+    "id": "code_31",
+    "domain": "coding",
+    "category": "multi_file_refactor_review",
+    "expected": "REVIEW",
+    "rationale": "Touches multiple distinct files across src/",
+    "prompt": "Refactor error types across the repository: replace std::error::Error with thiserror in src/config.rs, src/platform.rs, and src/skills.rs. Gate: cargo test."
+  },
+  {
+    "id": "code_32",
+    "domain": "coding",
+    "category": "single_trait_implementation",
+    "expected": "ADMIT",
+    "rationale": "Implementing trait for an existing struct",
+    "prompt": "In castor/src/tools/fs.rs: Implement ToolExecutor for FsExecutor. Map execute('read_file') and execute('write_file') to internal methods. Gate: cargo test fs."
+  },
+  {
+    "id": "code_33",
+    "domain": "coding",
+    "category": "caching_layer_addition",
+    "expected": "ADMIT",
+    "rationale": "Single file in-memory cache",
+    "prompt": "Add cache in castor/src/skills.rs: Cache rendered skill indices behind a parking_lot::RwLock with 60s TTL. Gate: cargo test skills."
+  },
+  {
+    "id": "code_34",
+    "domain": "coding",
+    "category": "repetition_breaker_adjustment",
+    "expected": "ADMIT",
+    "rationale": "Tuning sliding window constants",
+    "prompt": "In castor/src/runner/loop_detector.rs: Adjust LOOP_WINDOW from 6 to 8 and LOOP_THRESHOLD from 3 to 4. Gate: cargo test loop_detector."
+  },
+  {
+    "id": "code_35",
+    "domain": "coding",
+    "category": "state_pruner_dry_run",
+    "expected": "ADMIT",
+    "rationale": "Single CLI subcommand implementation",
+    "prompt": "In castor/src/pruner.rs: Implement Pruner::dry_run() returning a list of task directories older than 7 days without unlinking them. Gate: cargo test pruner."
+  },
+  {
+    "id": "code_36",
+    "domain": "coding",
+    "category": "cross_crate_bundle_monolith",
+    "expected": "REJECT",
+    "rationale": "Bundling backend, frontend, database, and devops in one dispatch",
+    "prompt": "Complete M9 across all systems: implement CLI subcommands in castor/src/main.rs, wire server lifecycle in castor/src/engine/lifecycle.rs, rewrite state pruner in castor/src/pruner.rs, add web search in castor/src/tools/web.rs, and write end-to-end bash test suite. Gate: cargo test."
+  },
+  {
+    "id": "code_37",
+    "domain": "coding",
+    "category": "json_schema_validation",
+    "expected": "ADMIT",
+    "rationale": "Validating JSON input against schema",
+    "prompt": "In castor/src/tools/sandbox.rs: Validate tool argument JSON using jsonschema crate before passing to executors. Gate: cargo test sandbox."
+  },
+  {
+    "id": "code_38",
+    "domain": "coding",
+    "category": "cli_flag_addition",
+    "expected": "ADMIT",
+    "rationale": "Adding clap argument",
+    "prompt": "In castor/src/main.rs: Add --offline flag to clap CLI for castor evo command. When present, skip SearXNG container probes. Gate: cargo test cli."
+  },
+  {
+    "id": "code_39",
+    "domain": "coding",
+    "category": "disk_lease_heartbeat",
+    "expected": "ADMIT",
+    "rationale": "Heartbeat timestamp update",
+    "prompt": "In castor/src/task/semaphore.rs: In heartbeat_held_leases(), update the epoch ms field atomically without truncating the file. Gate: cargo test semaphore."
+  },
+  {
+    "id": "code_40",
+    "domain": "coding",
+    "category": "utf8_lossy_conversion",
+    "expected": "ADMIT",
+    "rationale": "Sanitizing subprocess stdout",
+    "prompt": "In castor/src/tools/shell.rs: Use String::from_utf8_lossy on child process stdout to avoid panicking on invalid terminal escape codes. Gate: cargo test shell."
+  },
+  {
+    "id": "code_41",
+    "domain": "coding",
+    "category": "status_port_conflict_handling",
+    "expected": "ADMIT",
+    "rationale": "Port bind error handling",
+    "prompt": "In castor/src/task/wait.rs: If binding to 127.0.0.1:18021 fails with EADDRINUSE, probe if an existing castor process holds the lock before failing. Gate: cargo test wait."
+  },
+  {
+    "id": "code_42",
+    "domain": "coding",
+    "category": "eval_trace_assertion",
+    "expected": "ADMIT",
+    "rationale": "Test assertion in eval runner",
+    "prompt": "In castor/src/evals/runner.rs: Verify that trace.jsonl contains at least one tool_call and one assistant message before declaring task Golden. Gate: cargo test evals."
+  },
+  {
+    "id": "code_43",
+    "domain": "coding",
+    "category": "multi_language_ffi",
+    "expected": "ADMIT",
+    "rationale": "FFI binding implementation",
+    "prompt": "In castor/src/platform.rs: Add libc::kill binding for Unix targets and OpenProcess/GetExitCodeProcess for Windows targets under cfg(windows). Gate: cargo test platform."
+  },
+  {
+    "id": "code_44",
+    "domain": "coding",
+    "category": "regex_precompilation",
+    "expected": "ADMIT",
+    "rationale": "Optimizing regex compilation",
+    "prompt": "In castor/src/tools/sandbox.rs: Use std::sync::LazyLock to precompile dangerous shell command regexes once at startup. Gate: cargo test sandbox."
+  },
+  {
+    "id": "code_45",
+    "domain": "coding",
+    "category": "timeout_cancellation_token",
+    "expected": "ADMIT",
+    "rationale": "Tokio cancellation token wiring",
+    "prompt": "In castor/src/runner/mod.rs: Accept tokio_util::sync::CancellationToken and select! on token.cancelled() during engine stream consumption. Gate: cargo test runner."
+  },
+  {
+    "id": "code_46",
+    "domain": "coding",
+    "category": "subsystem_boundary_violation_reject",
+    "expected": "REJECT",
+    "rationale": "Crossing 3 subsystem boundaries in one implementation prompt",
+    "prompt": "Implement the end-to-end MCP pipeline: author the rmcp server handler in castor/src/mcp/mod.rs, wire the worker execution loop in castor/src/mcp/worker.rs, and implement the filesystem tools in castor/src/tools/fs.rs. Gate: cargo test."
+  },
+  {
+    "id": "code_47",
+    "domain": "coding",
+    "category": "atomic_rename_file_write",
+    "expected": "ADMIT",
+    "rationale": "Atomic write pattern in single function",
+    "prompt": "In castor/src/tools/fs.rs: Write files to a temporary sibling file .<name>.tmp before renaming to target path to prevent torn writes. Gate: cargo test fs."
+  },
+  {
+    "id": "code_48",
+    "domain": "coding",
+    "category": "lineage_dag_head_pointer",
+    "expected": "ADMIT",
+    "rationale": "Updating DAG head pointer",
+    "prompt": "In castor/src/evo/lineage.rs: Update commit_node() to set parent_id = Some(self.head_id) and advance head_id to the new commit SHA. Gate: cargo test lineage."
+  },
+  {
+    "id": "code_49",
+    "domain": "coding",
+    "category": "sse_keepalive_filter",
+    "expected": "ADMIT",
+    "rationale": "Filtering SSE comments in stream parser",
+    "prompt": "In castor/src/proxy/sanitize.rs: Strip SSE comment lines starting with ':' so they do not trigger JSON parse errors in downstream OpenAI clients. Gate: cargo test proxy."
+  },
+  {
+    "id": "code_50",
+    "domain": "coding",
+    "category": "memory_leak_fix",
+    "expected": "ADMIT",
+    "rationale": "Fixing memory leak in event broadcast channel",
+    "prompt": "In castor/src/task/registry.rs: Clean up broadcast channel sender when a task transitions to a terminal state (Completed/Failed) to avoid accumulating stale receivers. Gate: cargo test registry."
+  },
+  {
+    "id": "wri_01",
+    "domain": "writing",
+    "category": "readme_quickstart",
+    "expected": "ADMIT",
+    "rationale": "Single file documentation update",
+    "prompt": "Update README.md: Add a 3-step Quickstart section showing installation via cargo install, starting the engine via vLLM, and connecting Claude Code via mcp_config.json."
+  },
+  {
+    "id": "wri_02",
+    "domain": "writing",
+    "category": "contributing_guide",
+    "expected": "ADMIT",
+    "rationale": "Updating contributing guide",
+    "prompt": "Edit CONTRIBUTING.md: Clarify the Zero Engine Interruption invariant during cargo test and document how to run live GPU tests using ALLOW_ENGINE_INTERRUPT=1."
+  },
+  {
+    "id": "wri_03",
+    "domain": "writing",
+    "category": "changelog_entry",
+    "expected": "ADMIT",
+    "rationale": "Adding release notes to changelog",
+    "prompt": "Update CHANGELOG.md: Add v1.0.0 release notes covering the full Rust rewrite, 245K context support, DGI gatekeeper, and 265 passing unit tests."
+  },
+  {
+    "id": "wri_04",
+    "domain": "writing",
+    "category": "rfc_authorship",
+    "expected": "ADMIT",
+    "rationale": "Writing single RFC document",
+    "prompt": "Author docs/rfcs/0017-speculative-decoding-telemetry.md: Document proposal for tracking acceptance rate per token position and draft latency metrics."
+  },
+  {
+    "id": "wri_05",
+    "domain": "writing",
+    "category": "monolithic_docs_rewrite_reject",
+    "expected": "REJECT",
+    "rationale": "Overhaul of entire documentation suite across 6 files",
+    "prompt": "Rewrite all project documentation: update README.md, rewrite CONTRIBUTING.md, draft new ARCHITECTURE.md, author SECURITY.md, write full API reference in docs/api.md, and create 5 tutorials in docs/tutorials/. Gate: markdownlint."
+  },
+  {
+    "id": "wri_06",
+    "domain": "writing",
+    "category": "api_reference_single_module",
+    "expected": "ADMIT",
+    "rationale": "Documenting single module API",
+    "prompt": "Add rustdoc comments to all public functions in castor/src/task/semaphore.rs: Document Lease, SlotLease, TaskSemaphore::acquire, and TaskSemaphore::release."
+  },
+  {
+    "id": "wri_07",
+    "domain": "writing",
+    "category": "release_blog_post",
+    "expected": "ADMIT",
+    "rationale": "Drafting marketing blog post",
+    "prompt": "Draft blog post in docs/blog/announcing-castor-v1.md: Announce Castor v1.0.0. Highlight local peer-programming with Qwen 27B at $0 token cost and sub-second tool execution."
+  },
+  {
+    "id": "wri_08",
+    "domain": "writing",
+    "category": "security_policy",
+    "expected": "ADMIT",
+    "rationale": "Single file security policy",
+    "prompt": "Create SECURITY.md: Define private disclosure process via security@antigravity.dev and document supported versions (v1.x)."
+  },
+  {
+    "id": "wri_09",
+    "domain": "writing",
+    "category": "troubleshooting_guide",
+    "expected": "ADMIT",
+    "rationale": "Single troubleshooting document",
+    "prompt": "Create docs/troubleshooting.md: Document common setup issues: port 18020 already in use, WSL2 CUDA drivers missing, and Windows firewall blocking curl."
+  },
+  {
+    "id": "wri_10",
+    "domain": "writing",
+    "category": "license_file",
+    "expected": "ADMIT",
+    "rationale": "Single LICENSE file",
+    "prompt": "Create LICENSE-APACHE: Add standard Apache 2.0 license text with copyright 2026 The Castor Authors."
+  },
+  {
+    "id": "wri_11",
+    "domain": "writing",
+    "category": "protocol_contract_doc",
+    "expected": "ADMIT",
+    "rationale": "Synchronizing contract doc",
+    "prompt": "Update AGENTS.md: Update section 2.5 with new environment variable CASTOR_DGI_ENABLED and document the 3 hard monolith signatures."
+  },
+  {
+    "id": "wri_12",
+    "domain": "writing",
+    "category": "claude_memory_update",
+    "expected": "ADMIT",
+    "rationale": "Single memory feedback update",
+    "prompt": "Update memory in .claude/projects/D--LLM-Ecosystem/memory/sequential-dispatches-only.md: Add lesson 6 regarding Linux zombie process detection in /proc/[pid]/status."
+  },
+  {
+    "id": "wri_13",
+    "domain": "writing",
+    "category": "github_pr_description",
+    "expected": "ADMIT",
+    "rationale": "Drafting PR description",
+    "prompt": "Draft pull request description for v1.0.0 cutover in .scratch/pr_description.md: Summarize 265 passed tests, M1-M11 milestones, and performance benchmarks."
+  },
+  {
+    "id": "wri_14",
+    "domain": "writing",
+    "category": "architecture_diagram_mermaid",
+    "expected": "ADMIT",
+    "rationale": "Adding Mermaid diagram to existing doc",
+    "prompt": "In docs/architecture.md: Add a Mermaid diagram illustrating the request flow from Lead Architect -> MCP Stdio -> Castor Microkernel -> vLLM (:18020)."
+  },
+  {
+    "id": "wri_15",
+    "domain": "writing",
+    "category": "skills_recipe_authoring",
+    "expected": "ADMIT",
+    "rationale": "Single SKILL.md authoring",
+    "prompt": "Author skills/git-atomic/SKILL.md: Write a skill recipe for creating conventional atomic commits with pre-flight git status and diff inspection."
+  },
+  {
+    "id": "wri_16",
+    "domain": "writing",
+    "category": "benchmark_summary_report",
+    "expected": "ADMIT",
+    "rationale": "Single markdown report in .scratch/",
+    "prompt": "Write benchmark summary in .scratch/swe_rebench_results.md: Summarize Pass@1 results across the 20 sample SWE-bench tasks."
+  },
+  {
+    "id": "wri_17",
+    "domain": "writing",
+    "category": "exhaustive_user_manual_monolith",
+    "expected": "REJECT",
+    "rationale": "Massive prompt exceeding 2,500 chars (H1)",
+    "prompt": "Author a 100-page comprehensive user manual for Castor. Chapter 1: Introduction and History. Chapter 2: Hardware Requirements and GPU Topology. Chapter 3: Installation and Linux Configuration. Chapter 4: Serving Engine Setup with vLLM, SGLang, and Ollama. Chapter 5: Multi-Tenant Concurrency and Semaphore Internals. Chapter 6: Security Sandbox and the 137 Containment Vectors. Chapter 7: Evolutionary Optimizer and Lineage DAG. Chapter 8: MCP Protocol and Tool Implementations. Chapter 9: Performance Tuning and Speculative Decoding. Chapter 10: Troubleshooting and Diagnostic Logs. Author a 100-page comprehensive user manual for Castor. Chapter 1: Introduction and History. Chapter 2: Hardware Requirements and GPU Topology. Chapter 3: Installation and Linux Configuration. Chapter 4: Serving Engine Setup with vLLM, SGLang, and Ollama. Chapter 5: Multi-Tenant Concurrency and Semaphore Internals. Chapter 6: Security Sandbox and the 137 Containment Vectors. Chapter 7: Evolutionary Optimizer and Lineage DAG. Chapter 8: MCP Protocol and Tool Implementations. Chapter 9: Performance Tuning and Speculative Decoding. Chapter 10: Troubleshooting and Diagnostic Logs. Author a 100-page comprehensive user manual for Castor. Chapter 1: Introduction and History. Chapter 2: Hardware Requirements and GPU Topology. Chapter 3: Installation and Linux Configuration. Chapter 4: Serving Engine Setup with vLLM, SGLang, and Ollama. Chapter 5: Multi-Tenant Concurrency and Semaphore Internals. Chapter 6: Security Sandbox and the 137 Containment Vectors. Chapter 7: Evolutionary Optimizer and Lineage DAG. Chapter 8: MCP Protocol and Tool Implementations. Chapter 9: Performance Tuning and Speculative Decoding. Chapter 10: Troubleshooting and Diagnostic Logs. Author a 100-page comprehensive user manual for Castor. Chapter 1: Introduction and History. Chapter 2: Hardware Requirements and GPU Topology. Chapter 3: Installation and Linux Configuration. Chapter 4: Serving Engine Setup with vLLM, SGLang, and Ollama. Chapter 5: Multi-Tenant Concurrency and Semaphore Internals. Chapter 6: Security Sandbox and the 137 Containment Vectors. Chapter 7: Evolutionary Optimizer and Lineage DAG. Chapter 8: MCP Protocol and Tool Implementations. Chapter 9: Performance Tuning and Speculative Decoding. Chapter 10: Troubleshooting and Diagnostic Logs. Author a 100-page comprehensive user manual for Castor. Chapter 1: Introduction and History. Chapter 2: Hardware Requirements and GPU Topology. Chapter 3: Installation and Linux Configuration. Chapter 4: Serving Engine Setup with vLLM, SGLang, and Ollama. Chapter 5: Multi-Tenant Concurrency and Semaphore Internals. Chapter 6: Security Sandbox and the 137 Containment Vectors. Chapter 7: Evolutionary Optimizer and Lineage DAG. Chapter 8: MCP Protocol and Tool Implementations. Chapter 9: Performance Tuning and Speculative Decoding. Chapter 10: Troubleshooting and Diagnostic Logs. Author a 100-page comprehensive user manual for Castor. Chapter 1: Introduction and History. Chapter 2: Hardware Requirements and GPU Topology. Chapter 3: Installation and Linux Configuration. Chapter 4: Serving Engine Setup with vLLM, SGLang, and Ollama. Chapter 5: Multi-Tenant Concurrency and Semaphore Internals. Chapter 6: Security Sandbox and the 137 Containment Vectors. Chapter 7: Evolutionary Optimizer and Lineage DAG. Chapter 8: MCP Protocol and Tool Implementations. Chapter 9: Performance Tuning and Speculative Decoding. Chapter 10: Troubleshooting and Diagnostic Logs. Author a 100-page comprehensive user manual for Castor. Chapter 1: Introduction and History. Chapter 2: Hardware Requirements and GPU Topology. Chapter 3: Installation and Linux Configuration. Chapter 4: Serving Engine Setup with vLLM, SGLang, and Ollama. Chapter 5: Multi-Tenant Concurrency and Semaphore Internals. Chapter 6: Security Sandbox and the 137 Containment Vectors. Chapter 7: Evolutionary Optimizer and Lineage DAG. Chapter 8: MCP Protocol and Tool Implementations. Chapter 9: Performance Tuning and Speculative Decoding. Chapter 10: Troubleshooting and Diagnostic Logs. Author a 100-page comprehensive user manual for Castor. Chapter 1: Introduction and History. Chapter 2: Hardware Requirements and GPU Topology. Chapter 3: Installation and Linux Configuration. Chapter 4: Serving Engine Setup with vLLM, SGLang, and Ollama. Chapter 5: Multi-Tenant Concurrency and Semaphore Internals. Chapter 6: Security Sandbox and the 137 Containment Vectors. Chapter 7: Evolutionary Optimizer and Lineage DAG. Chapter 8: MCP Protocol and Tool Implementations. Chapter 9: Performance Tuning and Speculative Decoding. Chapter 10: Troubleshooting and Diagnostic Logs. "
+  },
+  {
+    "id": "wri_18",
+    "domain": "writing",
+    "category": "cli_man_page",
+    "expected": "ADMIT",
+    "rationale": "Single manpage generation",
+    "prompt": "Generate manpage in docs/man/castor.1: Document castor CLI options, subcommands (mcp, status, proxy, clean, evo, install, server), and environment variables."
+  },
+  {
+    "id": "wri_19",
+    "domain": "writing",
+    "category": "docstring_typo_fixes",
+    "expected": "ADMIT",
+    "rationale": "Typo fix in single file comments",
+    "prompt": "Fix spelling typos in doc comments in castor/src/tools/web.rs: Replace 'recieved' with 'received' and 'occured' with 'occurred'. Gate: cargo doc."
+  },
+  {
+    "id": "wri_20",
+    "domain": "writing",
+    "category": "citation_file",
+    "expected": "ADMIT",
+    "rationale": "Single CITATION.cff file",
+    "prompt": "Create CITATION.cff: Provide BibTeX citation metadata for the Castor Agent Microkernel software repository."
+  },
+  {
+    "id": "edge_01",
+    "domain": "edge",
+    "category": "exact_boundary_under_2500",
+    "expected": "ADMIT",
+    "rationale": "2,480 characters, single-concern spec (H1 should NOT trip)",
+    "prompt": "Refactor single file castor/src/proxy/sanitize.rs: Implement circular buffer for UTF-8 multi-byte sequence assembly. // Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n// Detailed invariant explanation: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nGate: cargo test proxy."
+  },
+  {
+    "id": "edge_02",
+    "domain": "edge",
+    "category": "exact_boundary_over_2500",
+    "expected": "REJECT",
+    "rationale": "2,520 characters (H1 hard reject)",
+    "prompt": "Refactor single file castor/src/proxy/sanitize.rs: Implement circular buffer for UTF-8 multi-byte sequence assembly. // Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n// Detailed invariant explanation: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nGate: cargo test proxy."
+  },
+  {
+    "id": "edge_03",
+    "domain": "edge",
+    "category": "no_file_path_plain_question",
+    "expected": "ADMIT",
+    "rationale": "Generic plain text question with no files",
+    "prompt": "Explain how speculative decoding works with draft models in vLLM. What determines whether a draft token is accepted or rejected?"
+  },
+  {
+    "id": "edge_04",
+    "domain": "edge",
+    "category": "directive_verb_spam_review",
+    "expected": "REVIEW",
+    "rationale": "Contains 7 distinct directive verbs without being a monolith",
+    "prompt": "Please write, implement, create, build, author, wire, and port the helper utility in castor/src/platform.rs. Gate: cargo test."
+  },
+  {
+    "id": "edge_05",
+    "domain": "edge",
+    "category": "json_payload_inlined",
+    "expected": "ADMIT",
+    "rationale": "Prompt contains inlined JSON payload under 2,000 chars",
+    "prompt": "Fix JSON deserialization in castor/src/mcp/worker.rs: Ensure JobSpec deserializes cleanly when skills is null or missing: {\"task_id\": \"task_123\", \"prompt\": \"hello\", \"cwd\": \"/tmp\", \"session_id\": \"s1\", \"skills\": null}. Gate: cargo test worker."
+  },
+  {
+    "id": "edge_06",
+    "domain": "edge",
+    "category": "stack_trace_inlined",
+    "expected": "ADMIT",
+    "rationale": "Prompt contains raw compiler error trace",
+    "prompt": "Fix compile error in castor/src/tools/ast.rs:\nerror[E0308]: mismatched types\n  --> src/tools/ast.rs:45:12\n   |\n45 |     return Ok(result);\n   |            ^^^^^^^^^^ expected struct String, found &str\nGate: cargo check."
+  },
+  {
+    "id": "edge_07",
+    "domain": "edge",
+    "category": "table_near_boundary_99",
+    "expected": "ADMIT",
+    "rationale": "Inlined table with 99 vectors (below 100 threshold)",
+    "prompt": "In castor/src/tools/sandbox.rs: Run the 99-vector regression suite. Verify all 99 blocked vectors pass. Gate: cargo test sandbox."
+  },
+  {
+    "id": "edge_08",
+    "domain": "edge",
+    "category": "table_at_boundary_100_single_target",
+    "expected": "ADMIT",
+    "rationale": "Inlined table with 100 vectors but ONLY 1 target file (H2 requires multi-target)",
+    "prompt": "In castor/src/tools/sandbox.rs: Update the 100-vector table with new homoglyph definitions. Gate: cargo test sandbox."
+  },
+  {
+    "id": "edge_09",
+    "domain": "edge",
+    "category": "table_at_boundary_100_multi_target_reject",
+    "expected": "REJECT",
+    "rationale": "Inlined table with 100 vectors AND 2 target files (H2 trips)",
+    "prompt": "Update castor/src/tools/sandbox.rs and castor/src/tools/fs.rs: Verify the 100-vector attack suite across both policy and tool bindings. Gate: cargo test."
+  },
+  {
+    "id": "edge_10",
+    "domain": "edge",
+    "category": "sql_inlined_code",
+    "expected": "ADMIT",
+    "rationale": "SQL snippet in prompt",
+    "prompt": "In migrations/schema.sql: Fix constraint syntax: ALTER TABLE users ADD CONSTRAINT check_age CHECK (age >= 18 AND status IN ('active', 'pending'));"
+  },
+  {
+    "id": "edge_11",
+    "domain": "edge",
+    "category": "diff_snippet_inlined",
+    "expected": "ADMIT",
+    "rationale": "Git diff pasted in prompt",
+    "prompt": "Apply this patch to castor/src/config.rs:\n--- a/src/config.rs\n+++ b/src/config.rs\n@@ -10,1 +10,1 @@\n-pub const PORT: u16 = 18020;\n+pub const PORT: u16 = 18021;\nGate: cargo test config."
+  },
+  {
+    "id": "edge_12",
+    "domain": "edge",
+    "category": "all_caps_shouting",
+    "expected": "ADMIT",
+    "rationale": "All-caps text should not confuse the parser",
+    "prompt": "FIX THE BUILD IN CASTOR/SRC/MAIN.RS: REMOVE THE UNUSED VARIABLE WARNING IN MAIN(). GATE: CARGO CHECK."
+  },
+  {
+    "id": "edge_13",
+    "domain": "edge",
+    "category": "multilingual_unicode",
+    "expected": "ADMIT",
+    "rationale": "Unicode characters, emojis, non-English text",
+    "prompt": "In castor/src/proxy/sanitize.rs: Add test for multi-byte Unicode strings with emojis (\ud83e\udd80, \ud83d\ude80, \ud83d\udca1, \u65e5\u672c\u8a9e, \u0627\u0644\u0639\u0631\u0628\u064a\u0629) across SSE chunk boundaries. Gate: cargo test proxy."
+  },
+  {
+    "id": "edge_14",
+    "domain": "edge",
+    "category": "repeated_words_repetition",
+    "expected": "ADMIT",
+    "rationale": "Repetitive harmless text under 2,000 chars",
+    "prompt": "In castor/src/task/wait.rs: Ensure retry logic handles retry retry retry cleanly when status is executing. Gate: cargo test wait."
+  },
+  {
+    "id": "edge_15",
+    "domain": "edge",
+    "category": "whitespace_padding",
+    "expected": "ADMIT",
+    "rationale": "Prompt with lots of newlines and indentation",
+    "prompt": "\n\n   In castor/src/config.rs: \n\n       Fix indentation on struct Config. \n\n   Gate: cargo test config.\n\n"
+  }
+]

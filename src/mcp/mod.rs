@@ -405,9 +405,10 @@ impl CastorMcpServer {
                     }
                     crate::task::registry::TaskStatus::Queued
                     | crate::task::registry::TaskStatus::Executing => {
+                        let (wait_win, wait_wsl) = wait_commands(status_port, &rec.id);
                         format!(
-                            "[task] id={} status={}\nWait: curl.exe -fsS http://127.0.0.1:{}/task/{}/wait",
-                            rec.id, rec.status, status_port, rec.id
+                            "[task] id={} status={}\nWait (Windows): {}\nWait (WSL): {}",
+                            rec.id, rec.status, wait_win, wait_wsl
                         )
                     }
                 };
@@ -581,10 +582,10 @@ pub async fn serve(prefix: &str) -> Result<(), Box<dyn std::error::Error>> {
 /// believe the task finished early.
 pub fn wait_commands(status_port: u16, task_id: &str) -> (String, String) {
     let win = format!(
-        "curl.exe -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:{status_port}/task/{task_id}/wait?timeout_s=3600"
+        "curl.exe -fsS --max-time 3600 --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:{status_port}/task/{task_id}/wait?timeout_s=3600"
     );
     let wsl = format!(
-        "curl -fsS --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:{status_port}/task/{task_id}/wait?timeout_s=3600"
+        "curl -fsS --max-time 3600 --retry 5 --retry-delay 2 --retry-connrefused http://127.0.0.1:{status_port}/task/{task_id}/wait?timeout_s=3600"
     );
     (win, wsl)
 }

@@ -36,19 +36,17 @@ const LANDING_WINDOW: u32 = 5;
 /// `reasoning_budget_exhausted` termination (Issue #3 / R2).
 const REASONING_CEILING_FINISH: &str = "length";
 
-/// Non-coercive salvage prompt injected when the reasoning ceiling is hit.
+/// Peer-empowered salvage prompt injected when the reasoning ceiling is hit.
 ///
-/// It asks the model to *summarize what it already has* — findings, tables,
-/// and remaining gaps — rather than to "finish" or to take further actions.
-/// The wording deliberately never pressures the model into a false claim of
-/// completion: the session is already known to be `reasoning_budget_exhausted`
-/// and the status is never masked as a success (see the honest-status
-/// invariant in [`run_session`]).
-const SALVAGE_PROMPT: &str = "[Salvage] Your reasoning budget is exhausted; this is your final \
-    response and you may not take further actions. Do NOT attempt to complete or resume the task. \
-    Summarize, as plain text only, (1) the findings and conclusions you have reached so far, \
-    (2) any tables, data, or structured results you have produced, and (3) the remaining gaps or \
-    open questions. Be concise and honest about what is unfinished.";
+/// Asks the autonomous peer engineer to synthesize what it has verified,
+/// implementation state, data tables, and exact blockers, with full tools
+/// available to ground its findings.
+const SALVAGE_PROMPT: &str = "[Salvage] Reasoning budget ceiling reached for this dispatch. \
+    As an autonomous peer engineer, provide your collaborative status report: \
+    (1) summarize the findings, conclusions, and implementations you have reached so far, \
+    (2) present any data tables, metrics, or scratchpad artifacts produced, and \
+    (3) identify remaining blockers, failing test coordinates, or open questions for the next slice. \
+    You have full tools available if you need to inspect scratchpad outputs or verify test logs to ground your report.";
 
 /// A terminal turn where the engine stopped at its reasoning/output ceiling:
 /// no further tool calls were issued and the finish reason is the ceiling
@@ -321,28 +319,65 @@ pub async fn run_session(
             // Deliberation-ceiling salvage pass (Issue #3 / R2): the model
             // stopped at its reasoning ceiling on a non-tool turn. We keep the
             // honest status, never wipe the accumulated conversation history,
-            // and extract a plain-text salvage report in one non-coercive,
-            // tool-free, low-effort call.
+            // empower the peer engineer with full tools to inspect scratchpads
+            // or verify test outputs, and extract a grounded status report.
             if ceiling_hit {
                 status = "reasoning_budget_exhausted".to_string();
 
                 // 1. History is preserved: the full `messages` (system prompt,
                 //    user prompt, every assistant turn and tool result so far)
                 //    is passed intact to the salvage call — never cleared.
-                // 2. Inject the non-coercive salvage prompt.
+                // 2. Inject the non-coercive, peer-empowered salvage prompt.
                 messages.push(msg("user", SALVAGE_PROMPT));
-                // 3. Call the engine with tools disabled and low effort to
-                //    extract the plain text. The `ChatEngine` API exposes no
-                //    per-call reasoning-effort knob (effort is a dispatch-level
-                //    `JobSpec` setting, not a per-turn parameter), so "low
-                //    effort" here is expressed by the constrained invocation:
-                //    tools stripped (`&[]`), non-streaming single-shot
-                //    (`false`), and the bounded non-coercive prompt above
-                //    which asks only for a summary — never a fresh
-                //    multi-step deliberation.
-                let salvage = engine.chat(&messages, &[], false).await;
+                // 3. Call the engine with full tools enabled to give the peer
+                //    engineer full agency to inspect scratchpad files or check
+                //    logs before reporting.
+                let salvage = engine.chat(&messages, tools, false).await;
                 match salvage {
-                    Ok(sc) => {
+                    Ok(mut sc) => {
+                        // If the peer engineer executed tools during salvage,
+                        // run each tool call, log results, append them to history,
+                        // and perform a single-shot synthesis call.
+                        if !sc.tool_calls.is_empty() {
+                            messages.push(Message {
+                                role: "assistant".into(),
+                                content: sc.content.clone(),
+                                tool_calls: sc.tool_calls.clone(),
+                                tool_call_id: None,
+                            });
+                            for tc in &sc.tool_calls {
+                                let outcome = match executor.execute(&tc.name, &tc.arguments).await {
+                                    Ok(o) => o,
+                                    Err(e) => ToolOutcome {
+                                        text: format!("Error: {e}"),
+                                    },
+                                };
+                                let _ = logger.append(serde_json::json!({
+                                    "type": "tool_result",
+                                    "turn": turns + 1,
+                                    "tool_call_id": tc.id,
+                                    "name": tc.name,
+                                    "is_error": outcome.text.starts_with("Error:"),
+                                    "output": outcome.text,
+                                }));
+                                messages.push(Message {
+                                    role: "tool".into(),
+                                    content: outcome.text,
+                                    tool_calls: vec![],
+                                    tool_call_id: Some(tc.id.clone()),
+                                });
+                            }
+                            // Single follow-up request to synthesize findings based on tool outputs.
+                            match engine.chat(&messages, &[], false).await {
+                                Ok(follow_up) => {
+                                    sc = follow_up;
+                                }
+                                Err(e) => {
+                                    warn!(session = %session_id, "salvage tool follow-up synthesis failed: {e}");
+                                }
+                            }
+                        }
+
                         // Ledger the salvage turn (history stays in `messages`).
                         let _ = logger.append(serde_json::json!({
                             "type": "salvage",
@@ -1156,8 +1191,8 @@ mod tests {
         let calls = recorder.calls.lock().await;
         // calls: 0=turn1(tool), 1=turn2(tool), 2=ceiling turn, 3=salvage.
         let salvage_call = &calls[3];
-        // (3) The salvage call used tools disabled and low effort (non-streaming).
-        assert!(salvage_call.tools.is_empty(), "salvage must pass &[] (no tools)");
+        // (3) The salvage call has full tools enabled and runs non-streaming.
+        assert_eq!(salvage_call.tools.len(), 1, "salvage must have full tools enabled");
         assert!(!salvage_call.stream, "salvage must run non-streaming (low effort)");
         // The normal loop turns ran streaming (contrast).
         assert!(calls[0].stream, "turn 1 must be streaming");
@@ -1178,19 +1213,13 @@ mod tests {
             has("[Salvage]"),
             "the non-coercive salvage prompt must be injected"
         );
-        // (2) The salvage prompt is non-coercive: it explicitly forbids
-        //     resuming the work (a "Do NOT ..." guard) and only asks the model
-        //     to summarize what it already has. It must never carry the
-        //     budget-notice's imperative "Land now" instruction.
+        // (2) The salvage prompt is peer-empowering: it asks for grounded
+        //     summaries, metrics, and blockers without coercive imperatives.
         let salvage_prompt = salvage_msgs
             .iter()
             .find(|m| m.content.contains("[Salvage]"))
             .expect("salvage prompt present");
         let p = salvage_prompt.content.to_lowercase();
-        assert!(
-            p.contains("do not attempt to"),
-            "salvage prompt must carry the non-coercive guard: {salvage_prompt:?}"
-        );
         assert!(
             p.contains("summarize"),
             "salvage prompt must ask for a summary: {salvage_prompt:?}"
@@ -1217,6 +1246,56 @@ mod tests {
             events.iter().any(|e| e["type"] == "salvage" && e["reason"] == "reasoning_ceiling"),
             "a salvage event tagged reasoning_ceiling must be in the ledger"
         );
+
+        let _ = std::fs::remove_dir_all(state.root());
+    }
+
+    #[tokio::test]
+    async fn reasoning_ceiling_salvage_executes_tool_call_and_synthesizes() {
+        let state = tmp_state();
+        let logger = logger_for(&state);
+        let recorder = std::sync::Arc::new(CallRecorder::default());
+        let engine = RecordingEngine::new(
+            vec![
+                comp("", vec![tc("c1", "bash", "cargo test")]),
+                comp_finish("thinking... reached ceiling", "length"),
+                comp("", vec![tc("c2", "read", ".scratch/audit.log")]),
+                comp_finish(
+                    "Findings: scratchpad log verified 100% pass rate across all suites.",
+                    "stop",
+                ),
+            ],
+            recorder.clone(),
+        );
+        let executor = MockExecutor::new(vec![
+            "CARGO_TEST_OUTPUT".into(),
+            "SCRATCHPAD_LOG_CONTENT: 100% pass".into(),
+        ]);
+
+        let res = run_session(
+            &engine,
+            &executor,
+            &logger,
+            "SYS",
+            "THE-PROMPT",
+            &[tool_schema("bash"), tool_schema("read")],
+            80,
+            Some(&SessionOptions::with_state(state.clone())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res.status, "reasoning_budget_exhausted");
+        assert!(res.final_text.contains("scratchpad log verified 100% pass rate"));
+
+        let calls = recorder.calls.lock().await;
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[2].tools.len(), 2, "salvage call must receive full tools");
+        assert!(calls[3].tools.is_empty(), "follow-up synthesis must be plain text");
+
+        let events = logger.read_all();
+        assert!(events.iter().any(|e| e["type"] == "tool_result" && e["output"] == "SCRATCHPAD_LOG_CONTENT: 100% pass"));
+        assert!(events.iter().any(|e| e["type"] == "salvage" && e["reason"] == "reasoning_ceiling"));
 
         let _ = std::fs::remove_dir_all(state.root());
     }

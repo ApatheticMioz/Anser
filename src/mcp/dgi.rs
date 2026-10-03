@@ -1,4 +1,4 @@
-//! DGI Gatekeeper — Decomposition Granularity Index (calibration study v1).
+//! DGI Gatekeeper — Decomposition Granularity Index (calibration study v2, repo-agnostic).
 //!
 //! Deterministic, sub-250ms replacement for the legacy static
 //! `prompt.len() > 1500` ceiling. It extracts structural features from a
@@ -9,19 +9,27 @@
 //!   * `Review(u32)` — advisory DGI score >= 2; proceed with a decomposition note.
 //!   * `Reject(Vec)` — a calibrated hard "monolith" signature fired:
 //!     - H1: absolute length > 2500 chars
-//!     - H2: inlined table/vector bloat (>= 100 named entries) AND a multi-target / multi-Rust-subsystem bundle
+//!     - H2: inlined table/vector bloat (>= 100 named entries) AND a multi-target / multi-subsystem bundle
 //!     - H3: a NAMED JS sub-subsystem source (`src/harness/<sub>/`) wired into >= 2 distinct Rust subsystems
+//!
+//! This is a faithful port of the validated repo-agnostic extractor
+//! `.scratch/verify_refined_dgi.py` (which replaced `.scratch/test_dgi.py`'s
+//! castor-bound rules): the same regex semantics, the same feature names,
+//! and the same scoring tiers — now generalized so the gate is meaningful
+//! beyond the Castor repo itself.
 //!
 //! Calibration (7 audit-verified anchors, fixture in `dgi_anchors.json`):
 //! all 4 legitimate false positives (m1, m2c, m3a, m3b) are ADMITted and
 //! all 3 genuine monoliths (rustplan_inv, m7a, m10_opt) are REJECTed,
 //! giving precision = recall = 1.0 on the anchor set — versus the legacy
 //! gate, which rejected all 4 FPs and missed #95 (1398 < 1500 cap).
-//!
-//! The extraction rules are a faithful port of `.scratch/test_dgi.py`
-//! (same regex semantics, same feature names, same scoring tiers).
+//! The repo-agnostic generalization (broad file regex, path-tail dedup,
+//! `from` read-context, enumeration-chain propagation, state-placeholder
+//! filtering, write-target subsystem breadth) is verified lossless on the
+//! full 77-dispatch session corpus (0 new false rejects) and 103/110 on the
+//! cross-domain stress set.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use regex::Regex;
 
@@ -54,23 +62,12 @@ impl DgiVerdict {
 /// Precompiled feature-extraction regexes (Python `re` semantics: `\b`,
 /// `(?i)` inline flags, and `re.I` for case-insensitive patterns).
 struct DgiRx {
-    /// Source-file coordinates: `castor/**.{rs,toml,json,jsonl}` or
-    /// `mcp-castor/**.{js,ts,mjs,json,jsonl,txt}`.
+    /// Repo-agnostic relative source/doc path with a recognized extension.
+    /// Matches `dir/dir/.../file.rs` (>= 1 path segment before the file),
+    /// generalizing the legacy `castor/**` / `mcp-castor/**` special cases.
     file: Regex,
     /// Test-file coordinates (excluded from subsystem coupling).
     test: Regex,
-    /// `mcp-castor/src/harness/<sub>[/ <subsub>]/` sub-subsystem.
-    js_subsub: Regex,
-    /// `mcp-castor/src/<sub>/` subsystem.
-    js_sub: Regex,
-    /// `mcp-castor` `tests?/` directory.
-    js_tests: Regex,
-    /// `castor/src/<sub>/` Rust subsystem.
-    rust_sub: Regex,
-    /// Bare repo-root Rust file (`castor/<n>.rs` or `castor/src/<n>.rs`).
-    rust_root: Regex,
-    /// `castor/Cargo.toml`.
-    rust_cargo: Regex,
     /// Trailing build-verb context (marks a file as a write target).
     build: Regex,
     /// Trailing read/reference context (marks a file as a reference).
@@ -90,38 +87,34 @@ struct DgiRx {
 fn rx() -> DgiRx {
     DgiRx {
         file: Regex::new(
-            r"\b(?:castor/[A-Za-z0-9_\-./]*\.(?:rs|toml|json|jsonl)|mcp-?castor/[A-Za-z0-9_\-./]*\.(?:js|ts|mjs|json|jsonl|txt))\b",
+            r"\b(?:[A-Za-z0-9_\-]+/)+[A-Za-z0-9_\-]+\.(?:rs|py|go|ts|tsx|js|mjs|c|cc|cpp|h|sql|toml|json|jsonl|yaml|yml|md|sh)\b",
         )
         .expect("static pattern"),
-        test: Regex::new(r"\.test\.(js|ts)$|/tests?/|_test\.(rs|js|ts)$|EVALS\.md")
-            .expect("static pattern"),
-        js_subsub: Regex::new(r"^src/harness/([a-z_]+(?:/[a-z_]+)?)/")
-            .expect("static pattern"),
-        js_sub: Regex::new(r"^src/([a-z_\-]+)/").expect("static pattern"),
-        js_tests: Regex::new(r"^tests?/").expect("static pattern"),
-        rust_sub: Regex::new(r"^castor/src/([a-z_]+)/").expect("static pattern"),
-        rust_root: Regex::new(r"^castor/[A-Za-z_]+\.rs$|^castor/src/[A-Za-z_]+\.rs$")
-            .expect("static pattern"),
-        rust_cargo: Regex::new(r"^castor/Cargo\.toml$").expect("static pattern"),
+        test: Regex::new(
+            r"\.test\.(?:js|ts)$|/tests?/|_test\.(?:rs|js|ts|go|py)$|tests?/[^.]*$|EVALS\.md",
+        )
+        .expect("static pattern"),
         // `(?i)` mirrors Python `re.I`; these match the original-case context
         // window (not the lowercased prompt).
         build: Regex::new(
-            r"(?i)\b(?:write|create|implement|replace|complete|extend|build|add|port|serve|register|author|wire)\b[^.]*$",
+            r"(?i)\b(?:write|create|implement|replace|complete|extend|build|add|port|serve|register|author|wire|update|refactor|fix)\b[^.]*$",
         )
         .expect("static pattern"),
+        // `from` is a read-context marker ("Port semantics from mcp-castor/..."),
+        // mirroring the validated reference.
         read: Regex::new(
-            r"(?i)\b(?:read once|read each|read|reference|references|existing|consum|reus|extract|see)\b[^.]*$",
+            r"(?i)\b(?:read once|read each|read|reference|references|existing|consum|reus|extract|see|from)\b[^.]*$",
         )
         .expect("static pattern"),
         table: Regex::new(r"\b(\d{2,4})\s*(?:[-\s]?(?:vector|blocked|allowed))\b")
             .expect("static pattern"),
         gate: Regex::new(r"\bgate\s*[:\-]").expect("static pattern"),
         tfam: Regex::new(
-            r"cargo\s+test|npm\s+test|npm\s+run\s+test|pytest|go\s+test|\.test\.(js|ts)\b",
+            r"cargo\s+test|npm\s+test|npm\s+run\s+test|pytest|go\s+test|\.test\.(?:js|ts)\b",
         )
         .expect("static pattern"),
         dverb: Regex::new(
-            r"\b(implement|write|author|create|build|port|wire|replace|extend|add|register|serve)\b",
+            r"\b(implement|write|author|create|build|port|wire|replace|extend|add|register|serve|update|refactor|fix)\b",
         )
         .expect("static pattern"),
         readonly: Regex::new(r"read-only|plan mode|no file writes|strictly read")
@@ -129,20 +122,100 @@ fn rx() -> DgiRx {
     }
 }
 
-/// DGI features extracted from a prompt (faithful port of `test_dgi.py::features`).
+/// A file coordinate extracted from a prompt, with its byte spans in the
+/// original prompt (used for the before/after context windows and for
+/// enumeration-chain propagation).
+struct FileMatch {
+    text: String,
+    start: usize,
+    end: usize,
+    role: String,
+}
+
+/// The `n` characters immediately *before* a byte offset (Python
+/// `p[max(0, start - n):start]`). The regex engine indexes by byte but the
+/// Python reference indexes by code point, so the byte offset is translated to
+/// a char offset. The window deliberately *excludes* the matched text so a
+/// trailing `[^.]*$` context regex can look past any dots in the path itself
+/// (a window that included the match would be truncated by them).
+fn before_window(p: &str, start: usize, n: usize) -> String {
+    let start_chars = p[..start].chars().count();
+    let skip = start_chars.saturating_sub(n);
+    let take = start_chars - skip;
+    p.chars().skip(skip).take(take).collect()
+}
+
+/// Collapse path aliases so `castor/src/foo.rs` and `src/foo.rs` (and the
+/// `mcp-castor` / `mcp_castor` spellings) normalize to the same tail.
+fn normalize_tail(path: &str) -> String {
+    let mut parts: Vec<&str> = path.split('/').collect();
+    if let Some(first) = parts.first()
+        && matches!(first.to_ascii_lowercase().as_str(), "castor" | "mcp-castor" | "mcp_castor")
+    {
+        parts.remove(0);
+    }
+    parts.join("/")
+}
+
+/// Map a source-file coordinate to its subsystem node.
+///
+/// `mcp-castor/**` paths keep their legacy JS node naming (the H3
+/// cross-repo coupling signal), so the m10_opt anchor still resolves its
+/// harness sub-subsystem. Every other path is normalized through
+/// [`normalize_tail`] and its first segment (skipping a leading `src`)
+/// is the named subsystem; a top-level file is `"root"`.
+fn subsystem(f: &str) -> String {
+    if f.contains("mcp-castor/") {
+        let rel = f
+            .split("mcp-castor/")
+            .nth(1)
+            .unwrap_or_default();
+        let re_ha =
+            Regex::new(r"^src/harness/([a-z_]+(?:/[a-z_]+)?)/").expect("static pattern");
+        if let Some(m) = re_ha.captures(rel) {
+            return format!("js/ha/{}", m.get(1).unwrap().as_str());
+        }
+        let re_sub = Regex::new(r"^src/([a-z_\-]+)/").expect("static pattern");
+        if let Some(m) = re_sub.captures(rel) {
+            return format!("js/{}", m.get(1).unwrap().as_str());
+        }
+        if rel.starts_with("tests/") || rel.starts_with("test/") {
+            return "js/tests".to_string();
+        }
+        return "js/root".to_string();
+    }
+    let norm = normalize_tail(f);
+    let mut segs: Vec<&str> = norm.split('/').collect();
+    if segs.first().copied() == Some("src") {
+        segs.remove(0);
+    }
+    if segs.len() <= 1 {
+        return "root".to_string();
+    }
+    match segs[0] {
+        "tests" | "test" => "tests".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// DGI features extracted from a dispatch prompt (faithful port of
+/// `verify_refined_dgi.py::extract_features`).
 #[derive(Debug, Clone, Default)]
 struct Features {
     nchars: usize,
     ntargets: usize,
     /// Distinct non-test source-file coordinates.
     nfiles: usize,
-    /// Named Rust subsystems (`<sub>` under `castor/src/`).
-    rust: Vec<String>,
+    /// All distinct named subsystems (write or read), repo-agnostic.
+    subsystems: Vec<String>,
+    nsubs: usize,
+    /// Distinct subsystems that have at least one write-target file.
+    n_target_subs: usize,
+    /// Distinct non-JS subsystems (the Rust-side of the H3 coupling signal).
     nrust: usize,
-    /// NAMED JS sub-subsystems only (`js/ha/<sub>` = `src/harness/<sub>/`);
-    /// the strict H3 coupling signal.
-    njs_subsub: usize,
-    js_subsub: Vec<String>,
+    /// NAMED JS sub-subsystems only (`src/harness/<sub>/`): the strict H3
+    /// cross-repo coupling signal.
+    js_ha_subsubs: Vec<String>,
     /// Max inlined table/vector entry count mentioned.
     vbl: u32,
     gate: bool,
@@ -151,88 +224,111 @@ struct Features {
     readonly: bool,
 }
 
-/// Map a source-file coordinate to its (repo, subsystem) node string.
-fn node(rx: &DgiRx, f: &str) -> String {
-    if f.contains("mcp-castor/") {
-        // Python `f.split("mcp-castor/")[-1]`; the marker appears at most once,
-        // so the segment after the first occurrence is the same.
-        let rel = f
-            .split("mcp-castor/")
-            .nth(1)
-            .map(str::to_owned)
-            .unwrap_or_default();
-        if let Some(m) = rx.js_subsub.captures(&rel) {
-            return format!("js/ha/{}", m.get(1).unwrap().as_str());
-        }
-        if let Some(m) = rx.js_sub.captures(&rel) {
-            return format!("js/{}", m.get(1).unwrap().as_str());
-        }
-        if rx.js_tests.is_match(&rel) {
-            return "js/tests".to_string();
-        }
-        return "js/root".to_string();
-    }
-    if let Some(m) = rx.rust_sub.captures(f) {
-        return format!("rust/{}", m.get(1).unwrap().as_str());
-    }
-    if rx.rust_root.is_match(f) {
-        return "rust/root".to_string();
-    }
-    if rx.rust_cargo.is_match(f) {
-        return "rust/cargo".to_string();
-    }
-    "rust/??".to_string()
-}
-
 /// Extract all DGI features from a dispatch prompt.
 fn features(p: &str) -> Features {
     let rx = rx();
     let lower = p.to_ascii_lowercase();
 
-    // (file, role) with the Python role rules:
-    //   target  — immediately followed by ":", or a trailing build verb
-    //             with no read-context in the preceding 55 chars;
-    //   ref     — read/reference context, or a test-file coordinate;
-    //   plain   — everything else.
-    // Python indexes `p` by code point; the regex engine indexes by byte.
-    // Match byte boundaries are always code-point boundaries, so we map the
-    // 55-char "before" window and 3-char "after" window onto code points.
-    let files: Vec<(&str, &str)> = rx
-        .file
-        .find_iter(p)
-        .map(|m| {
-            let before_chars = p[..m.start()].chars().count();
-            let before: String = p
-                .chars()
-                .skip(before_chars.saturating_sub(55))
-                .take(55)
-                .collect();
-            let after: String = p
-                .chars()
-                .skip(p[..m.end()].chars().count())
-                .take(3)
-                .collect();
-            let bverb = rx.build.is_match(&before);
-            let readctx = rx.read.is_match(&before);
-            let f = m.as_str();
-            let role = if after.trim_start().starts_with(':')
-                || (bverb && !readctx)
-            {
-                "target"
-            } else if readctx || rx.test.is_match(f) {
-                "ref"
-            } else {
-                "plain"
-            };
-            (f, role)
+    // 1. Repo-agnostic file coordinates, deduplicated by normalized path
+    //    tail, keeping the longest (most-qualified) match for each tail.
+    let mut by_tail: HashMap<String, (String, usize, usize)> = HashMap::new();
+    for m in rx.file.find_iter(p) {
+        let text = m.as_str().to_string();
+        let start = m.start();
+        let end = m.end();
+        let tail = normalize_tail(&text);
+        let is_better = match by_tail.get(&tail) {
+            Some(existing) => text.len() > existing.0.len(),
+            None => true,
+        };
+        if is_better {
+            by_tail.insert(tail, (text, start, end));
+        }
+    }
+
+    let mut matches: Vec<FileMatch> = by_tail
+        .into_iter()
+        .map(|(_, (text, start, end))| FileMatch {
+            role: "plain".to_string(),
+            text,
+            start,
+            end,
         })
         .collect();
 
-    // Non-test source-file coordinates (sorted, deduped).
-    let src: Vec<&str> = {
-        let mut s: Vec<&str> = files
+    // 2. Initial role assignment (Python `re.search` == Regex::is_match on
+    //    the before/after windows).
+    for f in &mut matches {
+        let before = before_window(p, f.start, 55);
+        let after: String = p
+            .chars()
+            .skip(p[..f.end].chars().count())
+            .take(3)
+            .collect();
+        let bverb = rx.build.is_match(&before);
+        let readctx = rx.read.is_match(&before);
+        f.role = if after.trim_start().starts_with(':') || (bverb && !readctx) {
+            "target".to_string()
+        } else if readctx || rx.test.is_match(&f.text) {
+            "ref".to_string()
+        } else {
+            "plain".to_string()
+        };
+    }
+
+    // 3. Enumeration-chain propagation: a target role propagates across
+    //    `and` / `,` / `+` / `then` separators within the same sentence.
+    //    Drive the walk through a start-ordered index list so the owned
+    //    matches can be mutated in place.
+    let mut order: Vec<usize> = (0..matches.len()).collect();
+    order.sort_by_key(|&i| matches[i].start);
+    let re_sep =
+        Regex::new(r"^\s*(?:and|then|plus|&|\+|,)\s+").expect("static pattern");
+    let re_word = Regex::new(r"\b(?:and|then|plus)\b").expect("static pattern");
+    for i in 0..order.len() {
+        if matches[order[i]].role != "target" {
+            continue;
+        }
+        let mut e1 = matches[order[i]].end;
+        for &idx in order.iter().skip(i + 1) {
+            let cur = &mut matches[idx];
+            if cur.role == "target" {
+                // Python chain semantics: a consecutive run of already-target
+                // files is skipped (no reassignment, no break).
+                e1 = cur.end;
+                continue;
+            }
+            let between = &p[e1..cur.start];
+            let sep = re_sep.is_match(between)
+                || (re_word.is_match(between) && !between.contains('.'));
+            if sep {
+                cur.role = "target".to_string();
+                e1 = cur.end;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 4. Filter out state-placeholder / non-source artifacts (paths written
+    //    as `<state>/...`, `~/.castor/...`, or `/tmp/...`).
+    let mut files: Vec<(String, String)> = Vec::new();
+    for f in &matches {
+        let before = before_window(p, f.start, 15);
+        if before.contains("<state>")
+            || before.contains("~/.castor")
+            || before.contains("/tmp/")
+        {
+            continue;
+        }
+        files.push((f.text.clone(), f.role.clone()));
+    }
+
+    // Distinct non-test source-file coordinates.
+    let src_files: Vec<String> = {
+        let mut s: Vec<String> = files
             .iter()
-            .map(|(f, _)| *f)
+            .map(|(f, _)| f.clone())
             .filter(|f| !rx.test.is_match(f))
             .collect();
         s.sort();
@@ -240,62 +336,52 @@ fn features(p: &str) -> Features {
         s
     };
 
-    // (repo, subsystem) nodes for each non-test source file, deduped/sorted.
-    let mut allnodes: Vec<String> = src
+    // Subsystem partitioning.
+    let mut all_sub: HashSet<String> = HashSet::new();
+    let mut target_sub: HashSet<String> = HashSet::new();
+    for (f, role) in &files {
+        if rx.test.is_match(f) {
+            continue;
+        }
+        let sub = subsystem(f);
+        if matches!(
+            sub.as_str(),
+            "root" | "tests" | "js/root" | "js/tests" | "rust/root" | "rust/cargo"
+        ) {
+            continue;
+        }
+        all_sub.insert(sub.clone());
+        if *role == "target" {
+            target_sub.insert(sub);
+        }
+    }
+    let mut named_subsystems: Vec<String> = all_sub.iter().cloned().collect();
+    named_subsystems.sort();
+    let mut js_ha_subsubs: Vec<String> =
+        named_subsystems.iter().filter(|s| s.starts_with("js/ha/")).cloned().collect();
+    js_ha_subsubs.sort();
+    let nrust = named_subsystems
         .iter()
-        .map(|f| node(&rx, f))
-        .collect();
-    allnodes.sort();
-    allnodes.dedup();
+        .filter(|s| !s.starts_with("js/"))
+        .count();
 
-    // "named" = a real subsystem directory, NOT repo-root files / tests / Cargo.toml.
-    let rust_named: Vec<String> = allnodes
-        .iter()
-        .filter(|n| n.starts_with("rust") && !matches!(n.as_str(), "rust/root" | "rust/cargo"))
-        .cloned()
-        .collect();
-
-    // Distinct named Rust subsystems (`rust/<sub>` -> `<sub>`).
-    let mut rust: Vec<String> = rust_named
-        .iter()
-        .map(|n| n.split('/').nth(1).unwrap_or_default().to_string())
-        .collect();
-    rust.sort();
-    rust.dedup();
-
-    // The stricter H3 signal uses ONLY named sub-subsystem JS sources
-    // (src/harness/<sub>/), so a root-level JS file ported into >= 2 Rust
-    // modules is *not* a monolith signature.
-    let js_subsub: Vec<String> = allnodes
-        .iter()
-        .filter(|n| n.starts_with("js/ha/"))
-        .cloned()
-        .collect();
-
-    // Data-table / vector bloat: named table of >= 2-digit entry count.
+    // Data-table / vector bloat: max named table with >= 2-digit entry count.
     let mut vbl: u32 = 0;
     for caps in rx.table.captures_iter(&lower) {
-        if let Some(n) = caps
-            .get(1)
-            .and_then(|s| s.as_str().parse().ok())
-        {
+        if let Some(n) = caps.get(1).and_then(|s| s.as_str().parse().ok()) {
             vbl = vbl.max(n);
         }
     }
 
     let gate = rx.gate.is_match(&lower);
-    // Python `re.findall` returns the capture-group text for alternatives that
-    // contain a group (e.g. `.test.(js|ts)` -> "js"/"ts") and the full match for
-    // the group-less alternatives. The verifier-family *set size* drives
-    // `single_verifier`, so we mirror that group-aware behaviour exactly.
+    // The verifier-family *set size* drives `single_verifier`. The `tfam`
+    // pattern has no capturing groups (the validated reference uses
+    // `\.test\.(?:js|ts)\b`), so Python `re.findall` yields the FULL match
+    // per hit — e.g. `["cargo test", ".test.js"]` — and we mirror that by
+    // inserting the whole match (not a group), so two families stay distinct.
     let mut tfams: HashSet<String> = HashSet::new();
-    for caps in rx.tfam.captures_iter(&lower) {
-        // Mirror `re.findall`: an alternative that lacks the capture group
-        // contributes the empty string, so several group-less families
-        // collapse to a single distinct family (e.g. `cargo test` + `npm run
-        // test` -> {""} size 1, keeping `single_verifier` true).
-        let val = caps.get(1).map(|s| s.as_str().to_string()).unwrap_or_default();
-        tfams.insert(val);
+    for m in rx.tfam.find_iter(&lower) {
+        tfams.insert(m.as_str().to_string());
     }
     let mut dverbs: HashSet<&str> = HashSet::new();
     for m in rx.dverb.find_iter(&lower) {
@@ -303,17 +389,23 @@ fn features(p: &str) -> Features {
     }
     let readonly = rx.readonly.is_match(&lower);
 
-    let nrust = rust.len();
-    let njs_subsub = js_subsub.len();
+    let ntargets = files
+        .iter()
+        .filter(|(_, r)| *r == "target")
+        .count();
+    let n_target_subs = target_sub.len();
+    let nsubs = named_subsystems.len();
+    let nchars = p.chars().count();
 
     Features {
-        nchars: p.chars().count(),
-        ntargets: files.iter().filter(|(_, r)| *r == "target").count(),
-        nfiles: src.len(),
-        rust,
+        nchars,
+        ntargets,
+        nfiles: src_files.len(),
+        subsystems: named_subsystems,
+        nsubs,
+        n_target_subs,
         nrust,
-        njs_subsub,
-        js_subsub,
+        js_ha_subsubs,
         vbl,
         gate,
         single_verifier: gate && tfams.len() <= 1,
@@ -328,18 +420,18 @@ fn hard_signatures(f: &Features) -> Vec<String> {
     if f.nchars > 2500 {
         sigs.push("H1:length>2500".to_string());
     }
-    if f.vbl >= 100 && (f.ntargets >= 2 || f.nrust >= 2) {
-        sigs.push(format!("H2:data-table>=100+multi(vbl={})", f.vbl));
+    if f.vbl >= 100 && (f.ntargets >= 2 || f.nsubs >= 2) {
+        sigs.push(format!("H2:data-table>={}+multi", f.vbl));
     }
-    if f.njs_subsub >= 1 && f.nrust >= 2 {
+    if !f.js_ha_subsubs.is_empty() && f.nrust >= 2 {
         let subsubs: Vec<&str> = f
-            .js_subsub
+            .js_ha_subsubs
             .iter()
             .map(|n| n.split('/').nth(2).unwrap_or_default())
             .collect();
         sigs.push(format!(
-            "H3:js[{}]->rust[{}]",
-            subsubs.join("/"),
+            "H3:js_ha[{}]->rust[{}]",
+            subsubs.join(","),
             f.nrust
         ));
     }
@@ -355,13 +447,17 @@ fn dgi_score(f: &Features) -> u32 {
         s += 1;
     }
     s += f.ntargets.saturating_sub(1) as u32;
-    if f.njs_subsub >= 1 && f.nrust >= 2 {
+    // Subsystem breadth advisory, driven by WRITE-TARGET subsystems: the
+    // more distinct subsystems a dispatch writes to, the more it spans.
+    if f.n_target_subs >= 3 {
         s += 2;
+    } else if f.n_target_subs >= 2 {
+        s += 1;
     }
     if f.dverb >= 4 {
         s += 1;
     }
-    if f.vbl >= 100 && (f.ntargets >= 2 || f.nrust >= 2) {
+    if f.vbl >= 100 && (f.ntargets >= 2 || f.nsubs >= 2) {
         s += 2;
     }
     if !f.single_verifier && !f.readonly {
@@ -489,7 +585,8 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Full calibration: all 7 anchors at once (parity with test_dgi.py).
+    // Full calibration: all 7 anchors at once (parity with the Python
+    // harness). 4 MON must REJECT, 4 FP must NOT reject (Admit/Review).
     // ------------------------------------------------------------------
 
     #[test]
@@ -518,7 +615,9 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Synthetic feature-level checks (no fixture needed).
+    // Synthetic feature-level checks (no fixture needed) — these verify the
+    // repo-agnostic generalizations the legacy castor-bound gate could not
+    // express.
     // ------------------------------------------------------------------
 
     #[test]
@@ -538,12 +637,11 @@ mod tests {
     #[test]
     fn two_rust_subsystems_with_big_table_rejects_via_h2() {
         let mut p = String::new();
-        // Two distinct Rust subsystems, both write-targets (": " after path).
+        // Two distinct subsystems, both write-targets (": " after path).
         p.push_str("Implement castor/src/tools/sandbox.rs: port the policy.\n");
         p.push_str("Implement castor/src/runner/mod.rs: wire the executor.\n");
         // An inlined 137-entry vector table.
         p.push_str("Include the 137-vector blocklist from the JS harness.\n");
-        // Padding so dverb/length don't accidentally push to H1 (>2500).
         let v = evaluate(&p);
         assert_is_reject(&v, "h2", "H2");
     }
@@ -561,12 +659,12 @@ castor/src/evals/runner.rs (the fitness scorer).
     }
 
     #[test]
-    fn single_rust_subsystem_owns_one_big_table_is_not_h2() {
+    fn single_subsystem_owning_one_big_table_is_not_h2() {
         // The decomposed m7_table slice: one subsystem OWNS the one
-        // 137-vector table. vbl >= 100 but ntargets < 2 and nrust < 2,
+        // 137-vector table. vbl >= 100 but ntargets < 2 and nsubs < 2,
         // so H2 must NOT fire (and H1 doesn't: it's short).
         let p = "\
-Implement castor/src/tables/blocklist.rs: inline the 137-vector blocklist \
+Implement src/tables/blocklist.rs: inline the 137-vector blocklist \
 table exactly as shipped by the JS harness. Single file, single concern.
 ";
         let v = evaluate(p);
@@ -575,17 +673,75 @@ table exactly as shipped by the JS harness. Single file, single concern.
 
     #[test]
     fn review_tier_when_advisory_score_reaches_two() {
-        // Build a prompt that trips the advisory tiers (dverb >= 4 and no
-        // single verifier) but no hard signature: a single Rust subsystem,
-        // multiple write-target files, >2000 chars.
+        // dverb >= 4 and no single verifier, >2000 chars, one subsystem,
+        // multiple write-target files: advisory >= 2 -> Review.
         let mut p = String::new();
         p.push_str("Implement, write, author, and register the module: ");
-        p.push_str("castor/src/mcp/mod.rs: extend the server handler. ");
-        p.push_str("castor/src/mcp/worker.rs: extend the job spec. ");
+        p.push_str("src/mcp/mod.rs: extend the server handler. ");
+        p.push_str("src/mcp/worker.rs: extend the job spec. ");
         p.push_str("Read the existing docs for context. ");
-        // Pad past 2000 with benign filler (no new file coordinates).
         p.push_str(&"pad ".repeat(300));
         let v = evaluate(&p);
         assert_is_review(&v, "review-tier");
     }
+
+    /// Repo-agnostic file coordinates (no `castor/` prefix) must be
+    /// recognized and mapped to their subsystems.
+    #[test]
+    fn repo_agnostic_paths_are_recognized() {
+        let p = "\
+Implement src/alpha/mod.rs: wire the client. \
+Implement src/beta/mod.rs: wire the store. \
+Implement src/gamma/mod.rs: wire the cache.
+";
+        let f = features(p);
+        // Three distinct named subsystems.
+        assert_eq!(f.nsubs, 3, "expected 3 subsystems, got {:?}", f.subsystems);
+        // All three are write-targets -> breadth term fires at the top tier.
+        assert_eq!(f.n_target_subs, 3);
+        // Advisory >= 2 (ntargets-1 + breadth) but no hard signature.
+        assert!(f.vbl < 100, "no data table in this prompt, got vbl={}", f.vbl);
+        assert!(!evaluate(p).is_reject(), "no hard signature should fire: {:?}", evaluate(p));
+    }
+
+    /// State-placeholder paths (`<state>/...`) must be excluded from
+    /// subsystem counting and must not become write-targets.
+    #[test]
+    fn state_placeholder_paths_are_excluded() {
+        let p = "\
+Implement src/alpha/mod.rs: write the module. \
+Also the disk mirror <state>/tasks/slots/slot_N.json is written per transition.
+";
+        let f = features(p);
+        // Only `alpha` counts; the `<state>/...` placeholder is filtered.
+        assert_eq!(f.subsystems, vec!["alpha".to_string()], "{:?}", f.subsystems);
+        assert_eq!(f.n_target_subs, 1);
+    }
+
+    /// A write-target role propagates across an enumeration chain joined by
+    /// `and` within the same sentence.
+    #[test]
+    fn enumeration_chain_propagates_target_role() {
+        let p = "Implement a/one.rs and b/two.rs and c/three.rs: do the thing.";
+        let f = features(p);
+        assert_eq!(f.ntargets, 3, "chain should mark 3 targets, got {}", f.ntargets);
+        assert_eq!(f.n_target_subs, 3);
+    }
+
+    /// A path followed by `from` is a read-context (reference), not a
+    /// write-target: the referenced file contributes no write-target subsystem
+    /// even though a build verb appears earlier in the same sentence.
+    #[test]
+    fn from_context_marks_reference_not_target() {
+        // `src/legacy/util.js` is read ("from"); only `src/new/home.rs` is a
+        // write-target. So the write-target subsystem breadth is 1, not 2.
+        let p = "Port semantics from src/legacy/util.js and implement src/new/home.rs: write it.";
+        let f = features(p);
+        assert_eq!(
+            f.n_target_subs, 1,
+            "the `from` file must be a reference, not a target: n_target_subs={}",
+            f.n_target_subs
+        );
+    }
 }
+
