@@ -26,8 +26,8 @@ Node >= 22, ESM, **no dependencies**.
 
 ```sh
 node scripts/qwen_tasks_analysis.mjs \
-  --tasks-dir    C:/Users/Apath/.qwen/tasks \
-  --sessions-dir C:/Users/Apath/.qwen/sessions \
+  --tasks-dir    ~/.castor/tasks \
+  --sessions-dir ~/.castor/sessions \
   --out          docs/audits/telemetry/qwen_tasks_analysis_<date>.json
 ```
 

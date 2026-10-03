@@ -45,7 +45,7 @@ One JSON object per line, mirroring the real Castor session event log. A
 fixture trace records **every** LLM response and every tool call/result:
 
 ```jsonl
-{"timestamp":"...","sessionId":"t","type":"session_start","harness":"Castor","version":"2026.3.0","cwd":"/work","prompt":"..."}
+{"timestamp":"...","sessionId":"t","type":"session_start","harness":"Castor","version":"1.0.0","cwd":"/work","prompt":"..."}
 {"timestamp":"...","type":"assistant_message","content":"...","toolCalls":[{"id":"chatcmpl-tool-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/a.js\"}"}}]}
 {"timestamp":"...","type":"tool_call","toolCallId":"chatcmpl-tool-1","name":"read_file","args":{"path":"src/a.js"}}
 {"timestamp":"...","type":"tool_result","toolCallId":"chatcmpl-tool-1","toolName":"read_file","result":{...},"isError":false,"latencyMs":3}

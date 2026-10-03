@@ -43,6 +43,9 @@ jobs:
       - name: Run tests (authoritative gate)
         run: cargo test --verbose
 
+      - name: Build Castor binary
+        run: cargo build
+
       - name: Test Node shim
         uses: actions/setup-node@v4
         with:

@@ -20,8 +20,8 @@ The project adheres to **[Semantic Versioning](https://semver.org/)**:
 - **Universal SSE Stream Proxy (`:18022`)**: `encoding_rs`-based streaming proxy with incremental UTF-8 reassembly, repetition circuit breaking, and mid-stream error translation.
 - **Offline Evolutionary Optimizer (AVO-Inspired)**: Replaced fragile online single-turn mutations with an offline reflective batch evaluator (`castor evo`), lineage DAG, and stagnation watchdog.
 - **Model-Routed Skills Indexing**: Standardized on agentskills.io format (`SKILL.md`), rendering a compact cache-friendly index into the system prompt with zero keyword-matching bloat.
-- **Authoritative Test Gate**: 242 unit and integration tests passing in ~7 seconds with zero warnings on `cargo clippy --all-targets -- -D warnings`.
-- **Cross-Platform npm Shim**: Lightweight Node distribution shim (`bin/castor.js`) and root `package.json` for seamless `npx -y castor` and IDE client integration on Windows (via WSL2 bridge) and Linux.
+- **Authoritative Test Gate**: 243 unit and integration tests passing in ~7 seconds with zero warnings on `cargo clippy --all-targets -- -D warnings`.
+- **Cross-Platform npm Shim**: Lightweight Node distribution shim (`bin/castor.js`) and root `package.json` for seamless `npx -y mcp-castor` and IDE client integration on Windows (via WSL2 bridge) and Linux.
 
 ---
 

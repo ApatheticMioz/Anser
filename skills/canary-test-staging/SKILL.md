@@ -9,11 +9,11 @@ Before you trust a change, prove it on the smallest possible surface, then
 widen. Do not run the full test chain as your first signal.
 
 ## Checklist
-1. Write or identify ONE targeted test file that exercises exactly the code
+1. Write or identify ONE targeted test case or file that exercises exactly the code
    you changed (a canary).
-2. Run just that file first: `node tests/<canary>.test.js`.
+2. Run just that narrow test first (e.g. `cargo test <test_name>`, `pytest path/to/test.py::test_case`, `npm test -- <test_file>`, `go test -run <pattern>`).
 3. If it passes, run the next-narrower group (the module's related tests).
-4. Only after those are green, run the full chain (`npm test`).
+4. Only after those are green, run the full test suite (e.g. `cargo test`, `pytest`, `npm test`, `go test ./...`).
 5. If a canary fails, fix the code — do not weaken the canary to make it pass.
 
 ## Rules

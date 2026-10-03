@@ -218,7 +218,7 @@ skills/                  # Reusable SKILL.md workflow recipes
 
 ### 5.1 The test gates
 ```bash
-# Fast test gate - 242 unit and integration tests (~7s, offline, zero engine interruption)
+# Fast test gate (~7s, offline, zero engine interruption)
 cargo test
 
 # Full clippy check (strict zero-warning gate)
