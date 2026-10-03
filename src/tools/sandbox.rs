@@ -51,7 +51,8 @@ pub enum SandboxError {
 /// Layer 1: resolve the workspace root through the OS symlink/junction
 /// resolution layer so containment checks compare against a real path.
 pub fn resolve_workspace_root(root: &Path) -> Result<PathBuf, SandboxError> {
-    let meta = fs::metadata(root).map_err(|_| {
+    let host_root = crate::platform::to_host_path(root);
+    let meta = fs::metadata(&host_root).map_err(|_| {
         SandboxError::WorkspaceRoot(format!(
             "WorkspaceRootError: workspace root '{}' does not exist or is not a directory",
             root.display()
@@ -63,7 +64,7 @@ pub fn resolve_workspace_root(root: &Path) -> Result<PathBuf, SandboxError> {
             root.display()
         )));
     }
-    fs::canonicalize(root).map_err(|e| {
+    fs::canonicalize(&host_root).map_err(|e| {
         SandboxError::WorkspaceRoot(format!(
             "WorkspaceRootError: cannot canonicalize workspace root '{}': {e}",
             root.display()

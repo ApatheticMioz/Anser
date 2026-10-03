@@ -13,8 +13,6 @@
 //! 6. Mirrors terminal status (`Completed` or `Failed`) to [`TaskRegistry`].
 //! 7. Releases the slot lease on both success and failure.
 
-use std::path::Path;
-
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -98,10 +96,12 @@ pub async fn run_job_with_engine(
         "prompt": spec.prompt,
     }));
 
+    let host_cwd = crate::platform::to_host_path(&spec.cwd);
+
     // 4. Discover and index skills.
     let skill_dirs = [
-        Path::new(&spec.cwd).join(".agents").join("skills"),
-        Path::new(&spec.cwd).join("skills"),
+        host_cwd.join(".agents").join("skills"),
+        host_cwd.join("skills"),
         state.root().join("skills"),
     ];
     let all_skills = skills::load_skills(&skill_dirs);
@@ -115,7 +115,7 @@ pub async fn run_job_with_engine(
     // 5. Build system prompt.
     let system_prompt = format!(
         "You are Castor, an autonomous senior peer programmer. Working directory: {}\n\n{}",
-        spec.cwd, skills_index
+        host_cwd.display(), skills_index
     );
 
     // 6. Initialize optional extensions and composite tool executor.
@@ -125,7 +125,7 @@ pub async fn run_job_with_engine(
         None
     };
 
-    let executor = match CompositeExecutor::new(&spec.cwd, ext_bridge) {
+    let executor = match CompositeExecutor::new(&host_cwd, ext_bridge) {
         Ok(exec) => exec,
         Err(e) => {
             let err_msg = format!("failed to initialize executor: {e}");
