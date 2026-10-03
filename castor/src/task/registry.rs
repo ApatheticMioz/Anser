@@ -274,11 +274,10 @@ impl TaskRegistry {
                 if seen.contains(stem) {
                     continue;
                 }
-                if let Ok(raw) = fs::read_to_string(entry.path()) {
-                    if let Ok(rec) = serde_json::from_str::<TaskRecord>(&raw) {
+                if let Ok(raw) = fs::read_to_string(entry.path())
+                    && let Ok(rec) = serde_json::from_str::<TaskRecord>(&raw) {
                         out.push(rec);
                     }
-                }
             }
         }
         out

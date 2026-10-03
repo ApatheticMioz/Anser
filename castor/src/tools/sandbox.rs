@@ -147,13 +147,11 @@ fn is_reserved_device(name: &str) -> bool {
         return true;
     }
     for prefix in ["COM", "LPT"] {
-        if let Some(rest) = stem.strip_prefix(prefix) {
-            if let Some(d) = rest.chars().next() {
-                if rest.len() == 1 && d.is_ascii_digit() {
+        if let Some(rest) = stem.strip_prefix(prefix)
+            && let Some(d) = rest.chars().next()
+                && rest.len() == 1 && d.is_ascii_digit() {
                     return true;
                 }
-            }
-        }
     }
     false
 }

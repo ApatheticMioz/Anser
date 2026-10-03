@@ -96,6 +96,7 @@ impl ProxyServer {
     }
 
     /// Listen on an ephemeral port (for tests). Returns the bound address.
+    #[cfg(test)]
     pub async fn serve_ephemeral(self) -> std::io::Result<SocketAddr> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
@@ -161,13 +162,11 @@ async fn proxy_handler(
 
     // Multimodal guard: replace image blocks with text placeholders.
     let mut body_to_send = body_bytes.clone();
-    if is_chat {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-            if sanitize_request_body(&mut v) {
+    if is_chat
+        && let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+            && sanitize_request_body(&mut v) {
                 body_to_send = Bytes::from(v.to_string());
             }
-        }
-    }
 
     // Forward to the upstream engine.
     let upstream_url = format!("http://{}{}{}", server.inner.upstream, path, query);
@@ -282,10 +281,7 @@ fn passthrough_stream(
         }
         match state.res.chunk().await {
             Ok(Some(bytes)) => Some((Ok(bytes), state)),
-            Ok(None) | Err(_) => {
-                state.finished = true;
-                None
-            }
+            Ok(None) | Err(_) => None,
         }
     })
 }

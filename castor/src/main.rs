@@ -608,7 +608,7 @@ mod tests {
     #[test]
     fn default_subcommand_is_mcp() {
         let cli = Cli::parse_from(["castor"]);
-        assert!(matches!(cli.command, None));
+        assert!(cli.command.is_none());
     }
 
     #[test]
@@ -655,7 +655,7 @@ mod tests {
     // --- run_clean behavior tests -------------------------------------------
 
     use std::io::Write;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime};
 
     static CLEAN_TMP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -969,7 +969,7 @@ mod tests {
         assert_eq!(first, second, "output lines must be identical");
         assert_eq!(bytes1, bytes2, "second install must be byte-identical");
 
-        let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&bytes2).into_owned()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&bytes2)).unwrap();
         let servers = parsed["mcpServers"].as_object().unwrap();
         assert_eq!(servers.len(), 1, "no duplicate keys: {servers:?}");
         let _ = std::fs::remove_dir_all(&dir);

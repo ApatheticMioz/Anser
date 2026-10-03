@@ -173,7 +173,7 @@ fn split_segments(cmd: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 fn command_name(token: &str) -> String {
-    let parts: Vec<&str> = token.split(|c| c == '/' || c == '\\').collect();
+    let parts: Vec<&str> = token.split(['/', '\\']).collect();
     parts.last().unwrap_or(&"").to_ascii_lowercase()
 }
 
@@ -212,10 +212,10 @@ fn expand_tilde(operand: &str, is_win: bool) -> String {
         return HOME.to_string();
     }
     if operand.starts_with("~/") || operand.starts_with("~\\") {
-        return format!("{HOME}{}", &operand[1..].replace('\\', "/"));
+        return format!("{HOME}{}", operand[1..].replace('\\', "/"));
     }
-    if let Some(rest) = operand.strip_prefix('~') {
-        if !rest.is_empty() && rest.as_bytes()[0] != b'/' && rest.as_bytes()[0] != b'\\' {
+    if let Some(rest) = operand.strip_prefix('~')
+        && !rest.is_empty() && rest.as_bytes()[0] != b'/' && rest.as_bytes()[0] != b'\\' {
             if is_win {
                 return format!("C:\\Users\\{rest}");
             }
@@ -224,7 +224,6 @@ fn expand_tilde(operand: &str, is_win: bool) -> String {
             }
             return format!("/home/{rest}");
         }
-    }
     operand.to_string()
 }
 
@@ -480,15 +479,14 @@ fn analyze_segment(cmd: &str, cwd: &str, depth: usize) -> Result<(), ShellPolicy
         let mut operands = Vec::new();
         for j in (i + 1)..tokens.len() {
             let tok = &tokens[j];
-            if let Some(eq) = tok.find('=') {
-                if eq > 0 && (tok.starts_with('-') || tok.starts_with('/')) {
+            if let Some(eq) = tok.find('=')
+                && eq > 0 && (tok.starts_with('-') || tok.starts_with('/')) {
                     let value = &tok[eq + 1..];
                     if !value.is_empty() {
                         operands.push(value.to_string());
                     }
                     continue;
                 }
-            }
             if !is_flag(tok) {
                 operands.push(tok.clone());
             }

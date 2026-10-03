@@ -145,7 +145,7 @@ pub fn run_task(task_dir: &Path, variant: Variant) -> EvalReport {
     // 3. Copy the fixture tree into a fresh temp workspace.
     let workspace = match make_temp_workspace(task_dir) {
         Ok(w) => w,
-        Err(e) => return error_report(task_id, variant, format!("{e}")),
+        Err(e) => return error_report(task_id, variant, e.to_string()),
     };
 
     // 4. Apply the optional setup script.
@@ -505,14 +505,11 @@ fn trace_no_tool_output_spilled(steps: &[TraceStep]) -> CheckStatus {
 fn trace_no_write_outside_workdir(steps: &[TraceStep]) -> CheckStatus {
     let mut violations = Vec::new();
     for s in steps {
-        if let TraceStep::ToolCall { name, args, .. } = s {
-            if name == "write_file" || name == "edit_file" {
-                if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
-                    if is_outside_workdir(path) {
-                        violations.push(format!("{name} → {path}"));
-                    }
-                }
-            }
+        if let TraceStep::ToolCall { name, args, .. } = s
+            && (name == "write_file" || name == "edit_file")
+            && let Some(path) = args.get("path").and_then(|v| v.as_str())
+            && is_outside_workdir(path) {
+                violations.push(format!("{name} → {path}"));
         }
     }
     if violations.is_empty() {
@@ -598,7 +595,6 @@ fn trace_no_consecutive_identical_failed_toolcall(steps: &[TraceStep]) -> CheckS
     let calls = tool_calls(steps);
     let failed_by_id: HashMap<String, bool> = tool_results(steps)
         .into_iter()
-        .map(|(id, err)| (id, err))
         .collect();
     let seq: Vec<(String, String, bool)> = calls
         .into_iter()

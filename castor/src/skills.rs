@@ -27,7 +27,7 @@
 //! crate is *not* warranted here.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A discovered skill: its frontmatter identity plus the path to its
 /// `SKILL.md` so the model can read the body on demand.
@@ -198,6 +198,7 @@ pub fn render_index(skills: &[Skill]) -> String {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -234,7 +235,7 @@ mod tests {
         write_skill(&root, "alpha", "name: alpha\ndescription: A skill\n", "A body\n");
         write_skill(&root, "mid", "name: mid\ndescription: M skill\n", "M body\n");
 
-        let skills = load_skills(&[root.clone()]);
+        let skills = load_skills(std::slice::from_ref(&root));
         assert_eq!(skills.len(), 3);
 
         let idx = render_index(&skills);
@@ -257,7 +258,7 @@ mod tests {
         // Empty description value.
         write_skill(&root, "emptydesc", "name: emptydesc\ndescription:\n", "body\n");
 
-        let skills = load_skills(&[root.clone()]);
+        let skills = load_skills(std::slice::from_ref(&root));
         assert_eq!(skills.len(), 1, "only the well-formed skill should load");
         assert_eq!(skills[0].name, "good");
         let _ = fs::remove_dir_all(&root);
@@ -272,7 +273,7 @@ mod tests {
 
         // Existing but empty dir.
         let root = fresh_temp_dir();
-        let skills = load_skills(&[root.clone()]);
+        let skills = load_skills(std::slice::from_ref(&root));
         assert!(skills.is_empty());
         let _ = fs::remove_dir_all(&root);
     }
@@ -296,7 +297,7 @@ mod tests {
         let root = fresh_temp_dir();
         write_skill(&root, "b", "name: b\ndescription: B\n", "body\n");
         write_skill(&root, "a", "name: a\ndescription: A\n", "body\n");
-        let skills = load_skills(&[root.clone()]);
+        let skills = load_skills(std::slice::from_ref(&root));
 
         let first = render_index(&skills);
         let second = render_index(&skills);

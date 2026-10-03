@@ -173,23 +173,21 @@ async fn wait_handler(
     let rx = reg.subscribe_terminal(&id).await;
     let timeout = Duration::from_secs(q.timeout_s);
 
-    let result = tokio::select! {
+    tokio::select! {
         _ = wait_for_terminal(rx, reg, &id, timeout) => {}
     };
-    let _ = result;
+    ();
 
     // Re-read after the wait: the task may have gone terminal.
-    if let Some(rec) = reg.get(&id).await {
-        if rec.status.is_terminal() {
+    if let Some(rec) = reg.get(&id).await
+        && rec.status.is_terminal() {
             return terminal_response(&rec).into_response();
         }
-    }
     // Also check disk (cross-instance).
-    if let DiskRead::Ok(rec) = reg.read_disk(&id) {
-        if rec.status.is_terminal() {
+    if let DiskRead::Ok(rec) = reg.read_disk(&id)
+        && rec.status.is_terminal() {
             return terminal_response(&rec).into_response();
         }
-    }
 
     // Timed out.
     (
@@ -220,19 +218,17 @@ async fn wait_for_terminal(
         tokio::select! {
             _ = rx.recv() => {
                 // Woken by a terminal transition; check state.
-                if let Some(rec) = reg.get(id).await {
-                    if rec.status.is_terminal() {
+                if let Some(rec) = reg.get(id).await
+                    && rec.status.is_terminal() {
                         return;
                     }
-                }
             }
             _ = tokio::time::sleep(wait_dur) => {
                 // Poll the disk mirror (cross-instance fallback).
-                if let DiskRead::Ok(rec) = reg.read_disk(id) {
-                    if rec.status.is_terminal() {
+                if let DiskRead::Ok(rec) = reg.read_disk(id)
+                    && rec.status.is_terminal() {
                         return;
                     }
-                }
             }
         }
     }

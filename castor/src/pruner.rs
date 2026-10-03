@@ -53,7 +53,7 @@ impl Default for PrunePolicy {
 impl PrunePolicy {
     fn now(&self) -> u64 {
         self.now
-            .unwrap_or_else(|| now_millis())
+            .unwrap_or_else(now_millis)
     }
 }
 
@@ -322,11 +322,10 @@ fn session_has_terminal_event(session_dir: &Path) -> bool {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if let Some(t) = ev.get("type").and_then(|x| x.as_str()) {
-            if t == "session_end" || t == "session_error" {
+        if let Some(t) = ev.get("type").and_then(|x| x.as_str())
+            && (t == "session_end" || t == "session_error") {
                 return true;
             }
-        }
     }
     false
 }
@@ -361,11 +360,10 @@ fn active_task_session_ids(state_dir: &Path) -> std::collections::HashSet<String
             .and_then(|s| s.as_str())
             .map(|s| matches!(s, "completed" | "failed" | "cancelled"))
             .unwrap_or(false);
-        if !done {
-            if let Some(sid) = v.get("session_id").and_then(|s| s.as_str()) {
+        if !done
+            && let Some(sid) = v.get("session_id").and_then(|s| s.as_str()) {
                 ids.insert(sid.to_string());
             }
-        }
     }
     ids
 }
@@ -374,20 +372,16 @@ fn active_task_session_ids(state_dir: &Path) -> std::collections::HashSet<String
 /// else the directory mtime).
 fn session_mtime(session_dir: &Path) -> u64 {
     let log_file = session_dir.join("events.jsonl");
-    if let Ok(m) = fs::metadata(&log_file) {
-        if let Ok(t) = m.modified() {
-            if let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
+    if let Ok(m) = fs::metadata(&log_file)
+        && let Ok(t) = m.modified()
+            && let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
                 return d.as_millis() as u64;
             }
-        }
-    }
-    if let Ok(m) = fs::metadata(session_dir) {
-        if let Ok(t) = m.modified() {
-            if let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
+    if let Ok(m) = fs::metadata(session_dir)
+        && let Ok(t) = m.modified()
+            && let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
                 return d.as_millis() as u64;
             }
-        }
-    }
     0
 }
 
@@ -455,11 +449,10 @@ fn plan_tasks(state_dir: &Path, policy: &PrunePolicy, now: u64) -> Vec<PathBuf> 
         }
         // Active protection: task files referenced by live slots/locks are
         // never candidates.
-        if let Some(id) = v.get("id").and_then(|s| s.as_str()) {
-            if protected.contains(id) {
+        if let Some(id) = v.get("id").and_then(|s| s.as_str())
+            && protected.contains(id) {
                 continue;
             }
-        }
         // Age gate.
         let mtime = mtime_of(&path);
         if now.saturating_sub(mtime) > policy.max_age_ms {
@@ -475,8 +468,8 @@ fn protected_task_ids(state_dir: &Path) -> std::collections::HashSet<String> {
 
     // Live slot leases: `<state>/tasks/slots/slot_N.json`.
     let slots_dir = state_dir.join("tasks").join("slots");
-    if slots_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&slots_dir) {
+    if slots_dir.is_dir()
+        && let Ok(entries) = fs::read_dir(&slots_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if !name.starts_with("slot_") || !name.ends_with(".json") {
@@ -495,12 +488,11 @@ fn protected_task_ids(state_dir: &Path) -> std::collections::HashSet<String> {
                 }
             }
         }
-    }
 
     // Lockfiles: `<state>/locks/*.lock`.
     let locks_dir = state_dir.join("locks");
-    if locks_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&locks_dir) {
+    if locks_dir.is_dir()
+        && let Ok(entries) = fs::read_dir(&locks_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if !name.ends_with(".lock") {
@@ -519,7 +511,6 @@ fn protected_task_ids(state_dir: &Path) -> std::collections::HashSet<String> {
                 }
             }
         }
-    }
 
     ids
 }

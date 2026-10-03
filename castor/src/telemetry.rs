@@ -267,7 +267,7 @@ pub fn write_stats_json(state_dir: &Path, stats: &Stats) -> std::io::Result<Path
     let out = telemetry_dir.join("stats.json");
     let tmp = telemetry_dir.join(format!("stats.json.tmp.{}", std::process::id()));
     let body = serde_json::to_string_pretty(stats)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(|e| std::io::Error::other(e))?;
     fs::write(&tmp, body)?;
     fs::rename(&tmp, &out)?;
     Ok(out)

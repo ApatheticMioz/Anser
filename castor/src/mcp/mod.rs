@@ -259,7 +259,7 @@ mod tests {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().map(|v| v.as_str().unwrap_or("")).collect::<Vec<_>>());
         assert!(
-            required.as_deref() == Some(&vec!["prompt"]),
+            required.as_deref() == Some(&["prompt"]),
             "coworker schema must require `prompt`, got {required:?}"
         );
 
@@ -271,7 +271,7 @@ mod tests {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().map(|v| v.as_str().unwrap_or("")).collect::<Vec<_>>());
         assert!(
-            required.as_deref() == Some(&vec!["action"]),
+            required.as_deref() == Some(&["action"]),
             "task schema must require `action`, got {required:?}"
         );
 
@@ -283,7 +283,7 @@ mod tests {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().map(|v| v.as_str().unwrap_or("")).collect::<Vec<_>>());
         assert!(
-            required.as_deref() == Some(&vec!["action"]),
+            required.as_deref() == Some(&["action"]),
             "server schema must require `action`, got {required:?}"
         );
     }

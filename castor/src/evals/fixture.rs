@@ -333,7 +333,7 @@ mod tests {
     fn loads_real_fix_failing_test_golden_trace() {
         let path = fixture_dir().join("fix-failing-test").join("trace.jsonl");
         let steps = Trace::load(&path).expect("golden trace must load");
-        assert!(steps.len() > 0, "expected at least one step");
+        assert!(!steps.is_empty(), "expected at least one step");
         assert_eq!(steps.len(), 12);
 
         // First line is a session_start with the task prompt.
@@ -392,7 +392,6 @@ mod tests {
             .join("known-fail")
             .join("trace.jsonl");
         let steps = Trace::load(&path).expect("known-fail trace must load");
-        assert!(steps.len() > 0);
         assert_eq!(steps.len(), 9);
         // The known-fail run edits the test file — the scorer must catch it.
         let edited_test = steps.iter().any(|s| matches!(

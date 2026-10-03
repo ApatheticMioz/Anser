@@ -262,11 +262,10 @@ impl TaskSemaphore {
     fn alien_tenant_active(&self) -> bool {
         let me = std::process::id() as u32;
         for i in 0..self.inner.max_slots {
-            if let Some(l) = self.read_lease(i) {
-                if !self.lease_reclaimable(Some(&l)) && l.tenant != me {
+            if let Some(l) = self.read_lease(i)
+                && !self.lease_reclaimable(Some(&l)) && l.tenant != me {
                     return true;
                 }
-            }
         }
         false
     }
@@ -365,11 +364,10 @@ impl TaskSemaphore {
     pub fn list_slots(&self) -> Vec<Lease> {
         let mut out = Vec::new();
         for i in 0..self.inner.max_slots {
-            if let Some(l) = self.read_lease(i) {
-                if !self.lease_reclaimable(Some(&l)) {
+            if let Some(l) = self.read_lease(i)
+                && !self.lease_reclaimable(Some(&l)) {
                     out.push(l);
                 }
-            }
         }
         out
     }
@@ -381,8 +379,8 @@ impl TaskSemaphore {
         let mut alien = Vec::new();
         let mut same = Vec::new();
         for i in 0..self.inner.max_slots {
-            if let Some(l) = self.read_lease(i) {
-                if !self.lease_reclaimable(Some(&l)) {
+            if let Some(l) = self.read_lease(i)
+                && !self.lease_reclaimable(Some(&l)) {
                     let entry = SlotEntry {
                         slot: i,
                         lease: l.clone(),
@@ -394,7 +392,6 @@ impl TaskSemaphore {
                     }
                     slots.push(entry);
                 }
-            }
         }
         let alien_active = !alien.is_empty();
         let same_active = !same.is_empty();

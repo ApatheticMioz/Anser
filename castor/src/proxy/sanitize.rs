@@ -301,10 +301,10 @@ impl SseSanitizer {
             self.done = true;
             return Some("data: [DONE]\n\n".to_string());
         }
-        if trimmed.starts_with("data: ") {
-            let payload = trimmed[6..].trim();
-            if payload.starts_with('{') {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(payload) {
+        if let Some(stripped) = trimmed.strip_prefix("data: ") {
+            let payload = stripped.trim();
+            if payload.starts_with('{')
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(payload) {
                     // Mid-stream error frame: error present, no choices.
                     if parsed.get("error").is_some() && parsed.get("choices").is_none() {
                         self.done = true;
@@ -319,8 +319,8 @@ impl SseSanitizer {
                             .or_else(|| delta.get("reasoning_content"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        if !token_text.is_empty() {
-                            if let Some(rep) = self.detector.feed(token_text) {
+                        if !token_text.is_empty()
+                            && let Some(rep) = self.detector.feed(token_text) {
                                 self.done = true;
                                 let pattern_json =
                                     serde_json::to_string(&rep.pattern).unwrap_or_default();
@@ -340,10 +340,8 @@ impl SseSanitizer {
                                 });
                                 return Some(format!("data: {breaker}\n\ndata: [DONE]\n\n"));
                             }
-                        }
                     }
                 }
-            }
         }
         None
     }

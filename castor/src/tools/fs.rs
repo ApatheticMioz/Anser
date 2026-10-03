@@ -264,7 +264,7 @@ impl FsExecutor {
                 return true;
             }
             match d.parent() {
-                Some(p) if p != &d => d = p.to_path_buf(),
+                Some(p) if p != d => d = p.to_path_buf(),
                 _ => return false,
             }
         }

@@ -193,18 +193,16 @@ impl Locks {
         }
 
         // 2. Exists: reject if still within TTL.
-        if let Some(info) = read_lock(&path)? {
-            if now.saturating_sub(info.held_at) < ttl_ms {
+        if let Some(info) = read_lock(&path)?
+            && now.saturating_sub(info.held_at) < ttl_ms {
                 return Ok(AcquireResult::HeldBy { pid: info.pid });
             }
-        }
 
         // 3. Stale (or unreadable): re-verify, rename to tombstone, O_EXCL.
-        if let Some(info) = read_lock(&path)? {
-            if now.saturating_sub(info.held_at) < ttl_ms {
+        if let Some(info) = read_lock(&path)?
+            && now.saturating_sub(info.held_at) < ttl_ms {
                 return Ok(AcquireResult::HeldBy { pid: info.pid });
             }
-        }
         let fname = path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
