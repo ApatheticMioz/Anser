@@ -67,7 +67,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Extract Tag Version
         id: meta
@@ -77,20 +76,23 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Create GitHub Release
+      - name: Create or Update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.meta.outputs.tag }}" \
-            --title "Castor ${{ steps.meta.outputs.version }}" \
-            --generate-notes \
-            --draft=false \
-            --prerelease=false
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Release ${{ steps.meta.outputs.tag }} exists, updating title..."
+            gh release edit "${{ steps.meta.outputs.tag }}" \
+              --title "Castor ${{ steps.meta.outputs.version }}"
+          else
+            gh release create "${{ steps.meta.outputs.tag }}" \
+              --title "Castor ${{ steps.meta.outputs.version }}" \
+              --generate-notes \
+              --draft=false \
+              --prerelease=false
+          fi
 
-      - name: Publish to NPM
-        if: env.NODE_AUTH_TOKEN != ''
+      - name: Publish to NPM via OIDC Trusted Publishing
         run: |
           npm publish --access public --provenance --tag release
           npm dist-tag add mcp-castor@${{ steps.meta.outputs.version }} latest
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
