@@ -25,6 +25,10 @@ pub enum EngineError {
     Sse(String),
     #[error("malformed upstream response: {0}")]
     Malformed(String),
+    /// A replayed trace ran out of recorded responses before the runner
+    /// finished. A clean, typed engine failure — never improvised content.
+    #[error("trace exhausted: no more recorded responses")]
+    TraceExhausted,
 }
 
 #[derive(Debug, Clone, Default)]

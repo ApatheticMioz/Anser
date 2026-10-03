@@ -273,6 +273,22 @@ mod tests {
         s
     }
 
+    /// Bounded poll for a marker file: the contract under test is that the
+    /// command *runs*, not that it runs within a fixed window, so a
+    /// synchronous `exists()` check is flaky under parallel-suite load.
+    async fn wait_for_marker(path: &Path, timeout: Duration, interval: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if path.exists() {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(interval).await;
+        }
+    }
+
     fn test_config(state: &StateDir, launch: Option<&str>, stop: Option<&str>) -> Config {
         Config {
             model: Some("test-model".into()),
@@ -360,11 +376,11 @@ mod tests {
         let (_base, port) = start_mock(vec!["test-model".into()], u64::MAX).await;
         let mut cfg = test_config(
             &state,
-            Some(&format!("touch {}; sleep 30", marker.display())),
+            Some(&format!("touch {}", marker.display())),
             None,
         );
         cfg.ports.engine = port;
-        let lc = EngineLifecycle::new(&cfg, &state).with_boot_timeout(Duration::from_millis(500));
+        let lc = EngineLifecycle::new(&cfg, &state).with_boot_timeout(Duration::from_millis(2000));
         let err = lc.boot().await.unwrap_err();
         match &err {
             LifecycleError::BootTimeout { detail, .. } => {
@@ -372,7 +388,10 @@ mod tests {
             }
             other => panic!("expected BootTimeout, got {other:?}"),
         }
-        assert!(marker.exists(), "launch command should have run");
+        assert!(
+            wait_for_marker(&marker, Duration::from_secs(10), Duration::from_millis(50)).await,
+            "launch command should have run"
+        );
     }
 
     #[tokio::test]
@@ -397,7 +416,10 @@ mod tests {
             LifecycleError::BootTimeout { .. } => {}
             other => panic!("expected BootTimeout from heal, got {other:?}"),
         }
-        assert!(stop_marker.exists(), "heal should have run stop_command");
+        assert!(
+            wait_for_marker(&stop_marker, Duration::from_secs(10), Duration::from_millis(50)).await,
+            "heal should have run stop_command"
+        );
         assert_eq!(lc.wedge.read(), 0, "heal should reset the wedge counter");
     }
 
