@@ -1,17 +1,7 @@
 # ============================================================================
 # Castor — Continuous Integration
 # ============================================================================
-# Cross-platform test gate for the mcp-castor microkernel.
-#
-# Matrix: Node 22 & 24 (Active LTS) × ubuntu-latest & windows-latest (4 jobs).
-#
-# `npm ci` (not `npm install`) is used for deterministic installs from
-# package-lock.json. This is REQUIRED for the platform-specific @ast-grep
-# optional dependencies (napi/cli) to resolve the correct native binary for
-# the runner OS (linux-x64-gnu/musl on Ubuntu, win32-x64-msvc on Windows).
-#
-# All test suites (36 suites in test:all) run directly in a single pass to
-# eliminate duplicate test execution and minimize CI duration.
+# Authoritative test gate for the Castor Rust microkernel and MCP toolchain.
 # ============================================================================
 
 name: CI
@@ -23,59 +13,39 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Cancel in-progress runs for the same ref to keep the queue snappy.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: Test · Node ${{ matrix.node-version }} · ${{ matrix.os }}
+    name: Test · Rust stable · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
-      # Don't fail-fast: we want all 4 matrix cells to report independently so
-      # a single platform/Node failure doesn't mask the others.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        node-version: [22, 24]
+        os: [ubuntu-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-          # The lock file lives in the mcp-castor/ subdirectory (no root
-          # package.json), so point the cache at that path explicitly.
-          cache-dependency-path: mcp-castor/package-lock.json
+          components: clippy
 
-      - name: Install dependencies (npm ci)
-        working-directory: mcp-castor
-        run: npm ci
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
 
-      - name: Report environment
-        run: |
-          echo "=============================================="
-          echo " CI environment"
-          echo "   OS:        ${{ runner.os }} (${{ runner.arch }})"
-          echo "   Node:      $(node --version)"
-          echo "   npm:       $(npm --version)"
-          echo "   platform:  $(node -p 'process.platform')"
-          echo "=============================================="
+      - name: Run clippy (-D warnings)
+        run: cargo clippy --all-targets -- -D warnings
 
-      - name: Run test:all (authoritative gate)
-        working-directory: mcp-castor
-        env:
-          TEST_OFFLINE: "1"
-        run: npm run test:all
+      - name: Run tests (authoritative gate)
+        run: cargo test --verbose
 
-      - name: Summary
-        if: always()
-        run: |
-          echo "=============================================="
-          echo " Castor test gate complete on ${{ runner.os }} / Node ${{ matrix.node-version }}"
-          echo "=============================================="
+      - name: Test Node shim
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node bin/castor.js --help

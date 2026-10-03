@@ -14,7 +14,7 @@
 
 ## 0. What This Repository Is
 
-**Castor** is a local-first, **$0-token-cost** agent microkernel that lets a
+**Castor** is a local-first, **$0-token-cost** agent microkernel written in Rust that lets a
 high-reasoning cloud orchestrator (the *Lead Architect*) drive a locally-served
 **Qwen3.8-27B** peer programmer to do code exploration, structural AST
 surgery, testing, and file editing — all inside a zero-trust sandbox.
@@ -23,15 +23,14 @@ surgery, testing, and file editing — all inside a zero-trust sandbox.
 Lead Architect (cloud: Claude / Gemini / Antigravity)
         |  MCP over stdio - 3 consolidated tools
         v
-mcp-castor/  (Node.js MCP server + Castor microkernel)
-        |  in-process V8 tool calls (0.01 ms) + zero-turn HTTP wait (:18021)
+castor  (Rust MCP server + Castor microkernel)
+        |  in-process tool calls (<0.1 ms) + zero-turn HTTP wait (:18021)
         v
 Local Serving Engine (WSL2 / Linux, :18020)  ->  Serving Provider (Qwen3.8-27B default)
 ```
 
-The **only** `package.json` lives in `mcp-castor/`. There is **no root
-`package.json`** — every `npm` command must be run with `--prefix mcp-castor`
-(or from inside `mcp-castor/`).
+The crate root lives at the repository root (`Cargo.toml`). A Node.js cross-platform shim
+(`bin/castor.js`) is provided for npm and `npx` client integration.
 
 ---
 
@@ -44,7 +43,7 @@ which one it is before acting.
 |---|---|---|---|
 | **Lead Architect** | Cloud (Claude Code: GLM 5.3 text-only Plan / GLM 5.3-flash vision Exec; Antigravity: Gemini 3.8 Flash vision) | Architecture, task decomposition, plan & manifest authorship, supervisory steering, final synthesis. | **Never** bulk-read source into cloud context; **never** author code; offloads exploration to the Coworker in single-concern slices. |
 | **Autonomous Execution Coworker** | Local peer programmer (Qwen3.8-27B default, or configured model) via Castor (`castor` MCP) | Hands-on execution & peer engineering: explore, AST surgery, edit, test, shell. Local peer programmer also has vision capability enabled. Proactively challenges flawed assumptions, proposes architectural alternatives, and returns grounded facts. | **Never** authors high-level plans/roadmaps; **never** escapes the sandbox root. |
-| **Autonomous Optimizer (Evo)** | Local, inside the Coworker | Closed-loop mutation: propose -> evaluate -> select/revert against a fitness metric. | **Snapshot before mutating**; **revert on regression**; never edits files outside the candidate's snapshot list. |
+| **Autonomous Optimizer (Evo)** | Local, offline batch runner | Closed-loop mutation: propose -> evaluate -> select/revert against a deterministic fitness metric. | **Snapshot before mutating**; **revert on regression**; never edits files outside the candidate's snapshot list. |
 
 > **Honest attribution:** No agent may claim "we" or coworker collaboration
 > unless a `castor_coworker` MCP call was genuinely dispatched and its output
@@ -58,25 +57,29 @@ All commands are **relative** — never hardcode a drive letter or home path.
 `<repo>` = the root of your checkout.
 
 ### 2.1 Prerequisites
-- **Node.js >= 22** (22 or 24; the CI matrix runs both active LTS versions).
+- **Rust >= 1.85** (Cargo, Rust 2024 edition).
+- **Node.js >= 22** (optional, only for the `bin/castor.js` npm shim).
 - **Git** (leave `core.autocrlf` at default — `.gitattributes` pins LF).
 - **Optional, for the full live stack:** a GPU with >= 24 GB VRAM, WSL2 (or
   native Linux), CUDA 12.4+, and an OpenAI-compatible serving engine (vLLM, Ollama,
   LM Studio, SGLang, etc.; Qwen3.8-27B on `:18020` is the default).
   **You do NOT need a GPU to run the test gate** (see section 5).
 
-### 2.2 Install
+### 2.2 Build
 ```bash
-cd <repo>/mcp-castor
-npm ci          # deterministic; REQUIRED for the platform-specific @ast-grep
-                # native binaries (linux-x64-gnu / win32-x64-msvc)
+cargo build
 ```
-> Use `npm ci`, not `npm install`, so the lockfile resolves the correct
-> `@ast-grep/napi` + `@ast-grep/cli` native binary for the runner OS.
 
 ### 2.3 Run the MCP server
 ```bash
-node <repo>/mcp-castor/index.js
+# Directly via cargo
+cargo run -- mcp
+
+# Or via compiled binary
+./target/debug/castor mcp
+
+# Or via cross-platform Node shim
+node bin/castor.js mcp
 ```
 Registers three stdio tools: `castor_coworker`, `castor_task`, `castor_server`
 (customizable via `CASTOR_TOOL_PREFIX`, default `"castor"`).
@@ -85,20 +88,19 @@ starts on `:18022`.
 
 ### 2.4 Register with a client
 ```bash
-# Claude Code
-claude mcp add --scope user castor node <repo>/mcp-castor/index.js
+# Register automatically with Claude Code and Antigravity IDE
+./target/debug/castor install --client all
 
-# Antigravity IDE (generate schemas into the IDE's MCP dir)
-node <repo>/mcp-castor/bin/castor.js install --antigravity
+# Or via Node shim
+node bin/castor.js install --client all
 ```
 
-### 2.5 Key environment variables (all in `mcp-castor/src/config.js`)
+### 2.5 Key environment variables & configuration
 | Variable | Default | Meaning |
 |---|---|---|
-| `CASTOR_MODEL` / `QWEN_MODEL` | `Qwen3.8-27B` | Target model identifier for the coworker. |
-| `CASTOR_BASE_URL` / `QWEN_BASE_URL` | `http://127.0.0.1:18020/v1` | OpenAI-compatible endpoint. |
+| `CASTOR_MODEL` | `Qwen3.8-27B` | Target model identifier for the coworker. |
+| `CASTOR_BASE_URL` | `http://127.0.0.1:18020/v1` | OpenAI-compatible endpoint. |
 | `CASTOR_TOOL_PREFIX` | `castor` | Namespace prefix for MCP tools (`castor_coworker`, etc.). |
-| `CASTOR_RACE_MS` | `15000` | Sync race window before yielding to zero-turn long-poll wait. |
 | `CASTOR_MAX_CONCURRENT` | `1` | Cross-process execution slots (disk-lease semaphore). |
 | `CASTOR_STATE_DIR` | `~/.castor` | Root for task JSON, slot leases, session logs, Evo lineage. |
 | `STATUS_PORT` | `18021` | Zero-turn long-poll HTTP wait/status server. |
@@ -108,121 +110,83 @@ node <repo>/mcp-castor/bin/castor.js install --antigravity
 | `ALLOW_ENGINE_INTERRUPT` | `0` | Dangerous override: by default, test suites NEVER interrupt, probe, or reboot vLLM. |
 | `CASTOR_BASE_TURN_BUDGET` | `80` | Base turn budget before requiring supervisor lease extension or landing. |
 | `CASTOR_MAX_ELASTIC_TURNS` | `200` | Maximum allowed turn ceiling via supervisor lease extension. |
-| `QWEN_LOOP_DETECTION_WINDOW` | `6` | Sliding window size for action-hash stagnation detection. |
-| `QWEN_LOOP_DETECTION_REPETITIONS` | `3` | Consecutive identical non-mutating actions before circuit-breaking. |
-| `QWEN_SUPERVISOR_PREVIEW_CHARS` | `300` | Length of recent activity preview returned in task status and HTTP wait endpoints. |
 
 ---
 
 ## 3. Code Style & AST Patterns
 
 ### 3.1 Language & formatting
-- **JavaScript (ESM)**: `"type": "module"`. 2-space indent, LF line endings,
-  final newline, UTF-8 (enforced by `.editorconfig` + `.gitattributes`).
-- **Python**: 4-space indent. **Go**: tabs. **Rust**: 4-space.
+- **Rust**: 4-space indent, 2024 edition, strictly enforced by `cargo fmt` and `cargo clippy --all-targets -- -D warnings`.
 - **Line endings are a hard invariant** (Rule 7): `* text=auto eol=lf` in
-  `.gitattributes`. `*.bat` / `*.cmd` are the only CRLF files. A CRLF leak in
-  a text file trips `LineEndingMismatchError` in the test gate — do not
-  "fix" it by hand; let `edit_file` auto-normalize.
+  `.gitattributes`. `*.bat` / `*.cmd` are the only CRLF files.
 
 ### 3.2 Structural AST surgery (preferred over regex)
 Use structural AST tools, not string matching, for syntactic discovery and refactoring:
-- `ast_search` — find code by pattern with metavariables
-  (`function $NAME($$$ARGS) { $$$BODY }`).
-- For multi-file or repository-scale AST surgery, run the `ast-grep` CLI directly
-  via `bash`.
+- `ast_search` — find code by pattern with metavariables via native `ast-grep` (`function $NAME($$$ARGS) { $$$BODY }`).
+- `ast_replace` — multi-file structural AST refactoring with automatic rollback on syntax error.
 - Code edits made via `edit_file` are automatically validated by in-memory AST
   and syntax gates before disk commit.
 
-### 3.3 Edit primitives (complementary, not competing)
+### 3.3 Edit primitives
 - `edit_file` — exact-substring, uniqueness-guarded, per-region line-ending
-  preservation with transparent in-memory syntax validation (JS/TS, Python,
-  JSON, LaTeX, BibTeX). Use for unambiguous targeted replacements.
-- `apply_patch` — unified-diff, multi-line/structural, 2 MB cap
-  (`PatchTooLargeError`), pre-validates every in-patch path with git apply
-  `--unidiff-zero`. Use for multi-hunk or structural changes.
-- Fuzzy matching is not supported; modifications use exact substrings or unified diffs.
+  preservation with transparent in-memory syntax validation.
+- Fuzzy matching is not supported; modifications use exact substrings.
 
-### 3.4 Module layout (where new code goes)
+### 3.4 Module layout
 ```
-mcp-castor/
-  index.js                 # MCP entry: 3 tools, lifecycle, isMain guard
-  stream_proxy.js          # :18022 SSE proxy
-  bin/
-    castor.js              # CLI entry point (install, config, status, etc.)
-  src/
-    config.js              # ALL constants + env parsing (single source)
-    platform.js            # WSL/Windows path translation, spawn profiles
-    wsl_bridge.js          # path canonicalization, killProcessTree
-    semaphore.js           # cross-process O_EXCL disk-lease
-    task_registry.js       # :18021 long-poll wait, cancel, orphans
-    server_lifecycle.js    # engine boot, wedge detection, auto-heal
-    tools.js               # zod schemas + dispatch
-    harness/
-      runner.js            # agent loop, continuation, empty-stream guard
-      core/                # microkernel: kernel.js, events.js
-      services/            # sandbox_fs, shell_executor, ast_service,
-                           #   web_service, provider_vllm, mcp_bridge, event_logger
-      evo/                 # evo_operator, lineage_dag, evaluator,
-                           #   trace_repair, watchdog
-  tests/                   # 66 suites (see section 5)
+Cargo.toml               # Single root crate manifest
+bin/
+  castor.js              # Node.js cross-platform distribution shim
+src/
+  main.rs                # CLI entry point (clap dispatch, worker subcommand)
+  config.rs              # Configuration loader (serde, env > json > defaults)
+  platform.rs            # Cross-OS path translation and process tree management
+  skills.rs              # agentskills.io SKILL.md indexer
+  telemetry.rs           # JSONL event ledger & derived statistics
+  pruner.rs              # State dir retention pruner
+  mcp/
+    mod.rs               # rmcp stdio transport, tool schemas, and server
+    worker.rs            # Detached worker process execution loop
+  task/
+    mod.rs               # Task management subsystem
+    registry.rs          # Task lifecycle, disk mirror synchronization, and persistence
+    wait.rs              # Long-poll HTTP wait endpoint (:18021)
+    semaphore.rs         # File-backed cross-process slot semaphore
+  proxy/
+    mod.rs               # Stream proxy server (:18022)
+    sanitize.rs          # SSE UTF-8 reassembly, repetition detector, error frame translation
+  engine/
+    mod.rs               # Provider interface and HTTP client
+    lifecycle.rs         # Engine boot, canary verification, and auto-heal
+    provider.rs          # OpenAI / vLLM streaming chat client
+  runner/
+    mod.rs               # Multi-turn autonomous agent loop
+    events.rs            # Session event ledger writer and replayer
+    loop_detector.rs     # Action-hash sliding window loop breaker
+  tools/
+    mod.rs               # Composite tool executor implementing runner::ToolExecutor
+    fs.rs                # Filesystem tools (read, write, edit, list, search)
+    sandbox.rs           # 5-layer path containment and 137-vector security policy
+    shell.rs             # Safe bash executor and command AST validator
+    ast.rs               # Structural AST search and replace via native ast-grep
+    web.rs               # Web search (SearXNG -> Brave -> DDG) and fetch (markdown conversion)
+    extensions.rs        # MCP extension bridges (rmcp child processes)
+  evo/
+    mod.rs               # Offline evolutionary optimizer subsystem
+    lineage.rs           # DAG of scored commits and parent pointers
+    optimizer.rs         # Reflective batch evaluation against task suites
+    watchdog.rs          # Lineage stagnation and health detector
+evals/                   # Tier A offline replay and golden test tasks
+skills/                  # Reusable SKILL.md workflow recipes
 ```
-**New tools** are in-process microkernel plugins under `src/harness/services/`
-— never external CLI subprocesses (in-process = sub-millisecond).
 
-### 3.5 Documentation & JSDoc Standards (Present-State Truth)
+### 3.5 Documentation & Rustdoc Standards (Present-State Truth)
 - **Zero Storytelling / No Historical Changelogs / No Defensive Lore**: Comments and docstrings must document the current software architecture, behavior, and invariants strictly as-is in present-state truth.
 - **Strictly Forbidden Commentary Patterns**:
   - Chronological narratives: "Raised from X to Y", "Reverted from A to B", "Historically", "Formerly", "The old code used to...".
   - Calendar dates or version snapshots: "2026-09-12:", "v1.2:".
-  - Milestone or ticket tags: "M6a:", "P15:", "FX2:", "Issue #51:", "PR #13:", "gotcha 9".
+  - Milestone or ticket tags: "M6a:", "P15:", "FX2:", "Issue #51:", "PR #13:".
   - Lab notes or exploratory diaries: "Measured on our RTX 3090...", "A/B tested with 6 trials...".
-  - Defensive justifications or conversational essays: "Sized so that server-side reasoning...", "A legitimate first token can take many minutes...", "With the defaults this is 2^retryNumber seconds...", "Prevents X from being killed...", "Never suppresses thinking in prompts — bounds it mechanically...".
-- **Canonical SWE Documentation Pattern**:
-  All exported functions, constants, classes, and types must use concise, objective, present-tense JSDoc.
-  
-  **Pattern for Constants:**
-  ```javascript
-  /**
-   * Technical summary of what this constant controls (1-2 sentences).
-   * - Unit: <milliseconds | seconds | tokens | characters | bytes | count | ratio | path>
-   * - Default: <value>
-   * - Override: <ENV_VAR> (or "None")
-   * @type {<type>}
-   */
-  ```
-
-  **Pattern for Functions:**
-  ```javascript
-  /**
-   * Technical summary of function behavior and operational invariants.
-   * @param {<type>} <name> - Parameter description.
-   * @returns {<type>} Return value description.
-   * @throws {<ErrorType>} Exceptional conditions.
-   */
-  ```
-
-  **Anti-Pattern (Contaminated):**
-  ```javascript
-  // BAD: Explaining background reasons, hypothetical failures, or historical tuning
-  /**
-   * Streaming idle timeout (ms) for a single generation turn. Acts as both the
-   * first-byte and inter-chunk idle watchdog on the provider's SSE read loop.
-   * A legitimate first token can take many minutes on a cold 200K prefill...
-   */
-  ```
-
-  **Canonical SWE Pattern (Clean):**
-  ```javascript
-  // GOOD: Factual, concise, technical definition of what it is and what it does
-  /**
-   * Maximum allowed idle duration between consecutive stream chunks before timing out.
-   * - Unit: milliseconds
-   * - Default: 1200000 (20 minutes)
-   * - Override: QWEN_STREAM_IDLE_TIMEOUT_MS
-   * @type {number}
-   */
-  ```
 
 ---
 
@@ -230,118 +194,57 @@ mcp-castor/
 
 ### 4.1 ALWAYS
 - **ALWAYS** run the test gate before committing (section 5).
-- **ALWAYS** snapshot files (`evo_propose_candidate`) **before** any
-  mutation; the snapshot is the rollback anchor.
-- **ALWAYS** keep every path **relative** or env-driven (`QWEN_STATE_DIR`,
-  `import.meta.url`). Never hardcode a drive letter, home dir, or username.
-- **ALWAYS** write new filesystem/shell capabilities with matching boundary
-  tests in `tests/security.test.js`.
+- **ALWAYS** keep every path relative or env-driven. Never hardcode a drive letter, home dir, or username.
 - **ALWAYS** surface the unadulterated error (Rule 8: fail-fast, zero-masking).
-- **ALWAYS** keep `CLAUDE.md` and `GEMINI.md` shared invariants
-  byte-identical (locked by `tests/protocol_sync.test.js`).
-- **ALWAYS** use the sanctioned workspace scratchpad (`<workspace>/.scratch/` or repository-local helper scripts) for empirical reproduction scripts (`repro.py`, `test_case.js`), intermediate data extractions, log slicing, and multi-item audit ledgers rather than attempting to hold large matrices in reasoning context.
-- **ALWAYS** treat the Coworker as an interactive pair-programmer: accept intermediate checkpoint findings and respond to targeted inquiries when high-entropy or ambiguous choices arise.
+- **ALWAYS** keep `CLAUDE.md` and `GEMINI.md` shared invariants byte-identical.
+- **ALWAYS** use the sanctioned workspace scratchpad (`<workspace>/.scratch/` or repository-local helper scripts) for empirical reproduction scripts, intermediate data extractions, log slicing, and multi-item audit ledgers.
 
 ### 4.2 ASK FIRST
-- **ASK** before adding a new dependency (especially native/optional ones —
-  they must be added to `optionalDependencies` with per-OS variants).
-- **ASK** before changing any constant in `src/config.js` (ports, timeouts,
-  budgets) — these are the contract with the orchestrator.
-- **ASK** before touching the 5-layer sandbox, the semaphore, or the wedge
-  detector (security-critical; needs a security review).
-- **ASK** before adding a new MCP tool or changing a tool's zod schema
-  (requires re-running `update_schemas.py` + the `schema_parity` gate).
-- **ASK** before committing anything under `.evo/`, `.avo/`, or `*.log`
-  (runtime scratch; gitignored; force-adding leaks machine paths).
+- **ASK** before adding a new dependency.
+- **ASK** before changing any constant in `src/config.rs` (ports, timeouts, budgets).
+- **ASK** before touching the 5-layer sandbox, the semaphore, or the wedge detector.
+- **ASK** before committing anything under `.evo/`, `.scratch/`, or `*.log`.
 
 ### 4.3 NEVER
-- **NEVER** let a file or shell operation escape the workspace root. The
-  5-layer defense (PathEscape -> Symlink Realpath -> Root-Overwrite Guard ->
-  Dangerous-Shell Filter -> AST Syntax Gate + Evo Rollback) is non-negotiable.
+- **NEVER** let a file or shell operation escape the workspace root. The 5-layer defense is non-negotiable.
 - **NEVER** dump raw binary file bytes (`.pdf`, `.png`, etc.) into plaintext string buffers or transcripts (`BinaryFileError` guard).
-- **NEVER** silently catch, suppress, or mask errors or upstream HTTP status
-  codes (Rule 8).
-- **NEVER** impose "write no files" or "no mutation" restrictions on scratchpad usage during exploration or debugging (forces reasoning context explosion, ceiling deaths, and runaway inline-bash probe streaks). The coworker has full, unrestricted write freedom in the workspace scratchpad (`.scratch/`) to empirically isolate bugs and verify hypotheses before touching production code.
-- **NEVER** hand-edit line endings or "fix" CRLF by re-typing a file — use
-  `edit_file` / `apply_patch`, which normalize deterministically.
-- **NEVER** edit a file that is not in the active Evo candidate's snapshot
-  list (those changes are not covered by rollback).
+- **NEVER** silently catch, suppress, or mask errors or upstream HTTP status codes (Rule 8).
 - **NEVER** weaken, skip, or delete a failing test to "unblock" the build.
-  Fix the code, or file the defect — never the canary.
-- **NEVER** interrupt the running vLLM engine, fire completion probes into `:18020`, or issue stop/reboot commands during testing unless `ALLOW_ENGINE_INTERRUPT=1` is explicitly set (Rule 0 Zero-Interruption Default).
-- **NEVER** commit secrets, credentials, or machine-identity paths
-  (see `SECURITY.md`).
+- **NEVER** interrupt the running vLLM engine, fire completion probes into `:18020`, or issue stop/reboot commands during testing unless `ALLOW_ENGINE_INTERRUPT=1` is explicitly set.
 
 ---
 
 ## 5. Verification Procedures
 
 ### 5.1 The test gates
-There is **no root `package.json`** — always use `--prefix mcp-castor`.
-
 ```bash
-# Fast canary gate - 9 critical suites (~4s, offline, zero engine interruption). Run during active development.
-npm test --prefix mcp-castor
+# Fast test gate - 242 unit and integration tests (~7s, offline, zero engine interruption)
+cargo test
 
-# Full authoritative gate - 66 suites (single-pass complete verification). Run before PR / milestone commit.
-npm run test:all --prefix mcp-castor
-
-# GPU-less / CI: live suites skip honestly by default when ALLOW_ENGINE_INTERRUPT is unset or TEST_OFFLINE=1.
-TEST_OFFLINE=1 npm run test:all --prefix mcp-castor
+# Full clippy check (strict zero-warning gate)
+cargo clippy --all-targets -- -D warnings
 ```
 
-**Gate truth (verified):**
-| Command | Suites | Runtime | Purpose |
-|---|---|---|---|
-| `npm test` | **9** | ~4 s | Instant canary gate (security, AST canary, syntax gates, edit_file guard, search_code guard, schema parity, platform, protocol sync, prompt integrity). |
-| `npm run test:all` | **65** | ~48 s | Full authoritative offline & integration gate. Single-pass run (authoritative CI signal). |
-| On-disk `.test.js` | **66** | — | Total test suites in repository. |
-
 **Zero Engine Interruption Invariant:**
-By default, tests NEVER interrupt, probe, or reboot a running serving engine (`ALLOW_ENGINE_INTERRUPT=0`). Live suites (`evo`, `mcp_client`, `fifo_queue`, `benchmark`) **skip honestly** by default so running background Castor workloads on single-sequence hardware are protected. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
-
-### 5.2 Canary-first staging (do not run the full chain first)
-1. Identify or write **one** targeted test that exercises exactly the code you
-   changed (a *canary*).
-2. Run just that file: `node mcp-castor/tests/<canary>.test.js`.
-3. If green, run the next-narrower group (the module's related suites).
-4. Only then run the full gate (`npm run test:all --prefix mcp-castor`).
-5. If a canary fails, **fix the code** — never weaken the canary.
-
-### 5.3 Evo closed-loop (for optimizations/refactors)
-1. `evo_propose_candidate` — snapshot target files **first** (rollback anchor).
-2. Apply the mutation.
-3. `evo_evaluate_candidate` — run the verification command, read the fitness
-   score + compact failure digest.
-4. **Select** (`evo_select_candidate`) if fitness improved and tests pass;
-   **revert** (`evo_revert_candidate`) on regression or a real bug.
-5. Confirm the revert restored the original bytes before continuing.
-
-### 5.4 CI
-`.github/workflows/ci.yml` runs the gate on every push/PR across a
-**Node 22 & 24 x ubuntu-latest & windows-latest** matrix (4 jobs, no
-fail-fast). It uses `npm ci` in `mcp-castor/` and runs the authoritative
-`test:all` gate (66 suites). A green CI is required before a PR is mergeable.
+By default, tests NEVER interrupt, probe, or reboot a running serving engine (`ALLOW_ENGINE_INTERRUPT=0`). Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
 
 ---
 
 ## 6. Security & Reporting
 
 - The sandbox is a **zero-trust, 5-layer** defense-in-depth boundary:
-  PathEscape validation -> Symlink Realpath resolution -> Root-Overwrite Guard -> Dangerous-Shell Filter -> AST/LaTeX Syntax Validation & Evo Rollback.
+  PathEscape validation -> Symlink Realpath resolution -> Root-Overwrite Guard -> Dangerous-Shell Filter -> AST Syntax Validation & Evo Rollback.
 - **Never** open a public issue for a security vulnerability. Report
   privately per [`SECURITY.md`](SECURITY.md).
-- The 137-vector containment suite (`tests/security.test.js`: 123 attack
+- The 137-vector containment suite (`src/tools/sandbox.rs`: 123 attack
   vectors blocked, 14 allow vectors) is the regression net for the boundary.
 
 ---
 
 ## 7. Ground-Truth Hierarchy
 
-1. **Active source code**, `package.json`, `tests/`, and build artifacts =
-   ground truth.
+1. **Active source code**, `Cargo.toml`, and build artifacts = ground truth.
 2. `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `CONTRIBUTING.md` = operating
    contracts (verify against code before relying on them).
 3. Secondary documentation, historical audit reports, and markdown notes =
-   **reference ledgers, NOT executable ground truth.** Validate all claims
-   against live code and test suites.
+   **reference ledgers, NOT executable ground truth.**

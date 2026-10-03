@@ -2,21 +2,26 @@
 
 All notable changes to the **Castor** Universal 245K Agent Microkernel & MCP Server are documented in this file.
 
-The project adheres to **[Calendar & Semantic Versioning](https://calver.org/)**:
-- **Frontier CalVer Era (`2026.x.y`)**:
-  - **`2026.3.0`** (2026-10-01) — Castor Major Release: Universal Model Agnosticism, Namespace Protection, Multimodal Vision, and Unified CLI.
-  - **`2026.2.0`** (2026-09-26) — Socratic Collaborative Pair-Programming, Native Multi-Provider Research, and Cooperative Landing.
-  - **`2026.1.0`** (2026-09-09) — Universal 245K Context, Open-Source Launch, AGENTS.md AAIF Standard, and 5-Layer Zero-Trust Sandbox.
-- **Hardening & Rebranding Era (`5.x.y`)**:
-  - **`5.2.0`** (2026-09-06) — Castor Rebrand & Native In-Process Microkernel Hard-Wiring.
-  - **`5.1.1`** (2026-09-06) — Multi-Instance Cancellation Isolation (P15) & 11h Marathon Telemetry.
-  - **`5.1.0`** (2026-09-06) — 14-Pass Engineering Hardening Complete (P1–P14).
-- **Rapid Prototyping Era (`3.x.y – 4.x.y`)**:
-  - **`4.5.9`** (2026-08-31) — Dynamic Supervisor Tool Schema Discovery (`instructions.md`).
-  - **`4.5.0`** (2026-08-29) — Canary Health Gate, Prometheus `/metrics` Gauges, and Stateful UTF-8 Streaming Proxy.
-  - **`4.0.0`** (2026-08-27) — Zero-Turn OS Wait Architecture (`:18021`), Hybrid Dual-Mode Execution, and Unified 3-Tool Design.
-  - **`3.5.0`** (2026-08-27) — Self-Healing Pre-Flight Vitality Checks & In-Flight Network Retries.
-  - **`3.4.0`** (2026-08-27) — Synchronous Execution Mode & 1-Hour Heartbeat Watchdog.
+The project adheres to **[Semantic Versioning](https://semver.org/)**:
+- **`1.0.0`** (2026-10-03) — Full Rust Microkernel Rewrite, Native AST-Grep, rmcp 3.5, and Complete v1.0.0 Cutover.
+- **Historical CalVer Releases**: `2026.3.0`, `2026.2.0`, `2026.1.0`.
+
+---
+
+## [1.0.0] — 2026-10-03
+
+### 🦀 Complete Rust Rewrite & v1.0.0 Full Cutover
+- **Native Rust Microkernel**: Completely re-engineered Castor from Node.js into a single clean, high-performance Rust crate. 18.8K LOC JS replaced by ~5.5K LOC idiomatic Rust.
+- **Sub-Millisecond In-Process Dispatch**: Microkernel executes AST queries, sandbox validations, and session iterations with zero V8/Node startup overhead and minimal memory footprint.
+- **Native AST Surgery via `ast-grep`**: Replaced Node `@ast-grep/napi` FFI wrapper with direct native Rust crate integration (`ast-grep-core`, `ast-grep-language`), providing rock-solid cross-platform AST matching and mutation.
+- **Zero-Trust 5-Layer Sandbox (137 Vectors)**: Re-implemented the 5-layer containment boundary (PathEscape, Symlink Realpath, Root-Overwrite Guard, Destructive Shell Validator, and In-Memory Syntax Gate) natively in Rust, verified against all 137 vectors (123 blocked, 14 allowed).
+- **Official MCP Rust SDK (`rmcp` 3.5)**: Pure stdio JSON-RPC transport powered by `rmcp` 3.5 with compile-time Schemars schema generation for `castor_coworker`, `castor_task`, and `castor_server`.
+- **Zero-Turn Reactive Wait HTTP Server**: `axum` 0.8 long-poll status server on `:18021` (`GET /task/:id/wait`) serving waiters from disk mirror and memory with sub-millisecond wakeup on task completion.
+- **Universal SSE Stream Proxy (`:18022`)**: `encoding_rs`-based streaming proxy with incremental UTF-8 reassembly, repetition circuit breaking, and mid-stream error translation.
+- **Offline Evolutionary Optimizer (AVO-Inspired)**: Replaced fragile online single-turn mutations with an offline reflective batch evaluator (`castor evo`), lineage DAG, and stagnation watchdog.
+- **Model-Routed Skills Indexing**: Standardized on agentskills.io format (`SKILL.md`), rendering a compact cache-friendly index into the system prompt with zero keyword-matching bloat.
+- **Authoritative Test Gate**: 242 unit and integration tests passing in ~7 seconds with zero warnings on `cargo clippy --all-targets -- -D warnings`.
+- **Cross-Platform npm Shim**: Lightweight Node distribution shim (`bin/castor.js`) and root `package.json` for seamless `npx -y castor` and IDE client integration on Windows (via WSL2 bridge) and Linux.
 
 ---
 

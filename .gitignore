@@ -61,3 +61,6 @@ benchmarks/swe-rebench/__pycache__/
 mcp-qwen/.canary_tmp/
 
 evals-faq.pdf
+
+# Rust build artifacts
+target/

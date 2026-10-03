@@ -1,0 +1,17 @@
+{
+  "name": "castor",
+  "version": "1.0.0",
+  "description": "Castor: Rust MCP toolchain, proxy, and evo engine",
+  "type": "module",
+  "bin": {
+    "castor": "bin/castor.js"
+  },
+  "files": [
+    "bin",
+    "skills"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "AGPL-3.0"
+}

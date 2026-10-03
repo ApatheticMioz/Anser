@@ -158,9 +158,9 @@ The coworker is an interactive, conversational pair-programmer, NOT a one-shot b
 ## 5. Verification & Version Control Protocol
 
 1. **Incremental Milestone Verification & Test Gates**:
-   - Verify changes after each component batch using the **Fast Canary Gate** (`npm test --prefix mcp-castor`, ~4s).
+   - Verify changes after each component batch using the **Fast Test Gate** (`cargo test`, ~7s, 242 unit and integration tests).
    - **Zero Engine Interruption Invariant**: Testing runs offline by default (`ALLOW_ENGINE_INTERRUPT=0`). Automated test suites and offline checks must NEVER probe port 18020, fire canary completions, or reboot the serving engine while tasks are in flight. Live GPU execution is gated behind the explicit dangerous override `ALLOW_ENGINE_INTERRUPT=1`.
-   - Run the full authoritative test suite (`npm run test:all --prefix mcp-castor`, 66 suites) and build validation before concluding the milestone.
+   - Run the full authoritative test suite (`cargo test`) and lints (`cargo clippy --all-targets -- -D warnings`) before concluding the milestone.
 2. **Milestone Verification Gate**:
    - Before declaring milestone completion or executing git commits, verify all changes against active test suites and ensure no regressions were introduced.
    - Confirm all requirements for the active milestone are fully verified with verifiable test evidence.
