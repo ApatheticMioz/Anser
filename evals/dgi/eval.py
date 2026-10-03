@@ -12,7 +12,11 @@ import re
 import sys
 import time
 
-DATASET_PATH = os.path.join(os.path.dirname(__file__), "dataset_110.json")
+DATASET_PATH = (
+    sys.argv[1]
+    if len(sys.argv) > 1
+    else os.path.join(os.path.dirname(__file__), "dataset.json")
+)
 
 # ---------------------------------------------------------------------------
 # Repo-Agnostic Feature Extraction & Rule Engine

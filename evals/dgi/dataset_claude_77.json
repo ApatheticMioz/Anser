@@ -1,0 +1,772 @@
+[
+  {
+    "id": "claude_000",
+    "domain": "claude_session",
+    "category": "rustplan_inventory_v1",
+    "dispatch_index": 0,
+    "session_id": "rustplan_inventory_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #0 (rustplan_inventory_v1)",
+    "prompt": "Planning slice (STRICTLY READ-ONLY \u2014 plan mode: no file writes, no edits, not even .scratch; return findings as your reply).\n\nGoal: inventory D:\\LLM_Ecosystem (git repo) to prepare a full Rust rewrite of Castor. Report synthesized, path-coordinated facts, no file dumps:\n\n1) Repo map: top-level dirs/files \u2014 Castor proper vs unrelated; confirm hyperqwen WSL fork location & exclude it (out of scope). Note anything else Castor \"touches\" (scripts, stream proxy, release tooling, docs, configs).\n2) Castor source: languages, total LOC, LOC per subsystem (MCP server+tools, task mgr, session mgr, engine lifecycle, stream proxy, telemetry, guardrails, CLI/packaging). Key file coordinates.\n3) Runtime deps (package.json etc): purpose of each; flag hand-rolled subsystems that have off-the-shelf equivalents.\n4) External surfaces: ports/endpoints, WSL/vLLM interop points, npx/CLI entry points, state/config layout (~/.castor), npm package mcp-castor layout.\n5) Tests: framework, suite count, layers covered, rough runtime.\n6) Any compiled/Rust code already present in repo."
+  },
+  {
+    "id": "claude_001",
+    "domain": "claude_session",
+    "category": "rustplan_research_v1",
+    "dispatch_index": 1,
+    "session_id": "rustplan_research_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #1 (rustplan_research_v1)",
+    "prompt": "Research slice (web search/fetch freely \u2014 form your own queries naturally; READ-ONLY, no file writes, findings in your reply).\n\nContext: planning a full Rust rewrite of Castor \u2014 a Node/TypeScript MCP-server harness that supervises a local LLM engine in WSL, manages agent sessions/tasks, append-only JSONL event logs, telemetry, and an injected stream proxy. Doctrine: prefer battle-tested OSS over custom code; minimal, clean, non-defensive Rust.\n\nAssess the current Rust ecosystem (versions, maintenance signals, real adoption):\n1) MCP protocol: canonical Rust SDK, server-over-stdio maturity, tool/schema definitions.\n2) Process supervision: tokio child-process patterns, Windows<->WSL interop (wsl.exe), PTY needs if any.\n3) HTTP: lean server+client for local admin/telemetry + long-poll task-wait endpoints.\n4) State/serialization: serde for JSONL append-only logs, config loading.\n5) Observability: tracing, exception-driven metrics.\n6) Distribution: npx-installable prebuilt-binary npm packages (esbuild/biome pattern) vs napi-rs vs cargo-only \u2014 simplest robust path.\n7) Testing: async/MCP integration-test patterns.\n8) Anything existing that could replace whole subsystems (agent-harness/supervisor/MCP-host projects) so we compose instead of write.\n\nDeliverable: shortlist per area with rationale; honestly flag dead/duplicated ecosystem options. Synthesis, not dumps."
+  },
+  {
+    "id": "claude_003",
+    "domain": "claude_session",
+    "category": "rustplan_inventory_v1",
+    "dispatch_index": 3,
+    "session_id": "rustplan_inventory_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #3 (rustplan_inventory_v1)",
+    "prompt": "Bloat & shrink analysis (STRICTLY READ-ONLY; findings in your reply). You inventoried mcp-castor. For the Rust rewrite we want the minimal codebase that preserves the contract: 3-tool MCP stdio surface, ports 18020/18021/18022, ~/.castor state layout, castor CLI, 67-suite offline test semantics.\n\nPer subsystem, identify:\n1) Bloat/redundancy: legacy-compat code, dead paths, duplicated logic, over-defensive layers (e.g. config.js state-dir migration, legacy ~/.qwen support, Windows/WSL platform forks) \u2014 what can be deleted outright in a clean-break rewrite?\n2) Vestigial/rarely-used features (evo engine? searxng lifecycle? uncensored launchers? skills?) \u2014 rank by deletion candidacy with evidence (usage sites, tests, docs claims).\n3) Verbosity that collapses in Rust (serde vs zod, tokio vs hand-rolled async/process mgmt, std canonicalize vs hand-rolled path logic) \u2014 realistic Rust LOC estimate per subsystem.\n4) The irreducible core (true IP: sandbox, stream proxy sanitizer, long-poll wait server, session loop) and its approximate minimal Rust size.\nSynthesis with evidence coordinates, no dumps."
+  },
+  {
+    "id": "claude_006",
+    "domain": "claude_session",
+    "category": "rustplan_evo_v1",
+    "dispatch_index": 6,
+    "session_id": "rustplan_evo_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #6 (rustplan_evo_v1)",
+    "prompt": "Research slice (web; form your own queries; READ-ONLY \u2014 findings in your reply).\n\nCastor has an 'Evo' engine: an evolutionary optimizer inspired by NVIDIA's recent AVO paper \u2014 mutating/sampling prompt variants across dispatches via a lineage DAG (.evo/lineage.json), candidate evaluation, watchdog, trace repair. User states Evo is directly inspired by NVIDIA AVO work and wants an evidence-based keep / redesign / cut call for the Rust v1.0.0.\n\nResearch:\n1) Find and read the actual NVIDIA AVO paper \u2014 summarize its mechanism (representation, mutation, selection, eval budget, what it optimizes).\n2) State of practice 2025-26: DSPy/GEPA/MIPRO, EvoPrompt, prompt-breeder-style and agent-trajectory optimizers \u2014 what works, costs, failure modes.\n3) Is runtime online evolution inside a coding harness valuable vs offline batch optimization? Evidence either way.\n4) Verdict: cut / keep as-is / re-architect minimal \u2014 with the recommended shape, est Rust LOC, and how it hooks into sessions/events.jsonl."
+  },
+  {
+    "id": "claude_007",
+    "domain": "claude_session",
+    "category": "rustplan_skills_v1",
+    "dispatch_index": 7,
+    "session_id": "rustplan_skills_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #7 (rustplan_skills_v1)",
+    "prompt": "Research slice (web; form your own queries; READ-ONLY \u2014 findings in your reply).\n\nCastor has 'skills': 4 markdown SKILL.md files, keyword-matched, injected into coworker prompts (~400 LOC JS). User hypothesis: \"every good harness needs skills\" \u2014 but unsure the current design is good. Validate or refute with evidence.\n\nResearch:\n1) How leading coding harnesses do skills/recipes/playbooks in 2025-26: Claude Code skills (SKILL.md format, progressive disclosure, when-loaded), goose skills, SWE-agent configs, Cursor rules, AGENTS.md/CLAUDE.md conventions.\n2) What actually works: retrieval (embedding vs keyword vs model-routed) vs always-in-context vs user-invoked; context-cost and attention tradeoffs.\n3) Minimal correct design for Rust Castor v1.0.0: file format, matching/invoke mechanism, injection point, prefix-cache impact.\n4) Verdict on the hypothesis + recommended shape (est Rust LOC)."
+  },
+  {
+    "id": "claude_008",
+    "domain": "claude_session",
+    "category": "rustplan_search_v1",
+    "dispatch_index": 8,
+    "session_id": "rustplan_search_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #8 (rustplan_search_v1)",
+    "prompt": "Research slice (web; form your own queries; READ-ONLY \u2014 findings in your reply).\n\nCastor's web_service has 5 search providers (Brave API, Tavily, Context7, SearXNG, DuckDuckGo scrape) plus a Docker lifecycle manager for SearXNG (~250 LOC). User believes SearXNG performed best and says: if so, build around it \u2014 whichever option is seamless/correct/easy.\n\nResearch:\n1) SearXNG quality today vs Brave/Tavily/DDG for coding-agent queries (rate limits, result quality, bangs, API stability).\n2) Simplest robust self-host on a Windows 11 + WSL2 machine WITHOUT Docker if possible: SearXNG is Python \u2014 uv/pipx service? WSL systemd unit? native Windows? Or is Docker/Podman genuinely the easy path?\n3) Alternatives worth building around instead (Brave free tier, public searx instances with API, others)?\n4) Recommended minimal provider set + architecture for Rust v1.0.0 (est LOC), and whether any container lifecycle management survives."
+  },
+  {
+    "id": "claude_009",
+    "domain": "claude_session",
+    "category": "rustplan_mcpx_v1",
+    "dispatch_index": 9,
+    "session_id": "rustplan_mcpx_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #9 (rustplan_mcpx_v1)",
+    "prompt": "Research slice (web; form your own queries; READ-ONLY \u2014 findings in your reply).\n\nCastor supports extensions[]: external MCP servers spawned as stdio children per dispatch (~400 LOC JS today). For the Rust v1.0.0 (rmcp) we must decide the extension architecture. User plans playwright MCP; maybe github/gh MCP.\n\nResearch:\n1) rmcp's client + child-process transport capabilities for bridging external MCP servers into a host (versions, examples, tool listing/aggregation).\n2) How leading MCP hosts manage tool injection: always-connected vs lazy vs orchestrator-on-demand \u2014 and the prompt-prefix/KV-cache impact: with vLLM automatic prefix caching, what invalidates the cache when tool schemas enter/leave the system prompt mid-conversation?\n3) Which MCPs are worth bundling/recommending for a coding coworker (playwright, github, context7, filesystem, sequential-thinking\u2026) \u2014 maintenance signals, real adoption.\n4) Recommended architecture: extension lifecycle, when tools enter the prompt, per-dispatch vs session-scoped, cleanup on task end; est Rust LOC with rmcp."
+  },
+  {
+    "id": "claude_010",
+    "domain": "claude_session",
+    "category": "rustplan_research_v1",
+    "dispatch_index": 10,
+    "session_id": "rustplan_research_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #10 (rustplan_research_v1)",
+    "prompt": "Distribution follow-up (web; form your own queries; READ-ONLY \u2014 findings in your reply).\n\nYou recommended npm shim + per-platform prebuilt binaries via cargo-dist. User wants the simplest possible UX: \"config, plug into llama.cpp and vLLM and cloud models\" via npx \u2014 and asks you to back the recommendation with documentation evidence.\n\nResearch:\n1) cargo-dist current state: npm publishing support, per-platform optionalDependencies layout, provenance/attestations, maintenance signals. Compare with plain GitHub Actions matrix publishing.\n2) How esbuild and Biome structure the shim + optionalDependencies pattern (their docs/npm layouts \u2014 read them).\n3) Windows gotchas: npx spawning .exe, PATH resolution, antivirus false positives, code-signing necessity for an AGPL local tool.\n4) First-run UX patterns worth copying: auto-config generation, engine autodetect (vLLM on :18020, llama.cpp llama-server, cloud OpenAI-compatible baseURLs).\n5) Final recommendation: concrete npm package layout + release pipeline sketch, with doc links."
+  },
+  {
+    "id": "claude_011",
+    "domain": "claude_session",
+    "category": "rustplan_inventory_v1",
+    "dispatch_index": 11,
+    "session_id": "rustplan_inventory_v1",
+    "expected": "REJECT",
+    "rationale": "genuine monolith (rustplan_inv whole-arch design brief >2.9k chars)",
+    "prompt": "Architecture slice (READ-ONLY; xhigh). Design Castor v1.0.0 in Rust. You have the repo inventory in context. Apply these research verdicts:\n\n- Stack: rmcp 3.5 (stdio, #[tool] macros\u2192schemars), tokio, axum (:18021 long-poll), serde, tracing-as-JSONL-telemetry (collapse event log+telemetry), clap CLI, native ast-grep crate, readability+html2md.\n- Cutover: main\u2192branch node-castor; main = clean Rust tree; v1.0.0. No fallbacks, no dual runtime.\n- Skills: adopt agentskills.io SKILL.md; model-routed: skill index in system prompt (~100 tok/skill), body loaded by model via read_file; ~300 LOC; decide optional keyword fast-path.\n- Evo: re-architect offline (AVO/GEPA): lineage DAG + reflective offline batch optimizer + apply-at-session-start + events.jsonl telemetry + watchdog (~600-800 LOC); no live in-harness loop. Prerequisite: NEW small eval set (10-30 replayable tasks, pass/fail scorer) \u2014 do NOT rerun the full swe-rebench pipeline.\n- Search: SearXNG primary self-hosted in WSL2 as systemd service (uv venv, limiter:false \u2192 no Valkey; delete Docker mgr); Brave optional-key fallback; DDG last resort; Context7 separate doc path; drop Tavily. v1.0.0 = health-check + actionable error only.\n- Extensions: per-dispatch rmcp TokioChildProcess bridges; freeze tool set at dispatch start; tool schemas LAST in prompt (vLLM APC hash-chain invalidation); playwright+context7 recommended, github optional; ~370 LOC; ~20KB result cap.\n- Distribution: Biome pattern (root pkg + @castor/{win32-x64,linux-x64,linux-arm64,darwin-arm64} exact-pinned optionalDeps, 30-line shim, provenance:true, plain GHA matrix). OPEN: also ship win32-x64 .exe (SmartScreen/Smart-App-Control hard-block risk, cline#12934) vs pure-JS shim\u2192wsl.exe\u2192linux binary (no Windows exe, WSL mandatory). Resolve using current topology facts: who consumes :18020/:18022, where the injected proxy must live, whether the MCP server process runs on Windows or in WSL today (check config/index.js/stream_proxy spawn path + multi-instance sharing by Antigravity\u00d72+Claude Code).\n\nDeliver:\n1) Cargo workspace layout + module tree with per-module LOC budget (target ~4.5-5.5K total incl. evo offline + skills).\n2) Concurrency/process model: seats=2, locks, multi-instance sharing, stream-proxy placement (internal tokio task in whichever process owns engine lifecycle vs spawned child) \u2014 recommend one.\n3) Resolved open decisions with rationale (distribution variant, proxy, searxng cmd, skills fast-path).\n4) Milestone plan: each milestone = one Qwen session, with objective acceptance gates (e.g. 'cargo test N suites green; parity checklist X passes').\n5) Test mapping: the 67 JS suites \u2192 Rust test modules (port / collapse / delete), incl. the 137-vector security suite as ported policy vectors.\n6) Top risks + mitigations (rmcp 3.x pinning+live-server tests, WSL interop spike, Windows spawn semantics).\n7) Parity-improvement list (what v1.0.0 does better than JS Castor).\nChallenge weak spots. Minimal LOC. Synthesis with coordinates."
+  },
+  {
+    "id": "claude_012",
+    "domain": "claude_session",
+    "category": "rustplan_inventory_v1",
+    "dispatch_index": 12,
+    "session_id": "rustplan_inventory_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #12 (rustplan_inventory_v1)",
+    "prompt": "Architecture slice (READ-ONLY; xhigh): design Castor v1.0.0 in Rust. Repo inventory already in your context. Apply research verdicts:\n\nSTACK: rmcp 3.5 (stdio, #[tool]\u2192schemars), tokio, axum (:18021 long-poll), serde, tracing-as-JSONL (collapse events+telemetry), clap, native ast-grep crate, readability+html2md.\nCUTOVER: main\u2192node-castor branch; main = clean Rust tree; v1.0.0; no fallbacks.\nSKILLS: agentskills.io SKILL.md, model-routed (index in system prompt ~100tok/skill, body via read_file), ~300 LOC; decide keyword fast-path.\nEVO: offline re-architect (AVO/GEPA): lineage DAG + reflective batch optimizer + apply-at-start + events telemetry + watchdog (~600-800 LOC); no live loop; prerequisite = NEW 10-30 replayable eval tasks w/ pass/fail scorer (never rerun full swe-rebench).\nSEARCH: SearXNG primary, self-host WSL2 systemd (uv venv, limiter off), delete Docker mgr; Brave optional, DDG last, Context7 doc-path; drop Tavily; v1 = health-check + actionable error only.\nEXTENSIONS: per-dispatch rmcp TokioChildProcess; freeze tool set at dispatch start; schemas LAST in prompt (vLLM APC hash-chain); playwright+context7, github optional; ~370 LOC; 20KB result cap.\nDIST: Biome pattern: root pkg + @castor/{win32-x64,linux-x64,linux-arm64,darwin-arm64} exact-pinned, 30-line shim, provenance, plain GHA. OPEN: ship win32 exe (SmartScreen hard-block risk) vs pure-JS shim\u2192wsl.exe\u2192linux binary. Resolve from topology: who consumes :18020/:18022, where injected proxy lives, where MCP server runs today (Windows vs WSL; multi-instance Antigravity\u00d72+ClaudeCode) \u2014 check stream_proxy spawn path + index.js.\n\nDELIVER: 1) workspace layout + module tree + per-module LOC budget (~4.5-5.5K total); 2) process model: seats=2, locks, multi-instance, proxy placement (tokio task vs child) \u2014 recommend one; 3) resolved opens w/ rationale; 4) milestones: each = one Qwen session + objective gates; 5) test mapping 67 JS suites \u2192 Rust (port/collapse/delete; 137-vector security suite ports as policy vectors); 6) risks+mitigations; 7) parity-improvements. Challenge weak spots; minimal LOC."
+  },
+  {
+    "id": "claude_014",
+    "domain": "claude_session",
+    "category": "rustplan_inventory_v1",
+    "dispatch_index": 14,
+    "session_id": "rustplan_inventory_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #14 (rustplan_inventory_v1)",
+    "prompt": "Architecture slice (READ-ONLY; xhigh): design Castor v1.0.0 in Rust. Repo inventory already in your context. Apply research verdicts:\n\nSTACK: rmcp 3.5 (stdio, #[tool]\u2192schemars), tokio, axum (:18021 long-poll), serde, tracing-as-JSONL (collapse events+telemetry), clap, native ast-grep crate, readability+html2md.\nCUTOVER: main\u2192node-castor branch; main = clean Rust tree; v1.0.0; no fallbacks.\nSKILLS: agentskills.io SKILL.md, model-routed (index in system prompt ~100tok/skill, body via read_file), ~300 LOC; decide keyword fast-path.\nEVO: offline re-architect (AVO/GEPA): lineage DAG + reflective batch optimizer + apply-at-start + events telemetry + watchdog (~600-800 LOC); no live loop; prerequisite = NEW 10-30 replayable eval tasks w/ pass/fail scorer (never rerun full swe-rebench).\nSEARCH: SearXNG primary, self-host WSL2 systemd (uv venv, limiter off), delete Docker mgr; Brave optional, DDG last, Context7 doc-path; drop Tavily; v1 = health-check + actionable error only.\nEXTENSIONS: per-dispatch rmcp TokioChildProcess; freeze tool set at dispatch start; schemas LAST in prompt (vLLM APC hash-chain); playwright+context7, github optional; ~370 LOC; 20KB result cap.\nDIST: Biome pattern: root pkg + @castor/{win32-x64,linux-x64,linux-arm64,darwin-arm64} exact-pinned, 30-line shim, provenance, plain GHA. OPEN: ship win32 exe (SmartScreen hard-block risk) vs pure-JS shim\u2192wsl.exe\u2192linux binary. Resolve from topology: who consumes :18020/:18022, where injected proxy lives, where MCP server runs today (Windows vs WSL; multi-instance Antigravity\u00d72+ClaudeCode) \u2014 check stream_proxy spawn path + index.js.\n\nDELIVER: 1) workspace layout + module tree + per-module LOC budget (~4.5-5.5K total); 2) process model: seats=2, locks, multi-instance, proxy placement (tokio task vs child) \u2014 recommend one; 3) resolved opens w/ rationale; 4) milestones: each = one Qwen session + objective gates; 5) test mapping 67 JS suites \u2192 Rust (port/collapse/delete; 137-vector security suite ports as policy vectors); 6) risks+mitigations; 7) parity-improvements. Challenge weak spots; minimal LOC."
+  },
+  {
+    "id": "claude_016",
+    "domain": "claude_session",
+    "category": "rustplan_evals_v1",
+    "dispatch_index": 16,
+    "session_id": "rustplan_evals_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #16 (rustplan_evals_v1)",
+    "prompt": "Research slice (READ-ONLY; findings in your reply). Shape the eval system for Castor v1.0.0 (Rust rewrite).\n\n1) Locate `evals-faq.pdf` in D:\\LLM_Ecosystem (try repo root, docs/, benchmarks/, mcp-castor/). It's a PDF \u2014 extract text via pdftotext (never read binary directly). Summarize its guidance faithfully.\n2) Web research (form your own queries): how agent-harness projects run automated evals in 2025-26 \u2014 small replayable task sets, pass/fail scorers, LLM-as-judge pitfalls, eval-in-CI patterns (fast offline gate vs nightly live gate), SWE-bench-mini-style subsets, deterministic replay.\n3) Recommend: eval harness design for Castor (task format, scorer, determinism, 10-30 tasks, no swe-rebench rerun) + how automated evals can run as part of `cargo test` (e.g. #[ignore]-gated live evals vs offline fixtures) without becoming flaky or 'engineered green'.\n\nConcise synthesis with sources."
+  },
+  {
+    "id": "claude_017",
+    "domain": "claude_session",
+    "category": "rustplan_testaudit_v1",
+    "dispatch_index": 17,
+    "session_id": "rustplan_testaudit_v1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #17 (rustplan_testaudit_v1)",
+    "prompt": "Test-audit slice (READ-ONLY; findings in your reply). mcp-castor/tests/ has 76 files; 67 are the test:all gate. User suspects some are engineered-to-be-green, bloated, or bad; some are good.\n\nFor each of the 67 gate suites (skip the 11 excluded from test:all), report ONE line: file \u2192 what it ACTUALLY asserts (strong/weak/vacuous) \u2192 verdict: PORT (real invariants worth keeping), REWRITE (weak or green-engineered \u2014 state the invariant it SHOULD test), or DROP (tautological/bloat/redundant).\n\nFlag the patterns: asserting on mocks instead of behavior, try/catch-that-passes, snapshot-of-own-output, tests re-implementing the code under test, long sleeps, tests that can't fail.\n\nEnd with: summary counts (PORT/REWRITE/DROP) + the top 10 suites worth porting near-verbatim and why. This directly shapes the Rust test suite design. Synthesis, no file dumps."
+  },
+  {
+    "id": "claude_018",
+    "domain": "claude_session",
+    "category": "castor_m1",
+    "dispatch_index": 18,
+    "session_id": "castor_m1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #18 (castor_m1)",
+    "prompt": "Implementation slice M1a (toolchain + skeleton). Create castor/ (new Rust crate; mcp-castor/ JS stays untouched).\n\n1) Toolchain: check cargo in WSL Ubuntu (wsl.exe -e bash -lc 'cargo --version'); if absent, install rustup stable (user-level) in WSL. Report versions. WSL is the dev/test target (product binary is linux).\n2) castor/Cargo.toml: name castor, edition 2024, license AGPL-3.0, bin castor. Verify current stable versions on crates.io for: rmcp, tokio, axum, serde, serde_json, toml, tracing, tracing-subscriber, clap, reqwest, encoding_rs, thiserror, schemars, async-trait. Features: tokio full; reqwest rustls+stream+json; tracing-subscriber json+env-filter; clap derive; rmcp with server + client + transport-child-process features.\n3) src/main.rs: clap derive subcommands mcp(default),proxy,status,server,config,install,clean,evo \u2014 stubs (unimplemented error). Module stubs: config.rs, platform.rs, telemetry.rs, skills.rs, state/mod.rs, mcp/mod.rs, task/mod.rs, proxy/mod.rs, engine/mod.rs, runner/mod.rs, tools/mod.rs, evo/mod.rs. castor/.gitignore: /target.\n4) Gate (run in WSL from /mnt/d/LLM_Ecosystem/castor): cargo build && cargo test both green. Report chosen crate versions + build time."
+  },
+  {
+    "id": "claude_019",
+    "domain": "claude_session",
+    "category": "castor_eval",
+    "dispatch_index": 19,
+    "session_id": "castor_eval",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #19 (castor_eval)",
+    "prompt": "Eval-track slice E1. WRITE only under castor/evals/ (create it). Doctrine from evals-faq.pdf: error-analysis first, deterministic-only CI gate, binary pass/fail, no imagined tasks.\n\n1) Error analysis: scan C:\\Users\\Apath\\.castor\\sessions\\*\\events.jsonl (and ~/.castor equivalents) for real failure patterns \u2014 tool errors, retries, degenerate finals, budget exhaustions, dropped tool-calls. Cluster into 3-6 recurring failure classes with counts.\n2) Author castor/evals/EVALS.md: task.toml format (id, prompt, setup, scorer check-ids, timeout_s, tags), trace.jsonl fixture format sketch, anti-green rules (one hard canary task expected to fail; known-failing variant per task; ERROR\u2260FAIL; never tune a scorer to pass; no LLM judges in gate), Tier A offline-replay / Tier B live-nightly split.\n3) Author 5 fixture tasks under castor/evals/tasks/<id>/: task.toml + tiny KB-scale fixture repo. Mix: fix-failing-test, edit-precision (occurrence guard), tool-call-sequence, sandbox-escape-reject, multi-step refactor. Scorers = deterministic execution checks + trace assertions ONLY.\n\nGate: EVALS.md complete; 5 tasks with concrete scorers; failure-class report from (1). Synthesis in reply."
+  },
+  {
+    "id": "claude_020",
+    "domain": "claude_session",
+    "category": "castor_m1",
+    "dispatch_index": 20,
+    "session_id": "castor_m1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #20 (castor_m1)",
+    "prompt": "Implementation slice M1b: replace castor/src/config.rs stub with the real config module (single concern; leave other stubs untouched).\n\nSpec:\n- serde `Config` struct. Precedence: env var > ~/.castor/config.json > built-in default. State dir default: $CASTOR_STATE_DIR else ~/.castor (resolve Windows home under WSL is platform.rs's job \u2014 for M1b just use dirs-like home resolution or std env HOME/USERPROFILE).\n- Keys (one name each, env prefix CASTOR_): model, base_url, api_key (secret: never print value), engine_type, launch_command, stop_command, max_context, ports {engine:18020, status:18021, proxy:18022}, max_concurrent_tasks (default 1), tool_prefix (default \"castor\"), searxng_url (optional), brave_api_key (optional). NO aliases, NO migration, NO profiles.\n- `Config::load()` returns effective config + per-field source (Env|File|Default) for annotation.\n- Wire `castor config` subcommand: print effective config, each field annotated with source; api_key printed as *** if set.\n- Unit tests (in WSL): fixture config.json round-trip; env beats file beats default (each field); partial file merges over defaults; invalid JSON fails fast with clear error; port override via env.\n- Gate: cargo build && cargo test green in WSL from /mnt/d/LLM_Ecosystem/castor. Report test count."
+  },
+  {
+    "id": "claude_021",
+    "domain": "claude_session",
+    "category": "castor_m1",
+    "dispatch_index": 21,
+    "session_id": "castor_m1",
+    "expected": "ADMIT",
+    "rationale": "bounded single-concern (castor_m1 state-dir + lockfile primitive)",
+    "prompt": "Implementation slice M1c: replace castor/src/state/mod.rs stub with state-dir layout + lockfile primitive (single concern; config.rs stays as-is).\n\nSpec:\n- `StateDir::new(config)` resolves ~/.castor (honor config.state_dir) and provides typed paths: tasks/, tasks/slots/, sessions/, telemetry/, locks/, evo/. `ensure()` creates dirs on demand.\n- Lockfile primitive (port the JS lifecycle-locks semantics exactly):\n  - `acquire(name, ttl)`: O_EXCL create at locks/<name>.lock, content = {pid, held_at, ttl}. Success = exclusive. On existing file: if fresh (age < ttl) \u2192 reject with heldBy info; if stale \u2192 rename to <name>.lock.tombstone (atomic, fails if raced) then O_EXCL create fresh.\n  - `release(name)`: read lock; if content.pid != current pid \u2192 refuse (foreign PID never releases, return error); else remove. Tombstones are inert.\n  - `WedgeCounter`: atomic increment/read at locks/<name>.count via write-temp-then-rename.\n- pid for \"current process\": std::process::id() \u2014 fine for both Windows-dev and WSL-target semantics at this stage.\n- Unit tests (hermetic: state_dir pointed at tempdir): fresh acquire; in-TTL reject carries heldBy pid; stale reclaim via tombstone (simulated by backdating held_at); tombstone race loser fails cleanly; foreign-PID release refused; owner release works and allows re-acquire; wedge counter increments atomically under concurrent tasks (spawn a few tokio tasks).\n- Gate: cargo build && cargo test green in WSL (/mnt/d/LLM_Ecosystem/castor). Report test count."
+  },
+  {
+    "id": "claude_022",
+    "domain": "claude_session",
+    "category": "castor_m1",
+    "dispatch_index": 22,
+    "session_id": "castor_m1",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #22 (castor_m1)",
+    "prompt": "Implementation slice M1c: replace castor/src/state/mod.rs stub with state layout + lockfile primitive (single concern; config.rs untouched).\n\nSpec:\n- `StateDir::new(config)` resolves state dir (honor config.state_dir), typed paths: tasks/, tasks/slots/, sessions/, telemetry/, locks/, evo/. `ensure()` creates on demand.\n- Lockfile (port JS lifecycle-locks semantics exactly): `acquire(name, ttl)` = O_EXCL create locks/<name>.lock, content {pid, held_at, ttl}. Fresh existing file -> reject with heldBy pid. Stale -> atomic rename to <name>.lock.tombstone (raced loser fails cleanly) then fresh O_EXCL. `release(name)`: foreign pid -> refuse (error); owner -> remove. Tombstones inert.\n- `WedgeCounter`: atomic incr/read at locks/<name>.count, write-temp-then-rename.\n- Current pid = std::process::id().\n- Tests (hermetic tempdir state_dir): fresh acquire; in-TTL reject w/ heldBy; stale reclaim (backdate held_at); tombstone race; foreign-pid release refused; owner release + re-acquire; wedge counter concurrent increments (few tokio tasks).\n- Gate: cargo build && cargo test green in WSL (/mnt/d/LLM_Ecosystem/castor). Report test count."
+  },
+  {
+    "id": "claude_023",
+    "domain": "claude_session",
+    "category": "castor_eval",
+    "dispatch_index": 23,
+    "session_id": "castor_eval",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #23 (castor_eval)",
+    "prompt": "Eval-track slice E1b (retry of E1, tightened). STRICT: write ONLY docs + data \u2014 NO code files, NO .mjs, NO runner/harness (the Rust harness comes with M10; your previous JS scaffolding was deleted as off-spec). Keep each file small; write files one at a time; if output starts repeating, stop that file and move on. Your prior analysis scripts live in .scratch/ (analyze_castor_events.mjs, cluster_failures.mjs) \u2014 reuse them.\n\nDeliverables:\n1) Error analysis (ground truth): run your scripts over C:\\Users\\Apath\\.castor\\sessions\\*\\events.jsonl. Cluster real failures into 3-6 classes WITH counts (tool errors, retries, degenerate finals, budget exhaustion, dropped tool-calls, etc). Report the table in your reply.\n2) castor/evals/EVALS.md (<120 lines): task.toml format (id, prompt, setup, scorer check-ids, timeout_s, tags); trace.jsonl fixture format (every LLM response + tool call/result); anti-green rules (one hard canary expected-fail; known-failing variant per task; ERROR\u2260FAIL; never tune scorer to pass; no LLM judges in gate); Tier A offline-replay vs Tier B live-nightly.\n3) castor/evals/tasks/<id>/task.toml \u00d7 5 (KB-scale fixture files alongside each). Derive from your failure classes: fix-failing-test, edit-precision occurrence-guard, tool-call-sequence, sandbox-escape-reject, multi-step refactor. Scorers = deterministic execution + trace assertions only.\n\nGate: EVALS.md + 5 tasks present + failure-class table in reply."
+  },
+  {
+    "id": "claude_024",
+    "domain": "claude_session",
+    "category": "castor_m2",
+    "dispatch_index": 24,
+    "session_id": "castor_m2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #24 (castor_m2)",
+    "prompt": "Implementation slice M2: rmcp stdio MCP server + 3 tools (single concern).\n\nSpec:\n- mcp/mod.rs: rmcp 3.5 stdio server serving 3 tools. Read mcp-castor/src/tools.js first \u2014 port input schemas of qwen_coworker/qwen_task/qwen_server to serde+schemars structs with clean-break renames castor_coworker/castor_task/castor_server. Name = <config.tool_prefix>_coworker etc (default prefix 'castor'). Preserve schema fields that are contract: coworker(prompt,cwd,session_id,reasoning_effort,extensions,skills,test_command,timeout_ms,allow_large_prompt); task(task_id,action,...); server(action,force) with actions status|start|stop. Match JS manifest modulo rename; drop only qwen-specific naming.\n- Tool bodies: return isError:true 'not implemented until M3+' \u2014 honest fail-fast; bodies land later.\n- stdio purity invariant: JSON-RPC frames only on stdout; logs to stderr.\n- main.rs: default `mcp` subcommand loads Config and serves.\n- Tests: (1) handshake+tools/list via rmcp client \u2014 assert 3 names + schemas match a manifest constant module (parity anchor); (2) stdio purity: spawn castor mcp, initialize, every stdout line valid JSON-RPC; (3) tool call returns isError not-implemented.\n- Gate: cargo build && cargo test green in WSL (/mnt/d/LLM_Ecosystem/castor). Report test count."
+  },
+  {
+    "id": "claude_026",
+    "domain": "claude_session",
+    "category": "castor_m2b",
+    "dispatch_index": 26,
+    "session_id": "castor_m2b",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #26 (castor_m2b)",
+    "prompt": "Implementation slice M2b (M2 retry; prior attempt died probing cargo on Windows bash \u2014 do NOT repeat that).\n\nENVIRONMENT CONTRACT: cargo exists ONLY in WSL. Every build/test command: wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'. Windows-side bash has NO cargo \u2014 never probe with it.\nrmcp API discovery: web_fetch https://docs.rs/rmcp/3.5.0 (server handler trait, #[tool] macros, stdio serve) \u2014 not local cargo doc.\n\nTask: castor/src/mcp/mod.rs \u2014 rmcp stdio server, 3 tools named <config.tool_prefix>_{coworker,task,server} (default castor_*). Extract input schemas ONCE from mcp-castor/src/tools.js coordinates qwen_coworker@~L76, qwen_task@~L336, qwen_server@~L749 into serde+schemars structs; write them once, don't re-read per field. Fields: coworker(prompt,cwd,session_id,reasoning_effort,extensions,skills,test_command,timeout_ms,allow_large_prompt); task(task_id,action,...); server(action,force). Bodies: isError 'not implemented until M3+'. stdio purity: JSON-RPC only on stdout, logs to stderr. main.rs default mcp subcommand serves with Config::load().\nTests: handshake+tools/list parity vs a manifest constant module; stdio purity via spawned binary; tool call isError.\nEXIT CRITERIA: if rmcp 3.5's API blocks you after honest attempts, STOP and report the exact API gap + partial code \u2014 never loop on probe scripts.\nGate: cargo build && cargo test green in WSL. Report test count."
+  },
+  {
+    "id": "claude_027",
+    "domain": "claude_session",
+    "category": "castor_m2c",
+    "dispatch_index": 27,
+    "session_id": "castor_m2c",
+    "expected": "ADMIT",
+    "rationale": "bounded single-concern (castor_m2c rmcp MCP server 3 tools)",
+    "prompt": "Implementation slice M2c \u2014 WRITE CODE FIRST. Two prior attempts died in API-archaeology loops; rmcp discovery is DONE. FORBIDDEN: new .scratch probe/extract scripts (the peek.py pattern is the failure mode); compiler errors are the API reference.\n\nAPI facts (rmcp 3.5.0, verified from source; raw defs in .scratch/rmcp_model_defs.txt \u2014 read once if needed): ServerConfig = alias of InitializeResult{protocol_version,capabilities,server_info,instructions}; ServerCapabilities::builder().enable_tools().build(); Tool::new(name,desc,schema).with_input_schema::<T: JsonSchema>(); CallToolResult::error(vec![ContentBlock::text(msg)]); stdio() -> (Stdin,Stdout) via transport-io feature; serve_server(handler,transport) entry.\n\nTask:\n1) Cargo.toml: add rmcp feature 'transport-io'.\n2) castor/src/mcp/mod.rs in ONE pass: 3 tools <prefix>_{coworker,task,server} via serde+schemars structs \u2014 coworker(prompt,cwd,session_id,reasoning_effort,extensions,skills,test_command,timeout_ms,allow_large_prompt); task(task_id,action); server(action,force). Bodies: CallToolResult::error('not implemented until M3+'). Serve over stdio() + serve_server. stdio purity: logs to stderr only.\n3) main.rs default mcp subcommand: Config::load() then serve.\n4) Tests: tools/list parity vs manifest constants; stdio purity (spawn binary, every stdout line JSON-RPC); tool call isError.\nCompile early, often: wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo test' \u2014 fix from compiler output.\nGate: cargo test green in WSL. Report test count."
+  },
+  {
+    "id": "claude_028",
+    "domain": "claude_session",
+    "category": "castor_m2c",
+    "dispatch_index": 28,
+    "session_id": "castor_m2c",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #28 (castor_m2c)",
+    "prompt": "Slice M2c \u2014 WRITE CODE FIRST. Two prior attempts died in API-archaeology loops; discovery is DONE. FORBIDDEN: new .scratch probe/extract scripts (the peek.py pattern IS the failure mode); compiler errors are the API reference.\n\nAPI facts (rmcp 3.5.0, verified; raw defs in .scratch/rmcp_model_defs.txt, read once if needed): ServerConfig = alias of InitializeResult; ServerCapabilities::builder().enable_tools().build(); Tool::new(name,desc,schema).with_input_schema::<T: JsonSchema>(); CallToolResult::error(vec![ContentBlock::text(msg)]); stdio() -> (Stdin,Stdout) via transport-io feature; serve_server(handler,transport).\n\nTask:\n1) Cargo.toml: add rmcp feature 'transport-io'.\n2) castor/src/mcp/mod.rs in ONE pass: 3 tools <prefix>_{coworker,task,server} via serde+schemars structs \u2014 coworker(prompt,cwd,session_id,reasoning_effort,extensions,skills,test_command,timeout_ms,allow_large_prompt); task(task_id,action); server(action,force). Bodies: CallToolResult::error('not implemented until M3+'). Serve over stdio() + serve_server. Logs to stderr only.\n3) main.rs default mcp subcommand: Config::load() then serve.\n4) Tests: tools/list parity vs manifest constants; stdio purity (spawn binary, every stdout line JSON-RPC); tool call isError.\nCompile early, often: wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo test' \u2014 fix from compiler output.\nGate: cargo test green in WSL. Report test count."
+  },
+  {
+    "id": "claude_032",
+    "domain": "claude_session",
+    "category": "castor_m3",
+    "dispatch_index": 32,
+    "session_id": "castor_m3",
+    "expected": "ADMIT",
+    "rationale": "bounded single-concern (castor_m3a task registry + semaphore)",
+    "prompt": "Slice M3a: castor/src/task/registry.rs + task/semaphore.rs. Port semantics from mcp-castor/src/task_registry.js + src/semaphore.js (read once, extract semantics, write once). Code-first; compiler is reference; NO probe scripts. Existing helpers: config.rs, state/mod.rs (StateDir, Locks, WedgeCounter).\n\nREGISTRY: TaskRecord{id,status queued|executing|completed|failed|cancelled(+reason),prompt,cwd,session_id,pid,heartbeat,turns_budget,created/started/ended}. In-memory map behind tokio::Mutex; disk mirror <state>/tasks/task_<id>.json via write-temp-rename on each transition. API: create/get/list/update/transition. Orphan: executing + dead pid -> transition failed 'orphaned worker died'. Terminal-event idempotence: exactly one terminal transition ever (orphan_terminal_event anchor). extend_budget(id, n): fail-fast on missing/terminal, clamp at MAX_ELASTIC_TURNS=200 (lease_extension anchor).\n\nSEMAPHORE: file-lease slots <state>/tasks/slots/slot_N.json, N = config.max_concurrent_tasks (default 1). acquire(task_id,tenant) async FIFO queue when full; release frees; alien tenant blocked while another tenant holds ANY slot; stale-lease reclaim via dead pid; zero leftover leases post-release.\n\nTESTS: cross-process slot exclusion (spawn child process holding slot, parent blocks then acquires after release); alien-tenant block/unblock; FIFO order; orphan mark on dead pid; terminal exactly-once; extend clamps + fail-fast.\nGate: cargo test green in WSL (/mnt/d/LLM_Ecosystem/castor). Report count."
+  },
+  {
+    "id": "claude_033",
+    "domain": "claude_session",
+    "category": "castor_m3",
+    "dispatch_index": 33,
+    "session_id": "castor_m3",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #33 (castor_m3)",
+    "prompt": "Slice M3a: castor/src/task/registry.rs + task/semaphore.rs. Port semantics from mcp-castor/src/task_registry.js + src/semaphore.js (read once, extract semantics, write once). Code-first; compiler is reference; NO probe scripts. Existing helpers: config.rs, state/mod.rs (StateDir, Locks, WedgeCounter).\n\nREGISTRY: TaskRecord{id,status queued|executing|completed|failed|cancelled(+reason),prompt,cwd,session_id,pid,heartbeat,turns_budget,created/started/ended}. In-memory map behind tokio::Mutex; disk mirror <state>/tasks/task_<id>.json via write-temp-rename on each transition. API: create/get/list/update/transition. Orphan: executing + dead pid -> failed 'orphaned worker died'. Terminal-event idempotence: exactly one terminal transition ever. extend_budget(id,n): fail-fast on missing/terminal, clamp at MAX_ELASTIC_TURNS=200.\n\nSEMAPHORE: file-lease slots <state>/tasks/slots/slot_N.json, N = config.max_concurrent_tasks (default 1). acquire(task_id,tenant) async FIFO when full; release frees; alien tenant blocked while another tenant holds ANY slot; stale-lease reclaim via dead pid; zero leftover leases post-release.\n\nTESTS: cross-process slot exclusion (child proc holds slot, parent blocks, acquires after release); alien-tenant block/unblock; FIFO order; orphan mark on dead pid; terminal exactly-once; extend clamps + fail-fast.\nGate: cargo test green in WSL (/mnt/d/LLM_Ecosystem/castor). Report count."
+  },
+  {
+    "id": "claude_035",
+    "domain": "claude_session",
+    "category": "castor_m3",
+    "dispatch_index": 35,
+    "session_id": "castor_m3",
+    "expected": "ADMIT",
+    "rationale": "bounded single-concern (castor_m3b status/long-poll wait server)",
+    "prompt": "Slice M3b: castor/src/task/wait.rs \u2014 axum status/long-poll server on config.ports.status (18021), completing task/. Code-first; compiler is reference; port anchors: mcp-castor/tests/wait_endpoint.test.js + status_lifecycle.test.js.\n\nAPI:\n- GET /task/:id/wait?timeout_s=N \u2014 long-poll; wakes on terminal transition (tokio::sync::broadcast or watch per task). Terminal => ALWAYS HTTP 200 JSON {id,status,reason,...} whether success OR failure \u2014 never mask status; Connection: close header; timeout => 200 with {status:'executing',timed_out:true}; unknown id => 404 (wait_endpoint anchor).\n- GET /task/:id/status \u2014 computed elapsed_s (queued AND executing), never 500 on malformed disk file => 400 {error} (status_lifecycle anchor).\n- Serves memory+disk: waiters on tasks owned by OTHER instances resolve by polling the disk mirror (fallback poll loop, 500ms) so any instance's tasks are waitable.\n\nSINGLETON: acquire Locks::acquire('status') at startup; lock held => exit 0 with one stderr line 'status server already running' (multi-instance: first wins, others skip). main.rs: `status` subcommand runs it; `mcp` subcommand spawns it as detached child (proxy.lock pattern: lock -> probe health -> spawn if down -> release) best-effort, never blocks serving.\n\nTESTS: spawn server on ephemeral port (inject port via test config); wait wakes on completed transition; wait wakes on failed transition with honest status; timeout path; 404; malformed task file => 400; orphan reaper runs before reads (dead pid => failed, idempotent).\nGate: cargo test green in WSL. Report count."
+  },
+  {
+    "id": "claude_036",
+    "domain": "claude_session",
+    "category": "castor_m3",
+    "dispatch_index": 36,
+    "session_id": "castor_m3",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #36 (castor_m3)",
+    "prompt": "Slice M3b: castor/src/task/wait.rs \u2014 axum status/long-poll server on config.ports.status (18021). Code-first; compiler is reference; port anchors: mcp-castor/tests/wait_endpoint.test.js + status_lifecycle.test.js.\n\nAPI:\n- GET /task/:id/wait?timeout_s=N \u2014 long-poll; wakes on terminal transition (tokio watch/broadcast per task). Terminal => ALWAYS HTTP 200 JSON {id,status,reason,...} whether success OR failure \u2014 never mask status; Connection: close; timeout => 200 {status:'executing',timed_out:true}; unknown id => 404.\n- GET /task/:id/status \u2014 computed elapsed_s (queued AND executing); malformed disk file => 400 {error}, never 500.\n- Serves memory+disk: waiters on tasks owned by other instances resolve via disk-mirror poll fallback (500ms).\n\nSINGLETON: Locks::acquire('status') at startup; held => exit 0 with one stderr line 'status server already running'. main.rs: `status` subcommand runs it; `mcp` subcommand spawns it as detached child (lock -> probe -> spawn if down -> release), best-effort, never blocks serving.\n\nTESTS: server on ephemeral port (inject via test config); wait wakes on completed; wakes on failed w/ honest status; timeout path; 404; malformed file => 400; orphan reaper before reads (dead pid => failed, idempotent).\nGate: cargo test green in WSL. Report count."
+  },
+  {
+    "id": "claude_038",
+    "domain": "claude_session",
+    "category": "castor_m3b2",
+    "dispatch_index": 38,
+    "session_id": "castor_m3b2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #38 (castor_m3b2)",
+    "prompt": "Slice M3b2 (recovery; prior session context-exhausted mid-slice). Disk state: castor/src/task/wait.rs WRITTEN (22.5KB, never compiled), registry.rs edited (waiter hooks), main.rs NOT wired. Code-first; compiler is reference; read wait.rs once to learn its API, don't re-read.\n\n1) Wire it: task/mod.rs exposes wait; main.rs `status` subcommand (Locks 'status' singleton \u2014 held => exit 0 + one stderr line 'status server already running'; else serve) + `mcp` subcommand spawns it detached best-effort (lock->probe->spawn->release), never blocking serve.\n2) cargo build via WSL; fix compile errors in wait.rs/registry.rs from compiler output.\n3) Ensure tests exist per spec: wait wakes on completed transition; wakes on failed w/ honest status (always HTTP 200, Connection: close); timeout => 200 {executing,timed_out:true}; unknown id 404; malformed disk file => 400 {error}; orphan reaper before reads (dead pid => failed, idempotent); ephemeral test port injection. Add missing tests in wait.rs #[cfg(test)].\nGate: cargo build && cargo test green in WSL (/mnt/d/LLM_Ecosystem/castor). Report test count."
+  },
+  {
+    "id": "claude_039",
+    "domain": "claude_session",
+    "category": "castor_m4",
+    "dispatch_index": 39,
+    "session_id": "castor_m4",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #39 (castor_m4)",
+    "prompt": "Slice M4: castor/src/proxy/ \u2014 stream proxy child (:18022 -> :18020) + SSE sanitizer. Code-first; compiler is reference; anchors: mcp-castor/tests/stream_proxy.test.js + the utf8 split-multibyte vectors (run them against the REAL sanitize code \u2014 never a test-local re-implementation, that was the JS suite's original sin).\n\nproxy/mod.rs: `proxy` subcommand \u2014 axum server binding config.ports.proxy, reverse-proxy to http://127.0.0.1:config.ports.engine. Singleton via Locks 'proxy' (held => exit 0 + one stderr line). main.rs: mcp subcommand best-effort spawns it (same ensure_* pattern as status server); explicit `proxy` subcommand too.\nproxy/sanitize.rs: SSE response pipeline: passthrough framing; stateful UTF-8 reassembly across chunk boundaries via encoding_rs incremental decoder (never emit partial multibyte; invalid bytes => U+FFFD); passthrough upstream HTTP 400 (no fake 200/finish_reason); mid-stream upstream error => SSE error frame + NO [DONE]; multimodal guard (reject image/data-url content blocks); repetition circuit breaker (runaway repeated pattern in deltas => truncate + annotate, like JS StreamProxy Guard).\nTests: spawn real proxy child + mock upstream on ephemeral ports: 400 passthrough; mid-stream error => error frame, no [DONE]; emoji split across 2 chunks reassembles intact; invalid byte => U+FFFD; repetition breaker truncates; EADDRINUSE => exit 1.\nGate: cargo test green WSL. Report count."
+  },
+  {
+    "id": "claude_040",
+    "domain": "claude_session",
+    "category": "castor_m4",
+    "dispatch_index": 40,
+    "session_id": "castor_m4",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #40 (castor_m4)",
+    "prompt": "Continue M4 (engine hiccup aborted the previous turn mid-write). Ground truth on disk: proxy/sanitize.rs is PARTIAL (4.9KB \u2014 your intended single write was too large). Continue building in parts as you said.\n\n1) Read proxy/sanitize.rs to see what survived; complete it (edit/append): stateful UTF-8 reassembly (encoding_rs incremental, partial multibyte never emitted, invalid => U+FFFD), SSE passthrough framing, upstream 400 passthrough (no fake 200), mid-stream error => SSE error frame + no [DONE], multimodal guard, repetition circuit breaker (truncate + annotate).\n2) proxy/mod.rs: `proxy` subcommand axum server on config.ports.proxy reverse-proxying to config.ports.engine; Locks 'proxy' singleton; ensure_proxy_server() spawn helper mirroring ensure_status_server; wire main.rs (explicit `proxy` subcommand + best-effort spawn from mcp).\n3) Tests: spawn real proxy + mock upstream on ephemeral ports \u2014 400 passthrough; mid-stream error frame w/o [DONE]; emoji split across chunks intact; invalid byte => U+FFFD; repetition breaker; EADDRINUSE => exit 1.\nGate: cargo test green in WSL. Report count."
+  },
+  {
+    "id": "claude_042",
+    "domain": "claude_session",
+    "category": "castor_m4b",
+    "dispatch_index": 42,
+    "session_id": "castor_m4b",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #42 (castor_m4b)",
+    "prompt": "Recovery slice: finish M4 (stream proxy + sanitizer). Prior session died in an engine wedge mid-write; disk ground truth: castor/src/proxy/sanitize.rs is PARTIAL (~137 lines, ends after a Repetition match block), proxy/mod.rs still stub, main.rs not wired. Spec recap \u2014 sanitize.rs: stateful UTF-8 reassembly (encoding_rs incremental decoder, partial multibyte never emitted, invalid byte => U+FFFD), SSE passthrough framing, upstream HTTP 400 passthrough (no fake 200/finish_reason), mid-stream upstream error => SSE error frame + NO [DONE], multimodal guard (reject image/data-url blocks), repetition circuit breaker (truncate + annotate). proxy/mod.rs: axum server on config.ports.proxy reverse-proxying to config.ports.engine, Locks 'proxy' singleton (held => exit 0 + one stderr line), ensure_proxy_server() mirroring ensure_status_server; main.rs: explicit `proxy` subcommand + best-effort spawn from mcp. Tests (real proxy child + mock upstream, ephemeral ports): 400 passthrough; error frame w/o [DONE]; emoji split across chunks intact; invalid byte => U+FFFD; repetition breaker; EADDRINUSE => exit 1. Code-first; compiler is reference. Gate: cargo test green in WSL. Report count."
+  },
+  {
+    "id": "claude_047",
+    "domain": "claude_session",
+    "category": "castor_m4c",
+    "dispatch_index": 47,
+    "session_id": "castor_m4c",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #47 (castor_m4c)",
+    "prompt": "Recovery slice: finish M4 (stream proxy + sanitizer). Prior attempts died in engine wedges mid-write; disk ground truth: castor/src/proxy/sanitize.rs is PARTIAL (~137 lines, ends after a Repetition match block), proxy/mod.rs still stub, main.rs not wired. Spec recap \u2014 sanitize.rs: stateful UTF-8 reassembly (encoding_rs incremental decoder, partial multibyte never emitted, invalid byte => U+FFFD), SSE passthrough framing, upstream HTTP 400 passthrough (no fake 200/finish_reason), mid-stream upstream error => SSE error frame + NO [DONE], multimodal guard (reject image/data-url blocks), repetition circuit breaker (truncate + annotate). proxy/mod.rs: axum server on config.ports.proxy reverse-proxying to config.ports.engine, Locks 'proxy' singleton (held => exit 0 + one stderr line), ensure_proxy_server() mirroring ensure_status_server; main.rs: explicit `proxy` subcommand + best-effort spawn from mcp. Tests (real proxy child + mock upstream, ephemeral ports): 400 passthrough; error frame w/o [DONE]; emoji split across chunks intact; invalid byte => U+FFFD; repetition breaker; EADDRINUSE => exit 1. Code-first; compiler is reference. Gate: cargo test green in WSL. Report count."
+  },
+  {
+    "id": "claude_049",
+    "domain": "claude_session",
+    "category": "castor_m4d",
+    "dispatch_index": 49,
+    "session_id": "castor_m4d",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #49 (castor_m4d)",
+    "prompt": "M4 stream proxy completion. DISK GROUND TRUTH: castor/src/proxy/sanitize.rs is PARTIAL (~137 lines, ends after a Repetition match block \u2014 keep what compiles, complete it); src/proxy/mod.rs is a stub; main.rs has no proxy wiring. ENVIRONMENT CONTRACT: cargo exists ONLY in WSL \u2014 build/test via `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Never probe cargo from Windows. Probe scripts FORBIDDEN \u2014 write code first, the compiler is your reference.\n\nTASKS:\n1. Complete sanitize.rs \u2014 stateful SSE sanitizer over byte chunks: encoding_rs incremental UTF-8 decoder (partial multibyte held across chunk boundaries, never emitted split; invalid byte \u2192 U+FFFD); SSE frames pass through; upstream HTTP 4xx passthrough verbatim (status+body \u2014 NEVER a fake 200 or synthetic finish_reason); mid-stream upstream error \u2192 SSE error frame and do NOT append [DONE]; multimodal content guard; repetition circuit breaker (truncate + annotate) \u2014 finish the partial Repetition block.\n2. Implement proxy/mod.rs: axum listener on config.ports.proxy; reverse-proxy to config.ports.engine (/v1/chat/completions with stream \u2192 sanitized SSE; all else byte passthrough). Singleton: Locks::acquire(\"proxy\") \u2014 if held by live pid \u2192 exit 0 with one stderr line (already running); stale \u2192 tombstone reclaim (reuse state/mod.rs). Provide ensure_proxy_server() mirroring ensure_status_server() in task/wait.rs; detach child via libc process_group(0) the same way.\n3. Wire main.rs `proxy` subcommand; mcp server best-effort spawns proxy at startup (ignore failure).\n4. Tests (tokio): mock upstream on an ephemeral port + real proxy on an ephemeral port \u2014 vectors: 4xx passthrough verbatim; mid-stream error frame without [DONE]; emoji split across chunks arrives intact; invalid byte \u2192 U+FFFD; repetition breaker truncates+annotates; second instance with lock held exits 0.\nSTYLE: clean concise non-defensive Rust; no comment stories. GATE: cargo build && cargo test green in WSL; report the test count."
+  },
+  {
+    "id": "claude_051",
+    "domain": "claude_session",
+    "category": "castor_m5a",
+    "dispatch_index": 51,
+    "session_id": "castor_m5a",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #51 (castor_m5a)",
+    "prompt": "M5a: engine provider (OpenAI-compatible SSE client). Coordinates: read mcp-castor/src/harness/services/provider_vllm.js for reference behavior, then write castor/src/engine/mod.rs + provider.rs. ENVIRONMENT CONTRACT: cargo exists ONLY in WSL \u2014 build/test via `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Never probe cargo from Windows. Probe scripts FORBIDDEN \u2014 write code first, compiler is the reference.\n\nTASKS:\n1. provider.rs: chat client over reqwest (rustls): POST {base_url}/v1/chat/completions. base_url/model/api_key from Config \u2014 no hardcoded fallback anywhere. Streaming path: consume SSE bytes directly from upstream (engine is trusted \u2014 the sanitizer lives in the proxy, do NOT route through proxy::sanitize); parse data: frames (split-JSON-across-chunks safe); accumulate delta content; assemble tool_calls across streamed fragments (index/id/name/arguments). Non-streaming path. Metrics: TTFT (time to first token) + token velocity. Upstream HTTP errors \u2192 Err carrying status+body verbatim; never synthesize a completion. Connection refused \u2192 clean Err.\n2. Wire `mod engine;` in main.rs.\n3. Tests: axum mock engine on ephemeral port \u2014 vectors: streamed deltas assemble into one message; tool_calls assembled across fragment deltas; TTFT+velocity present; upstream 400/500 \u2192 Err with status+body; SSE JSON split across chunks parses; connection refused \u2192 Err.\nSTYLE: clean concise non-defensive Rust; no comment stories. GATE: cargo build && cargo test green in WSL; report test count."
+  },
+  {
+    "id": "claude_052",
+    "domain": "claude_session",
+    "category": "castor_m5a2",
+    "dispatch_index": 52,
+    "session_id": "castor_m5a2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #52 (castor_m5a2)",
+    "prompt": "M5a retry: engine provider (OpenAI-compatible SSE client). Reference: mcp-castor/src/harness/services/provider_vllm.js \u2014 read it ONCE, then start writing immediately. Skim castor/src/config.rs (Config fields) and castor/Cargo.toml (deps) only as needed for API shapes. DO NOT loop re-reading files; target: write code within your first ~10 tool calls. ENVIRONMENT CONTRACT: cargo ONLY in WSL via `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. No probe scripts \u2014 compiler is the reference.\n\nTASKS:\n1. castor/src/engine/mod.rs + provider.rs: chat client over reqwest (rustls): POST {base_url}/v1/chat/completions; base_url/model/api_key from Config, no hardcoded fallback. Streaming: consume SSE bytes directly (engine is trusted; sanitizer lives in the proxy \u2014 do NOT route through proxy::sanitize); parse data: frames (JSON split across chunks safe); accumulate delta content; assemble tool_calls across streamed fragments (index/id/name/arguments). Non-streaming path. Metrics: TTFT (first token) + token velocity. Upstream HTTP errors \u2192 Err with status+body verbatim, never a synthetic completion; connection refused \u2192 clean Err.\n2. Wire `mod engine;` in main.rs.\n3. Tests: axum mock engine on ephemeral port \u2014 vectors: streamed deltas assemble into one message; tool_calls assembled across fragments; TTFT+velocity present; upstream 400/500 \u2192 Err with status+body; SSE JSON split across chunks parses; connection refused \u2192 Err.\nSTYLE: clean concise non-defensive Rust; no comment stories. GATE: cargo build && cargo test green in WSL; report test count."
+  },
+  {
+    "id": "claude_053",
+    "domain": "claude_session",
+    "category": "castor_m5a3",
+    "dispatch_index": 53,
+    "session_id": "castor_m5a3",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #53 (castor_m5a3)",
+    "prompt": "Fix flaky test `engine::provider::tests::ttft_and_velocity_present` in castor/src/engine/provider.rs (line ~476). ROOT CAUSE (verified): the mock engine answers in <1ms and `total_ms` is u64 millis (truncated) \u2192 0 on fast round trips, so `assert!(total_ms > 0)` fails intermittently under load. The metric is lying, not the test.\n\nFIX: give Metrics real precision \u2014 compute `total_ms` (and `ttft_ms` if it shares the u64-millis pattern) as f64 milliseconds via `Instant::as_secs_f64() * 1000.0`, so sub-ms local-engine latencies are reported truthfully. Keep public field names; adjust the one assertion if types change. Update only code in provider.rs touched by this. Build/test via `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` \u2014 suite must be green across repeated runs (run cargo test 3 times). Report test count."
+  },
+  {
+    "id": "claude_054",
+    "domain": "claude_session",
+    "category": "castor_m5b",
+    "dispatch_index": 54,
+    "session_id": "castor_m5b",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #54 (castor_m5b)",
+    "prompt": "M5b: engine lifecycle. References (read each ONCE): mcp-castor/src/server_lifecycle.js; castor/src/state/mod.rs (Locks, WedgeCounter \u2014 dead code today, consume them); castor/src/config.rs (launch_command, stop_command, ports.engine, engine_type). ENVIRONMENT CONTRACT: cargo ONLY in WSL via `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Code first, compiler is reference; no probe scripts.\n\nTASKS \u2014 castor/src/engine/lifecycle.rs:\n1. boot(): Locks::acquire(\"engine_boot\") \u2192 if ports.engine already passes the canary, return AlreadyRunning; else spawn launch_command via tokio::process with process_group(0); poll canary until healthy or timeout \u2192 Err with captured stderr tail.\n2. Canary: GET {ports.engine}/v1/models \u2192 200 AND lists the CONFIGURED model id (a healthy engine 404s unknown ids \u2014 never probe a hardcoded name).\n3. Wedge/heal: WedgeCounter increments on consecutive canary failures; at threshold \u2192 Locks::acquire(\"heal\") \u2192 run stop_command if configured \u2192 boot() again. Heal serialized; concurrent heal attempts fail cleanly on the lock.\n4. stop(): run stop_command if configured, else kill the spawned child's process group.\n5. reqwest with short timeouts; errors verbatim, fail-fast, no silent retries.\n6. Tests (offline \u2014 NEVER touch real :18020; mock engine = axum on ephemeral port): canary healthy when configured model listed; boot proceeds to spawn when canary 404s (launch_command = tiny `sh -c` sleep script); WedgeCounter threshold triggers heal (heal-lock observable); stop runs stop_command; stale boot-lock tombstone reclaim works.\nSTYLE: clean concise non-defensive Rust; no comment stories. GATE: cargo build && cargo test green in WSL across 3 consecutive runs; report test count."
+  },
+  {
+    "id": "claude_055",
+    "domain": "claude_session",
+    "category": "castor_m6",
+    "dispatch_index": 55,
+    "session_id": "castor_m6",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #55 (castor_m6)",
+    "prompt": "M6: runner loop + budgets. References (read each ONCE): mcp-castor/src/castor_runner.js, mcp-castor/src/harness/runner.js, then castor/src/engine/provider.rs (EngineClient), castor/src/task/registry.rs (turns_budget, extend_budget, MAX_ELASTIC_TURNS). ENVIRONMENT CONTRACT: cargo ONLY in WSL via `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Code first, compiler is reference; no probe scripts.\n\nTASKS \u2014 castor/src/runner/mod.rs (split runner/loop.rs if cleaner):\n1. `ToolExecutor` async trait: execute(name, args_json) -> Result<ToolOutcome>. M7 implements real tools behind it; runner depends only on the trait.\n2. Session loop: build messages (tool schemas LAST \u2014 vLLM APC contract) \u2192 EngineClient::chat \u2192 tool_calls? execute each via the trait, append results as tool messages, continue : final content \u2192 return. Multi-turn until finish.\n3. Budgets: turns_budget from the task record (default 80, extendable to MAX_ELASTIC_TURNS=200). Cooperative landing: in the last ~5 turns inject a budget notice telling the model to land; on exhaustion return best-effort final (completed_budget_exhausted semantics, honest status) \u2014 never a hard mid-turn kill. Degenerate final: empty/whitespace final after real tool activity \u2192 one salvage retry asking for a proper summary, then honest failure.\n4. Loop detection: sliding window hashes (tool name + args); identical action repeated N consecutive times \u2192 inject loop advisory once, then LoopDetected error if it persists.\n5. Events: append one JSONL event per turn (dispatch/tool_result/final) to <state>/sessions/<id>/events.jsonl.\n6. Tests (axum mock engine with scripted responses + mock executor recording calls): tool\u2192result\u2192final happy path; multi-turn continuation; exhaustion \u2192 landing notice present in messages, best-effort final returned; degenerate final \u2192 salvage retry fired; repeated identical tool call trips loop detection; tool error becomes a message and the loop continues.\nSTYLE: clean concise non-defensive Rust; no comment stories. GATE: cargo build && cargo test green 3 consecutive runs in WSL; report test count."
+  },
+  {
+    "id": "claude_056",
+    "domain": "claude_session",
+    "category": "castor_m7a",
+    "dispatch_index": 56,
+    "session_id": "castor_m7a",
+    "expected": "REJECT",
+    "rationale": "genuine monolith (castor_m7a policy + 5 fs tools + 137-vector table)",
+    "prompt": "M7a: sandbox policy + filesystem tools (security core, part 1). References (read ONCE each): mcp-castor/sandbox_fs.js and its test file (find it under mcp-castor/tests/), castor/src/runner/mod.rs (ToolExecutor trait + ToolOutcome). ENVIRONMENT CONTRACT: cargo ONLY in WSL via `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Code first, compiler is reference; no probe scripts.\n\nTASKS:\n1. castor/src/tools/sandbox.rs: port the 5-layer path containment policy (workspace-root resolution, symlink-escape refusal, absolute/out-of-tree refusal, traversal normalization, magic-number binary read fail-fast BinaryFileError). Policy errors typed and verbatim \u2014 never coerced.\n2. castor/src/tools/fs.rs: fs tools implementing the ToolExecutor surface: read_file (binary fail-fast on magic bytes), write_file (atomic temp+rename), edit_file (exact-string replace; 0 or >1 occurrences \u2192 error, never applied), list_dir, search_code (pick a clean OSS approach, no custom regex engine).\n3. The 137-vector security table: port as ONE data-driven test table (123 blocked / 14 allowed) in sandbox.rs tests, vectors verbatim from the JS test; every blocked vector asserts its refusal layer.\n4. Tests: occurrence guard (0 and 2 matches \u2192 error untouched; exactly 1 \u2192 applied); CRLF/LF byte-exact edits; atomic write (failed write leaves target untouched); binary read fail-fast.\nSTYLE: clean concise non-defensive Rust; no comment stories. GATE: cargo build && cargo test green 3 consecutive runs in WSL; report test count and the table's blocked/allowed counts."
+  },
+  {
+    "id": "claude_057",
+    "domain": "claude_session",
+    "category": "castor_m7a2",
+    "dispatch_index": 57,
+    "session_id": "castor_m7a2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #57 (castor_m7a2)",
+    "prompt": "M7a retry: sandbox policy + filesystem tools (security core, part 1). References (read ONCE each): mcp-castor/sandbox_fs.js and its test file under mcp-castor/tests/, castor/src/runner/mod.rs (ToolExecutor trait + ToolOutcome). Read minimally, start writing code within ~10 tool calls. ENVIRONMENT CONTRACT: cargo ONLY in WSL via `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Code first, compiler is reference; no probe scripts.\n\nTASKS:\n1. castor/src/tools/sandbox.rs: port the 5-layer path containment policy (workspace-root resolution, symlink-escape refusal, absolute/out-of-tree refusal, traversal normalization, magic-number binary read fail-fast BinaryFileError). Policy errors typed and verbatim \u2014 never coerced.\n2. castor/src/tools/fs.rs: fs tools implementing the ToolExecutor surface: read_file (binary fail-fast on magic bytes), write_file (atomic temp+rename), edit_file (exact-string replace; 0 or >1 occurrences \u2192 error, never applied), list_dir, search_code (clean OSS approach, no custom regex engine).\n3. The 137-vector security table: port as ONE data-driven test table (123 blocked / 14 allowed) in sandbox.rs tests, vectors verbatim from the JS test; every blocked vector asserts its refusal layer.\n4. Tests: occurrence guard (0 and 2 matches \u2192 error untouched; exactly 1 \u2192 applied); CRLF/LF byte-exact edits; atomic write (failed write leaves target untouched); binary read fail-fast.\nSTYLE: clean concise non-defensive Rust; no comment stories. GATE: cargo build && cargo test green 3 consecutive runs in WSL; report test count and the table's blocked/allowed counts."
+  },
+  {
+    "id": "claude_058",
+    "domain": "claude_session",
+    "category": "castor_m7a3",
+    "dispatch_index": 58,
+    "session_id": "castor_m7a3",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #58 (castor_m7a3)",
+    "prompt": "M7a-policy: sandbox policy + fs tools. READ BUDGET: read mcp-castor/sandbox_fs.js ONCE and castor/src/runner/mod.rs ONCE \u2014 do NOT read the JS test files in this slice. Start writing within ~8 tool calls. ENVIRONMENT CONTRACT: cargo ONLY in WSL via `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Code first, compiler is reference.\n\nTASKS:\n1. castor/src/tools/sandbox.rs: 5-layer path containment policy ported from sandbox_fs.js (workspace-root resolution, symlink-escape refusal, absolute/out-of-tree refusal, traversal normalization, magic-number binary read fail-fast BinaryFileError). Typed errors, verbatim messages, never coerced. Keep a `pub fn` per layer so the next slice can build a vector table on it.\n2. castor/src/tools/fs.rs: fs tools on the ToolExecutor surface: read_file (binary fail-fast), write_file (atomic temp+rename), edit_file (exact-string replace; 0 or >1 occurrences \u2192 error untouched), list_dir, search_code (clean OSS approach).\n3. Tests in this slice: per-layer unit tests for the policy; occurrence guard (0/2 \u2192 error untouched, 1 \u2192 applied); CRLF/LF byte-exact edits; atomic write; binary fail-fast. The 137-vector table is a SEPARATE later slice \u2014 do not attempt it here.\nSTYLE: clean concise non-defensive Rust; no comment stories. GATE: cargo build && cargo test green in WSL (2 consecutive runs); report test count."
+  },
+  {
+    "id": "claude_061",
+    "domain": "claude_session",
+    "category": "castor_m7_policy",
+    "dispatch_index": 61,
+    "session_id": "castor_m7_policy",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #61 (castor_m7_policy)",
+    "prompt": "Write ONE file: castor/src/tools/sandbox.rs \u2014 the 5-layer path containment policy, ported from mcp-castor/sandbox_fs.js (read that ONE file, then write). No other files.\n\nLayers (each a pub fn returning Result<PathBuf, SandboxError>): (1) workspace-root resolution, (2) symlink-escape refusal, (3) absolute/out-of-tree refusal, (4) traversal normalization, (5) binary read fail-fast: magic-number sniff \u2192 BinaryFileError. Typed errors with verbatim refusal messages; never coerce. Workspace root is a `&Path` argument \u2014 no config, no env, no globals.\n\nInclude unit tests for each layer (in-file #[cfg(test)]): traversal escapes, symlink escape, out-of-tree absolute, binary magic fail-fast, and legit in-tree paths passing. Nothing else \u2014 fs tools, search, and the 137-vector table are separate later slices.\n\nBuild/test: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` (add `mod tools;` to main.rs only if needed to compile \u2014 one line). Clean non-defensive Rust, no comment stories. GATE: cargo test green; report test count."
+  },
+  {
+    "id": "claude_062",
+    "domain": "claude_session",
+    "category": "castor_m7_fs",
+    "dispatch_index": 62,
+    "session_id": "castor_m7_fs",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #62 (castor_m7_fs)",
+    "prompt": "Write ONE file: castor/src/tools/fs.rs \u2014 filesystem tools on the runner's ToolExecutor surface. Reference files (read once each): mcp-castor/src/harness/services/sandbox_fs.js (tool semantics) and castor/src/runner/mod.rs (the ToolExecutor trait + ToolOutcome) and castor/src/tools/sandbox.rs (the policy layers to call). No other files.\n\nTools: read_file (magic sniff first \u2192 BinaryFileError; verbatim text), write_file (atomic temp+rename), edit_file (exact-string replace: 0 or >1 occurrences \u2192 typed error, file untouched; exactly 1 \u2192 applied, byte-exact CRLF/LF preserved), list_dir, search_code (OSS approach, no custom regex engine). All paths flow through the sandbox layers from tools/sandbox.rs.\n\nIn-file #[cfg(test)] tests: occurrence guard (0/2 \u2192 error untouched, 1 \u2192 applied), CRLF/LF byte-exactness, atomic write (failed write leaves target untouched), binary fail-fast, out-of-tree path refused. One line `pub mod fs;` in tools/mod.rs if needed. Nothing else \u2014 the 137-vector table is a separate later slice.\n\nBuild/test: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Clean non-defensive Rust, no comment stories. GATE: cargo test green; report test count."
+  },
+  {
+    "id": "claude_063",
+    "domain": "claude_session",
+    "category": "castor_m7_table",
+    "dispatch_index": 63,
+    "session_id": "castor_m7_table",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #63 (castor_m7_table)",
+    "prompt": "ONE deliverable: port the 137-vector security table as data-driven tests appended to castor/src/tools/sandbox.rs (its #[cfg(test)] module). Source: find the security-vector test in mcp-castor/tests/ (grep for the vector count or \"blocked\") and read that file. Also read castor/src/tools/sandbox.rs (policy API). Nothing else.\n\nConvert every vector verbatim into ONE table: (input path, expected outcome blocked/allowed, expected layer). 123 blocked / 14 allowed is the target count \u2014 port ALL of them, count them in the test, assert blocked ones name their refusal layer and allowed ones resolve in-tree. If a JS vector targets a JS-only rule with no Rust layer equivalent, port it anyway mapped to the closest layer \u2014 do not drop vectors. Add no production code; if a vector exposes a real policy gap, fix the policy layer minimally and note it.\n\nBuild/test: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. GATE: cargo test green; report the table's exact blocked/allowed counts."
+  },
+  {
+    "id": "claude_064",
+    "domain": "claude_session",
+    "category": "castor_m7_shell_v",
+    "dispatch_index": 64,
+    "session_id": "castor_m7_shell_v",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #64 (castor_m7_shell_v)",
+    "prompt": "ONE file: castor/src/tools/shell.rs \u2014 the shell command validator (policy only, NO execution in this slice). Reference: find the dangerous-command classification in mcp-castor (grep the JS for the shell validator / dangerous list \u2014 likely shell_validator.js or inside sandbox/shell tests) and read it once; read castor/src/tools/sandbox.rs tests to see the 43 ShellPolicy rows already ported.\n\nDeliverable: `pub fn validate(cmd: &str) -> Result<(), ShellPolicyError>` \u2014 refuses the dangerous classes (rm -rf variants, fork bombs, chmod 777 on system paths, curl|sh pipes, disk/filesystem wipes, dd to devices, sudo, etc. \u2014 port the JS list verbatim) with typed verbatim errors; allows benign commands. Structured so the table's ShellPolicy rows can run against it.\n\nThen UPDATE the 137-vector table in sandbox.rs tests: flip the 43 ShellPolicy rows from `runnable: false` to live assertions against `validate()`. If any vector exposes a gap in the ported classification, fix the classification minimally and note it.\n\nAdd `pub mod shell;` to tools/mod.rs. Build/test: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Clean non-defensive Rust. GATE: cargo test green; report test count + that all 137 rows are now runnable."
+  },
+  {
+    "id": "claude_065",
+    "domain": "claude_session",
+    "category": "castor_m7_shell_v2",
+    "dispatch_index": 65,
+    "session_id": "castor_m7_shell_v2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #65 (castor_m7_shell_v2)",
+    "prompt": "ONE file: castor/src/tools/shell.rs \u2014 shell command validator, policy only, NO execution, NO test-table changes. Read mcp-castor/src/harness/services/shell_validator.js (exact path, read once), then write.\n\nDeliverable: `pub fn validate(cmd: &str) -> Result<(), ShellPolicyError>` porting the JS classification verbatim \u2014 the dangerous-command classes (rm -rf variants, fork bombs, chmod 777 system paths, curl|sh pipes, dd to devices, sudo, disk wipes, etc.) with typed verbatim refusal errors; benign commands pass. Pure function: no config, no env, no globals. In-file #[cfg(test)] unit tests: one per dangerous class + benign passes. Add `pub mod shell;` to castor/src/tools/mod.rs (one line).\n\nBuild/test: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'`. Clean non-defensive Rust, no comment stories. GATE: cargo test green; report test count."
+  },
+  {
+    "id": "claude_067",
+    "domain": "claude_session",
+    "category": "castor_m7_shell_fix",
+    "dispatch_index": 67,
+    "session_id": "castor_m7_shell_fix",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #67 (castor_m7_shell_fix)",
+    "prompt": "Fix castor/src/tools/shell.rs: replace the hand-rolled strip_prefix fork-bomb matcher (lines ~90-115) with the regex crate, and close the bypass it carries (`:() { :|:& };` with a space before `{` currently passes).\n\nYou are AUTHORIZED to add `regex = \"1\"` to castor/Cargo.toml \u2014 it is the idiomatic solution here (OSS > hand-rolled). Port the pattern-level classifications (fork bomb, mkfs/fdisk/parted, format X:, dd of=/dev/\u2026) as regexes modeled on mcp-castor/src/harness/services/shell_validator.js, whitespace-tolerant between tokens. Precompile once (once_lock or lazy static via std OnceLock \u2014 no new deps beyond regex). Delete the manual matcher entirely; keep the typed error variants and all other classifications intact.\n\nTests: keep the existing 13, and add regression vectors for BOTH `:(){ :|:& };` and `:() { :|:& };` (space variants), plus `mkfs.ext4 /dev/sda1` and `dd if=/dev/zero of=/dev/sda`. GATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_068",
+    "domain": "claude_session",
+    "category": "castor_m7_flip",
+    "dispatch_index": 68,
+    "session_id": "castor_m7_flip",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #68 (castor_m7_flip)",
+    "prompt": "ONE concern: in castor/src/tools/sandbox.rs tests, the 137-vector security table has 43 rows with layer `ShellPolicy` marked non-runnable. Flip them: each row's command input must now be asserted live against `castor::tools::shell::validate` (expecting the typed refusal). Read sandbox.rs (table shape) and shell.rs (API) \u2014 nothing else. Add no production code unless a row exposes a real classification gap (fix minimally, note it).\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count and confirm all 137 rows are now live assertions."
+  },
+  {
+    "id": "claude_069",
+    "domain": "claude_session",
+    "category": "castor_m7_shell_exec",
+    "dispatch_index": 69,
+    "session_id": "castor_m7_shell_exec",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #69 (castor_m7_shell_exec)",
+    "prompt": "ONE concern: the shell executor. Extend castor/src/tools/shell.rs with `pub fn run(cmd: &str, cwd: &Path, timeout: Duration) -> Result<ShellOutput, ShellError>` \u2014 validate() first (typed refusal, nothing spawns), then spawn via tokio::process with process_group(0), cwd resolved through the sandbox layers, stdout/stderr captured with byte caps, timeout kills the process group. Reference: mcp-castor/src/harness/services/shell_executor.js (read once) + the existing shell.rs API.\n\nShellOutput { exit_code, stdout, stderr, truncated, duration_ms (f64, sub-ms precision) }. In-file tests: benign command (echo) runs and captures; refusal (rm -rf /) never spawns (assert via marker); timeout kills (sleep command with short timeout); output cap truncates with truncated=true. Nothing else changes.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_070",
+    "domain": "claude_session",
+    "category": "castor_m7_ast",
+    "dispatch_index": 70,
+    "session_id": "castor_m7_ast",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #70 (castor_m7_ast)",
+    "prompt": "ONE file: castor/src/tools/ast.rs \u2014 AST search/replace tools. Reference: mcp-castor/src/ast_service.js (read once). Research the native Rust ast-grep crate API yourself (the JS uses @ast-grep/napi which wraps ast-grep-core) and pick the idiomatic crates \u2014 you are AUTHORIZED to add mainstream crates (e.g. ast-grep-core + language support) to castor/Cargo.toml; note what you added in the result.\n\nDeliverable: ast_search(root: &Path, pattern: &str, lang) -> matches; ast_replace(root: &Path, pattern, replacement, lang) \u2014 per-file apply, and after each edit run a syntax gate (reparse; failure \u2192 roll back that file, report). All paths through tools/sandbox.rs layers. Clean OSS wiring, no custom parsers.\n\nIn-file tests: search finds a known pattern in a temp fixture; replace applies and reparses clean; a replace producing invalid syntax rolls back (file unchanged, error reports the file); out-of-tree root refused. Nothing else changes.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count + crates added."
+  },
+  {
+    "id": "claude_071",
+    "domain": "claude_session",
+    "category": "castor_m7_ast2",
+    "dispatch_index": 71,
+    "session_id": "castor_m7_ast2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #71 (castor_m7_ast2)",
+    "prompt": "ONE file: castor/src/tools/ast.rs \u2014 AST search/replace. Reference for semantics: mcp-castor/src/ast_service.js (read once). API FACTS (verified on docs.rs, use them \u2014 no web research needed): crates `ast-grep-language = \"0.45\"` (pulls `ast-grep-core`; you are authorized to add both). Usage: `use ast_grep_language::{LanguageExt, SupportLang}; let lang: SupportLang = \"ts\".parse()?; let root = lang.ast_grep(src);` then `root.root().find_all(\"pattern with $META\")` yields NodeMatch items. Core also exports `Pattern`, `Matcher`, `MatchStrictness`, and a `replacer` module for replacements (inspect ~/.cargo sources or `cargo doc` locally if you need exact replacer signatures \u2014 compiler is the reference). Parse-error gate: tree-sitter error recovery \u2014 after an edit, reparse and search for ERROR-kind nodes; presence \u2192 rollback that file. Feature flags: enable typescript/javascript/python grammars if optional.\n\nDeliverable: ast_search(root,&str pattern, lang alias) -> Vec<Match{file,line,col,text}>; ast_replace(root, pattern, replacement, lang) \u2014 walk files via the sandbox layers, per-file apply + syntax gate (ERROR nodes \u2192 rollback that file, report it), summary of applied/rolled-back. All paths through tools/sandbox.rs.\n\nTests: search finds pattern in temp fixture; replace applies + reparses clean; invalid-syntax replacement rolls back (file unchanged, file named in error); out-of-tree root refused. Add `pub mod ast;` to tools/mod.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count + crates added."
+  },
+  {
+    "id": "claude_072",
+    "domain": "claude_session",
+    "category": "castor_m8_web",
+    "dispatch_index": 72,
+    "session_id": "castor_m8_web",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #72 (castor_m8_web)",
+    "prompt": "ONE file: castor/src/tools/web.rs \u2014 web search + doc fetch. References (read once each): mcp-castor/src/web_service.js; skip searxng_lifecycle.js entirely (Docker lifecycle is deleted in this rewrite \u2014 v1.0.0 is health-check + actionable error only). Config already carries searxng_url (Option) and brave_api_key (Option).\n\nDeliverable: web_search(query) \u2014 chain SearXNG (JSON API; if unconfigured/unreachable \u2192 typed actionable error telling the operator exactly what to set/run, no silent provider fallthrough to pretending results) \u2192 Brave (only if key configured) \u2192 DuckDuckGo html endpoint last. Returns normalized results (title/url/snippet). fetch_docs(url) \u2014 GET, content-type gate (HTML \u2192 readable-text extraction via an OSS crate you pick, e.g. readability-style; markdown out; PDF/JSON/plain passthrough; binary sniff fail-fast), size cap ~20KB output, verbatim HTTP errors. All reqwest (rustls), short timeouts.\n\nTests (axum mocks, ephemeral ports; no network): searxng returns results; searxng down \u2192 actionable typed error; brave path with key; ddg fallback path; fetch_docs html\u2192markdown; 404 \u2192 verbatim error; binary content fail-fast. Add `pub mod web;` to tools/mod.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count + crates added."
+  },
+  {
+    "id": "claude_075",
+    "domain": "claude_session",
+    "category": "castor_m8_web2",
+    "dispatch_index": 75,
+    "session_id": "castor_m8_web2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #75 (castor_m8_web2)",
+    "prompt": "ONE file: castor/src/tools/web.rs \u2014 web search + doc fetch. NO crate research, NO web docs reading: the crates are pinned and their usage is given. You are authorized to add exactly these to castor/Cargo.toml: `html2md = \"0.2\"` and `scraper = \"0.24\"` (nothing else beyond existing deps).\n\nRead once for semantics: mcp-castor/src/web_service.js. Skip searxng_lifecycle.js (Docker lifecycle deleted \u2014 v1.0.0 is health-check + actionable error only). Config has searxng_url (Option) and brave_api_key (Option).\n\nDeliverable:\n- web_search(query): SearXNG JSON API first (unconfigured/unreachable \u2192 typed actionable error naming what to set/run; NO silent provider fallthrough) \u2192 Brave (only if key) \u2192 DuckDuckGo html last. Normalized Vec<SearchResult{title,url,snippet}>.\n- fetch_docs(url): GET; content-type gate: HTML \u2192 `html2md::parse_html(&body)` \u2192 markdown; JSON/plain passthrough; binary sniff fail-fast; ~20KB output cap; verbatim HTTP errors. reqwest (rustls), short timeouts.\n\nTests (axum mocks, ephemeral ports, no network): searxng results; searxng down \u2192 typed actionable error; brave-with-key path; ddg fallback; html\u2192markdown via html2md; 404 verbatim; binary fail-fast. `pub mod web;` in tools/mod.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_076",
+    "domain": "claude_session",
+    "category": "castor_m8_web_fix",
+    "dispatch_index": 76,
+    "session_id": "castor_m8_web_fix",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #76 (castor_m8_web_fix)",
+    "prompt": "ONE concern: fix test `searxng_down_typed_actionable_error` in castor/src/tools/web.rs (~line 716). It hardcodes `http://127.0.0.1:1` expecting instant TCP refusal, but on this WSL2 box that connect HANGS until the 15s client timeout \u2014 measured 15.03s, it alone accounts for the suite going 3.5s \u2192 16.4s.\n\nFix: obtain a genuinely-closed port deterministically \u2014 bind a std::net::TcpListener to 127.0.0.1:0, read its port, drop the listener, then use that port in the URL. Instant refusal everywhere TCP works; the SearxngUnreachable assertions stay unchanged. Touch only that test (and only web.rs).\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo test'` green; report test count AND the suite wall time before vs after (run the full suite once)."
+  },
+  {
+    "id": "claude_077",
+    "domain": "claude_session",
+    "category": "castor_m8_ext",
+    "dispatch_index": 77,
+    "session_id": "castor_m8_ext",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #77 (castor_m8_ext)",
+    "prompt": "ONE file: castor/src/tools/extensions.rs \u2014 per-dispatch MCP extension bridges. Reference: mcp-castor/src/mcp_bridge.js (read once). API FACTS (verified docs.rs rmcp 3.5 \u2014 no web research): `rmcp::transport::TokioChildProcess` (feature already in Cargo.toml), start with `use rmcp::service::ServiceExt; let peer = ().serve(transport).await?;` \u2192 `Peer<RoleClient>`; then `peer.list_tools(Default::default()).await?` and `peer.call_tool(req).await?` \u2014 confirm exact request/response types from ~/.cargo/registry sources of rmcp-3.5.0 (compiler is reference; no new deps).\n\nContract (per-dispatch lifecycle \u2014 vLLM APC: tool set frozen at dispatch start, schemas last): `ExtensionBridge::spawn(commands: &[String]) -> Self` \u2014 for each stdio command: spawn via TokioChildProcess, handshake, list_tools, freeze. Methods: `tool_schemas() -> Vec<ToolSchema>` (reuse runner's ToolSchema shape, name-spaced `<ext>__<tool>`), `call(full_name, args_json) -> Result<String, ExtError>` with ~20KB result cap + truncation marker, `shutdown_all()` graceful (cancel() then wait; kill group on hang). Typed errors: SpawnFailed/HandshakeFailed/UnknownTool/CallFailed/ResultTooLarge \u2014 verbatim, never coerced.\n\nTests (offline): minimal stdio MCP mock server as a python3 fixture string written to temp (speaks initialize + tools/list + tools/call JSON-RPC over stdio); vectors: spawn+handshake lists frozen schemas, call returns result, unknown tool \u2192 typed error, result > cap truncated with marker, shutdown_all exits children (no orphans). `pub mod extensions;` in tools/mod.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_078",
+    "domain": "claude_session",
+    "category": "castor_m8_skills",
+    "dispatch_index": 78,
+    "session_id": "castor_m8_skills",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #78 (castor_m8_skills)",
+    "prompt": "ONE file: castor/src/skills.rs \u2014 agentskills.io SKILL.md layer, model-routed (NO keyword matching \u2014 that's a locked v1.0.0 decision). Reference: mcp-castor/src/skills.js (read once, for discovery-location semantics only; its matching/negation-regex code is deleted by design).\n\nContract: `Skill { name, description, path }`; `load_skills(dirs: &[PathBuf]) -> Vec<Skill>` \u2014 scans each dir for `*/SKILL.md`, parses YAML frontmatter (name+description; a mainstream frontmatter crate is authorized if cleaner than hand-parsing \u2014 say so in the result), duplicate names: first dir wins; missing dir \u2192 skipped silently. `render_index(&[Skill]) -> String` \u2014 the system-prompt block: one line per skill (~100 tok), stable order (sorted by name), tells the model to read the SKILL.md body via read_file when relevant. Nothing else \u2014 injection happens runner-side later.\n\nTests: fixture tree with 3 SKILL.md (create in temp); index has one line each in name order; frontmatter with missing description \u2192 skill skipped; empty/missing dir \u2192 empty vec, no error; index string is byte-stable across two calls. `pub mod skills;` in main.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count + crate added if any."
+  },
+  {
+    "id": "claude_079",
+    "domain": "claude_session",
+    "category": "castor_m9_telemetry",
+    "dispatch_index": 79,
+    "session_id": "castor_m9_telemetry",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #79 (castor_m9_telemetry)",
+    "prompt": "ONE file: castor/src/telemetry.rs \u2014 telemetry as DERIVED stats over existing ledgers (locked decision: one event stream; tracing-JSONL is the ledger; NO second stats writer). Reference: mcp-castor/src/telemetry.js (read once \u2014 port its stats FIELDS, not its writer architecture).\n\nContract: (1) `init_tracing(state_dir: &Path)` \u2014 tracing-subscriber JSON lines to <state_dir>/telemetry/events.jsonl (+ stderr at warn in mcp mode), env-filter RUST_LOG. serde_json the `fields` \u2014 no new deps beyond what exists (tracing, tracing-subscriber, serde_json present; tracing-subscriber needs its `json` + `env-filter` features \u2014 confirm in Cargo.toml, add features only if missing). (2) `derive_stats(state_dir) -> Stats` \u2014 walks sessions/*/events.jsonl + tasks/*.json and computes the JS stats fields (dispatch counts by status, token counts if present, durations, tool-call counts, last-activity), plus `write_stats_json` if the CLI needs a file output. Missing/corrupt ledger lines: skip silently (derivation, not authority).\n\nTests: temp state with fabricated sessions/tasks fixtures \u2192 derive_stats returns exact counts; empty state \u2192 zeroed Stats; corrupt line skipped; tracing init writes a JSON line to the file sink on an event. `pub mod telemetry;` in main.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_080",
+    "domain": "claude_session",
+    "category": "castor_m9_pruner",
+    "dispatch_index": 80,
+    "session_id": "castor_m9_pruner",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #80 (castor_m9_pruner)",
+    "prompt": "ONE file: castor/src/pruner.rs \u2014 state directory retention. Reference: mcp-castor/src/state_pruner.js (read once; port its policy semantics verbatim \u2014 retention ages, count caps, what's protected).\n\nContract: `PrunePlan` + `plan(state_dir, policy) -> PrunePlan` (what WOULD be deleted: sessions/tasks/telemetry/evo entries past retention, capped counts) and `apply(state_dir, plan)` \u2014 the dry-run gate is explicit: apply refuses a plan not produced by plan() or already applied (typed error); nothing is ever deleted implicitly. Active protection: task files referenced by live slots/locks and lockfiles themselves are never candidates. Deletion = remove_dir_all/remove_file, errors verbatim.\n\nTests: fabricated temp state with old/new sessions \u2192 plan lists exactly the old; apply deletes them and preserves protected; second apply of same plan \u2192 typed refusal; empty state \u2192 empty plan; live-slot task preserved. `pub mod pruner;` in main.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_081",
+    "domain": "claude_session",
+    "category": "castor_m9_cli",
+    "dispatch_index": 81,
+    "session_id": "castor_m9_cli",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #81 (castor_m9_cli)",
+    "prompt": "ONE concern: complete the CLI in castor/src/main.rs. Reference: mcp-castor/bin/castor.js (read once \u2014 port command semantics; cut anything JS-only like npm publishing). Stubs today: `Server` (unimplemented!), `Install` (unimplemented!), `Clean` (unimplemented!); `Evo` stays unimplemented until M10 \u2014 leave it.\n\nContract: `castor server <start|stop|status>` \u2014 wraps engine::lifecycle (start=boot, stop=stop, status=canary, printing one honest line + exit codes). `castor install` \u2014 writes/updates the MCP registration JSON for Claude Code + Antigravity config files pointing at the `castor mcp` command (port the JS paths/targets; idempotent, prints what it wrote; --client claude|antigravity|all). `castor clean` \u2014 pruner::plan then apply behind a `--yes` flag (no --yes \u2192 print the plan only, typed dry-run semantics). All errors exit non-zero with the typed message; nothing swallowed.\n\nTests (in main.rs cfg(test), reuse existing patterns): clean without --yes deletes nothing and prints plan; install idempotence on a temp config path (parameterize the config file path for tests \u2014 keep it testable, no globals); server status against mock canary exits 0. Keep arg parsing in clap derive style already present.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_082",
+    "domain": "claude_session",
+    "category": "castor_m9_clean",
+    "dispatch_index": 82,
+    "session_id": "castor_m9_clean",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #82 (castor_m9_clean)",
+    "prompt": "ONE behavior: wire the `castor clean` subcommand in castor/src/main.rs (currently `unimplemented!()` at ~line 141). It wraps castor/src/pruner.rs, whose plan(state_dir, policy)/apply API already exists \u2014 read main.rs and pruner.rs signatures only, nothing else.\n\nBehavior: `castor clean` \u2192 build PrunePolicy::default(), print the plan (what would be deleted), delete NOTHING, exit 0. `castor clean --yes` \u2192 apply(plan), print one line per deletion. Errors exit non-zero with the typed message.\n\nTests: one test invoking the same internal fn used by the command (refactor to a `run_clean(state_dir, yes) -> Result<String>` helper if that keeps clap thin): without --yes nothing is deleted and the plan text is returned; with --yes deletions happen. Nothing else in this slice \u2014 server/install are separate later slices.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_083",
+    "domain": "claude_session",
+    "category": "castor_m9_server",
+    "dispatch_index": 83,
+    "session_id": "castor_m9_server",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #83 (castor_m9_server)",
+    "prompt": "ONE behavior: wire the `castor server` subcommand in castor/src/main.rs (currently `unimplemented!()` at ~line 133). It wraps castor/src/engine/lifecycle.rs (EngineLifecycle: boot/stop/canary) \u2014 read main.rs and lifecycle.rs signatures only, nothing else.\n\nBehavior: `castor server status` \u2192 run the canary; print one honest line (healthy: model id listed / unhealthy with the verbatim reason); exit 0 healthy, 1 unhealthy. `castor server start` \u2192 boot() (AlreadyRunning is a success short-circuit, printed as such); `castor server stop` \u2192 stop(). Add the `action` argument to the existing clap variant. Errors exit non-zero with typed message. No new deps.\n\nTests: one test calling the internal helper (thin `run_server(action) -> Result<String>`-style seam like run_clean) for the status path against the lifecycle's existing offline test setup \u2014 reuse its mock pattern; keep it offline (never :18020).\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_084",
+    "domain": "claude_session",
+    "category": "castor_m9_install",
+    "dispatch_index": 84,
+    "session_id": "castor_m9_install",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #84 (castor_m9_install)",
+    "prompt": "ONE behavior: wire `castor install` in castor/src/main.rs (currently `unimplemented!()` at ~line 140). Semantics reference: grep mcp-castor/bin/castor.js + mcp-castor/src for the MCP-registration writer (targets: Claude Code and Antigravity config files) \u2014 read that ONE function plus main.rs. Cut anything npm-specific.\n\nContract: `run_install(client: &str, config_path_override: Option<&Path>) -> Result<String>` \u2014 client is `claude|antigravity|all`; merges the `castor mcp` registration entry into the target's config JSON idempotently (existing entry \u2192 updated in place, no duplicate keys, other keys untouched, file written atomically temp+rename; missing file \u2192 created). `--client` flag with default `all`. Prints what it wrote. The override parameter exists for tests (no globals); default paths come from the JS reference's locations.\n\nTests: temp config file \u2192 first install creates entry; second install idempotent (byte-identical output file, no dupes); unrelated keys in an existing config survive; invalid client name \u2192 typed error.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_085",
+    "domain": "claude_session",
+    "category": "castor_m10_lineage",
+    "dispatch_index": 85,
+    "session_id": "castor_m10_lineage",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #85 (castor_m10_lineage)",
+    "prompt": "ONE file: castor/src/evo/lineage.rs (+ minimal castor/src/evo/mod.rs). Reference: mcp-castor/src/harness/evo/lineage_dag.js (read once). Design context (locked): AVO-inspired offline lineage \u2014 scored commits as DAG nodes with explicit parent links; greedy best-parent selection; NO last-writer-wins anywhere.\n\nContract: `CommitId`, `LineageNode { id, parents: Vec<CommitId>, fitness: Option<f64>, artifact_ref, created_at }`, `Lineage` \u2014 load/save JSONL at a path (one node per line, append-only), `add_node` (parents must exist \u2192 typed UnknownParent error; cycles impossible by construction), `best_parent() -> Option<&LineageNode>` (greedy: max fitness, ties by earliest created_at), `head() -> Option<&LineageNode>` (best leaf), `walk_ancestors(id)`; integrity: load refuses a file with duplicate ids or a dangling parent reference (typed Corruption error naming the line) \u2014 never silently repaired.\n\nTests: append two nodes, best_parent picks the fitter; tie broken by earliest; UnknownParent refused; duplicate-id file \u2192 Corruption naming the line; dangling parent \u2192 Corruption; empty file \u2192 None everywhere. `pub mod evo;` in main.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_086",
+    "domain": "claude_session",
+    "category": "castor_m10_evals",
+    "dispatch_index": 86,
+    "session_id": "castor_m10_evals",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #86 (castor_m10_evals)",
+    "prompt": "ONE concern: the Tier A offline-replay eval harness \u2014 castor/src/evals/mod.rs (+ replay.rs / scorer.rs if cleaner). This is NEW code (no JS counterpart). Read once: castor/evals/EVALS.md (the locked spec), one fixture dir (castor/evals/tasks/fix-failing-test/ \u2014 task.toml + fixture + golden/trace.jsonl + known-fail/trace.jsonl), and castor/src/runner/mod.rs's ChatEngine/ToolExecutor traits. The fixtures define the trace format \u2014 honor them exactly.\n\nContract: (1) `ReplayEngine` implements the runner's ChatEngine trait \u2014 replays a trace.jsonl's LLM responses in order; exhausted trace \u2192 typed error (no improvisation). (2) `run_task(task_dir, variant: Golden|KnownFail) -> EvalReport` \u2014 copy fixture to temp workspace, run the REAL runner loop with ReplayEngine + the real FsExecutor, then score. (3) Scorer (deterministic, no LLM): task.toml checks \u2014 FAIL_TO_PASS must pass, PASS_TO_PASS must stay green (shell probes via tools::shell::run), plus trace assertions (tool count \u2264 N, edits in-sandbox \u2014 the runner already enforces, assert the ledger). Distinguish ERROR (infra: harness itself failed) from FAIL (scorer says no) in the report. (4) Tests: each golden trace PASSES its task; each known-fail trace FAILS (scorer catches the regression \u2014 this is the anti-green core); canary-hard golden is EXPECTED to fail (assert it fails \u2014 100% green means the suite is broken); a corrupted trace \u2192 ERROR not FAIL.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green (6 golden pass + 6 known-fail fail + canary fails = the expected matrix); report the pass/fail matrix."
+  },
+  {
+    "id": "claude_087",
+    "domain": "claude_session",
+    "category": "castor_m10_evals2",
+    "dispatch_index": 87,
+    "session_id": "castor_m10_evals2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #87 (castor_m10_evals2)",
+    "prompt": "ONE concern: parse the eval fixture data into typed structs. Files: castor/src/evals/mod.rs + fixture.rs ONLY. Read once: castor/evals/tasks/fix-failing-test/ (its task.toml and golden/trace.jsonl + known-fail/trace.jsonl) and castor/evals/EVALS.md sections defining the formats. NO harness/runner/scorer code in this slice \u2014 data model only.\n\nDeliverable: `TaskConfig` (serde, from task.toml via the toml crate already in deps: prompt, setup, checks, timeout_s, tags \u2014 mirror the actual fixture fields exactly), `TraceStep` (serde, one trace.jsonl line: the LLM response and/or tool call/result as the fixture shows), `Trace::load(path) -> Vec<TraceStep>`, `Task::load(dir)` validating required files exist (typed missing-file errors naming the path). Strict: unknown fields denied, malformed line \u2192 typed error with line number.\n\nTests: load the REAL fix-failing-test fixture (CARGO_MANIFEST_DIR-relative path) \u2192 fields parse, steps count > 0; its known-fail trace also loads; a fabricated malformed trace \u2192 error with line number; missing task.toml \u2192 typed error. `pub mod evals;` in main.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_088",
+    "domain": "claude_session",
+    "category": "castor_m10_replay",
+    "dispatch_index": 88,
+    "session_id": "castor_m10_replay",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #88 (castor_m10_replay)",
+    "prompt": "ONE file: castor/src/evals/replay.rs \u2014 the trace replayer. Read once: castor/src/evals/fixture.rs (TraceStep shape) and castor/src/runner/mod.rs (the ChatEngine trait it must implement + how the runner consumes chat responses). Nothing else; no scorer, no task runner.\n\nDeliverable: `ReplayEngine::new(steps: Vec<TraceStep>)` implementing ChatEngine \u2014 returns the next recorded response each call, in order; exhausted \u2192 typed `TraceExhausted` error (the runner must see a clean engine failure, never improvised content). If the runner's trait has streaming variants, mirror what the trait actually requires (check the M6 signature \u2014 likely a single chat method).\n\nTests: fabricated 3-step mini-trace (build TraceSteps inline) \u2192 three calls return recorded responses in order, fourth call \u2192 TraceExhausted; empty trace \u2192 first call errors; steps with tool_calls pass through unchanged. Register `pub mod replay;` in evals/mod.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_089",
+    "domain": "claude_session",
+    "category": "castor_m10_scorer",
+    "dispatch_index": 89,
+    "session_id": "castor_m10_scorer",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #89 (castor_m10_scorer)",
+    "prompt": "ONE concern: castor/src/evals/runner.rs \u2014 `run_task(task_dir, variant) -> EvalReport` gluing what exists. Read once: castor/src/evals/fixture.rs (TaskConfig/Trace loaders), castor/src/evals/replay.rs (ReplayEngine), castor/src/runner/mod.rs (session loop + FsExecutor), and ONE fixture dir castor/evals/tasks/fix-failing-test/ (its task.toml checks + setup + fixture layout). No new deps.\n\nBehavior: copy the task fixture tree into a temp workspace \u2192 apply setup \u2192 run the REAL session loop with ReplayEngine + FsExecutor rooted at the temp workspace \u2192 score: shell checks from task.toml run via tools::shell::run against the temp workspace (FAIL_TO_PASS must exit 0; PASS_TO_PASS must still exit 0); trace assertions (tool-call count \u2264 task limit if present). EvalReport { outcome: Pass|Fail(reasons)|Error(infra), checks: Vec<CheckResult> } \u2014 ERROR strictly reserved for harness-internal failures (missing fixture, engine trait error); scorer check failures are FAIL, never ERROR.\n\nTests (the anti-green matrix over the REAL evals/tasks/ dir): every task's golden variant \u2192 Pass; every task's known-fail variant \u2192 Fail (scorer catches the regression); canary-hard golden \u2192 Fail (assert this explicitly \u2014 if it ever passes the suite is broken); corrupted trace fixture (fabricated in temp) \u2192 Error. Register module in evals/mod.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report the full matrix (6 golden / 6 known-fail / 1 canary)."
+  },
+  {
+    "id": "claude_091",
+    "domain": "claude_session",
+    "category": "castor_m10_scorer2",
+    "dispatch_index": 91,
+    "session_id": "castor_m10_scorer2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #91 (castor_m10_scorer2)",
+    "prompt": "RECOVERY: finish the eval task-runner slice. DISK GROUND TRUTH: castor/src/evals/runner.rs is WRITTEN but does NOT compile \u2014 `error[E0282]: type annotations needed` (see `cargo build` output for the exact span). Suite currently broken. The previous session's own diagnosis (unfinished): in the multi-step-refactor traces, the golden write_file carries a PLACEHOLDER content in the assistant message while the REAL content lives in the tool_call event args \u2014 the replayer must prefer tool_call args when present.\n\nTASKS: (1) fix E0282 in runner.rs. (2) In castor/src/evals/replay.rs, make ReplayEngine prefer tool_call-event args over assistant-message args when both exist for the same step (trace-shape truth: the tool_call event is authoritative). (3) Re-run and land the anti-green matrix tests in runner.rs: every golden variant PASSES, every known-fail variant FAILS, canary-hard golden FAILS (explicitly asserted), fabricated corrupt trace \u2192 ERROR.\n\nRead runner.rs, replay.rs, fixture.rs first; touch only castor/src/evals/*. GATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report the matrix (golden/known-fail/canary counts)."
+  },
+  {
+    "id": "claude_092",
+    "domain": "claude_session",
+    "category": "castor_m5b_flakefix",
+    "dispatch_index": 92,
+    "session_id": "castor_m5b_flakefix",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #92 (castor_m5b_flakefix)",
+    "prompt": "ONE concern: fix flaky test `boot_spawns_when_canary_404s` in castor/src/engine/lifecycle.rs (test module, ~line 357-376). Measured 3/4 failures under full-suite load: line 375 asserts `marker.exists()` synchronously after boot()'s 500ms timeout, but under parallel test load the spawned `touch; sleep 30` shell lags past the assertion \u2014 an environment-dependent timing premise.\n\nFix: replace the synchronous assert with a bounded poll for the marker (up to 10s, 50ms interval \u2014 the contract \"launch command should have run\" is verified by the marker appearing, not by it appearing within 500ms). While in the file, check `wedge_threshold_triggers_heal` (~line 379+) for the same synchronous-marker premise after heal and apply the same bounded poll if so. Touch nothing else.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo test'` green across 5 CONSECUTIVE full-suite runs; report test count."
+  },
+  {
+    "id": "claude_093",
+    "domain": "claude_session",
+    "category": "castor_m5b_flakefix2",
+    "dispatch_index": 93,
+    "session_id": "castor_m5b_flakefix2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #93 (castor_m5b_flakefix2)",
+    "prompt": "ONE concern: castor/src/engine/lifecycle.rs test `boot_spawns_when_canary_404s` (~line 357). ROOT CAUSE (verified, not scheduling lag): boot() kills the launch child on BootTimeout; the test's launch command is `touch <marker>; sleep 30` \u2014 when shell startup lags past the 500ms timeout, the kill lands before touch executes and the marker NEVER appears (the 10s bounded poll then times out; observed failing even in isolation after fresh compile).\n\nFix: change that test's launch command to plain `touch <marker>` (drop the `; sleep 30`). A fast-exiting launch makes marker existence deterministic regardless of kill timing; BootTimeout still comes from the canary never answering. The bounded wait_for_marker assertion stays (harmless). Touch NOTHING else \u2014 wedge_threshold_triggers_heal is unaffected (its stop_command runs explicitly, no kill race).\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` \u2014 5 consecutive green FULL-suite runs including the first post-compile run. Report count."
+  },
+  {
+    "id": "claude_094",
+    "domain": "claude_session",
+    "category": "castor_m5b_flakefix3",
+    "dispatch_index": 94,
+    "session_id": "castor_m5b_flakefix3",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #94 (castor_m5b_flakefix3)",
+    "prompt": "ONE line: in castor/src/engine/lifecycle.rs tests, the boot timeout `Duration::from_millis(500)` (~line 383, test boot_spawns_when_canary_404s) races shell STARTUP under 222-test parallel load \u2014 sh hasn't begun executing before boot() fires SIGKILL on its process group, so `touch <marker>` never runs. Fix: raise that timeout to `Duration::from_millis(2000)` (mock canary 404s forever so BootTimeout is still guaranteed; worst case +2s). If wedge_threshold_triggers_heal uses the same 500ms constant for the same purpose, raise it identically. Nothing else.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` \u2014 5 consecutive FULL-suite runs, ALL green including any cold first run. Report count."
+  },
+  {
+    "id": "claude_095",
+    "domain": "claude_session",
+    "category": "castor_m10_opt",
+    "dispatch_index": 95,
+    "session_id": "castor_m10_opt",
+    "expected": "REJECT",
+    "rationale": "genuine monolith (castor_m10_opt 3 evo layers evaluator/lineage/scorer)",
+    "prompt": "ONE file: castor/src/evo/optimizer.rs \u2014 the offline reflective optimizer. References (read once each): mcp-castor/src/harness/evo/evaluator.js + evo_operator.js (port their mechanics; the live in-loop tool quartet is DELETED by design), castor/src/evo/lineage.rs (the DAG it appends to), castor/src/evals/runner.rs (run_task = the fitness scorer).\n\nContract: `Optimizer::run(evals_dir, lineage_path, opts) -> Vec<CommitRecord>` \u2014 one GEPA-style reflective batch: for each eval task, run_task(Golden) \u2192 baseline fitness; operator proposes a variation of the artifact (the prompt/system-text artifact in the lineage head, concrete edit proposals as text); for each variation, run_task again \u2192 fitness; append scored nodes to Lineage (parents = current head, AVO greedy: keep best). No live loop, no in-flight mutation \u2014 this is a batch command over recorded traces. Errors typed; eval ERROR \u2260 fitness 0.\n\nTests: temp evals dir with a fabricated task (reuse the runner's fixture helpers) + temp lineage \u2192 run() appends baseline node + variation nodes, best_parent returns the fitter; all-tasks-ERROR \u2192 no nodes appended, typed report; deterministic (same inputs \u2192 same nodes modulo timestamps). `pub mod optimizer;` in evo/mod.rs. Do NOT wire the CLI (`castor evo` is the next slice).\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_096",
+    "domain": "claude_session",
+    "category": "castor_m10_opt2",
+    "dispatch_index": 96,
+    "session_id": "castor_m10_opt2",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #96 (castor_m10_opt2)",
+    "prompt": "ONE file: castor/src/evo/optimizer.rs \u2014 the offline score-and-commit engine. NO JS references \u2014 read only castor/src/evo/lineage.rs and castor/src/evals/runner.rs signatures. Design correction: the AVO variation operator is the DISPATCHED AGENT (external); this module never generates proposals. It scores artifacts and records them.\n\nContract: `score_artifact(evals_dir: &Path, variant: Variant) -> ScoreReport` \u2014 for each task dir under evals_dir: run_task \u2192 fitness entry (task id, Outcome; Pass=1.0, Fail=0.0, Error=null + reason). `commit_artifact(lineage: &mut Lineage, artifact_ref: String, report: &ScoreReport, now_ms: u64) -> CommitId` \u2014 mean fitness over non-Error entries appended as a lineage node (parents=[current head], None fitness if zero scoreable entries). `recommend(lineage: &Lineage) -> Option<&LineageNode>` = lineage.best_parent(). Typed errors; ERROR entries never averaged as 0 (excluded, reported).\n\nTests: temp evals dir (fabricate one task dir with task.toml + fixture \u2014 copy the minimal shape from castor/evals/tasks/fix-failing-test/) + temp lineage: score \u2192 Pass entry; commit \u2192 node with mean fitness, best_parent sees it; empty evals dir \u2192 typed empty error; all-Error \u2192 None fitness node, no crash. `pub mod optimizer;` in evo/mod.rs.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_097",
+    "domain": "claude_session",
+    "category": "castor_m10_evo_cli",
+    "dispatch_index": 97,
+    "session_id": "castor_m10_evo_cli",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #97 (castor_m10_evo_cli)",
+    "prompt": "ONE concern: finish M10 \u2014 wire `castor evo` and the lineage watchdog. Read once: castor/src/main.rs (the `Evo => unimplemented!()` arm), castor/src/evo/optimizer.rs + lineage.rs signatures. Reference for watchdog semantics: mcp-castor/src/harness/evo/watchdog.js (stall detection \u2014 read once; port only its detection rule).\n\nContract: `castor evo run [--evals <dir>]` \u2192 optimizer::score_artifact over the configured evals dir (default: repo evals/ if present, else typed actionable error), `commit_artifact` into <state>/evo/lineage.jsonl, print the report. `castor evo status` \u2192 load lineage, print head/best_parent/fitness + the watchdog verdict: stalled when the newest commit is older than 7 days or the last 5 commits show no fitness improvement (typed Stalled verdict, honest print). Thin `run_evo(...)`/`evo_status(...)` seams like run_clean.\n\nTests: temp evals + temp lineage \u2192 run appends a node and prints fitness; status on empty lineage \u2192 typed empty verdict; stalled detection on a fabricated old/no-improvement lineage \u2192 Stalled. Nothing else.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_098",
+    "domain": "claude_session",
+    "category": "castor_m11_clippy",
+    "dispatch_index": 98,
+    "session_id": "castor_m11_clippy",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #98 (castor_m11_clippy)",
+    "prompt": "ONE concern: drive `cargo clippy --all-targets` to zero warnings in castor/. Current: 165 diagnostics \u2014 mostly mechanical: 34 collapsible-ifs, unnecessary clone-slices, useless vec!, unused imports, len-vs-zero, unit lets, plus bin-crate dead code (never-constructed variants, never-used fns \u2014 e.g. serve_ephemeral, to_json, rt).\n\nRules: fix mechanical ones idiomatically (let-chains are fine). For dead code: DELETE what's genuinely unused (dead code is tech debt \u2014 e.g. serve_ephemeral, unused test helpers), and where a pub item is consumed only by tests or the M11 wiring, wire or remove it \u2014 no #[allow(dead_code)] sprinkling; at most a targeted allow with a one-line structural reason. `unwrap()` in dispatch paths \u2192 expect with context only if trivially provable, else proper error. No behavior changes; the suite must stay green.\n\nOrder of work: run `cargo clippy --all-targets 2>&1 | head -100`, fix top clusters, iterate. Don't read files wholesale \u2014 go warning-by-warning at their spans.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo clippy --all-targets 2>&1 | grep -c \"^warning: \"'` prints 0 AND `cargo test` green. Report final counts."
+  },
+  {
+    "id": "claude_099",
+    "domain": "claude_session",
+    "category": "castor_m11_dispatch",
+    "dispatch_index": 99,
+    "session_id": "castor_m11_dispatch",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #99 (castor_m11_dispatch)",
+    "prompt": "ONE concern: the castor_coworker dispatch pipeline \u2014 replace the \"not implemented\" body with the real path. Everything exists; this is wiring. Read once: castor/src/mcp/mod.rs (tool bodies + CoworkerParams), castor/src/task/registry.rs (TaskRecord/create), castor/src/task/semaphore.rs (slot claim), castor/src/runner/mod.rs (session loop, FsExecutor, ChatEngine), castor/src/engine/provider.rs (EngineClient::from_config), castor/src/skills.rs, castor/src/tools/extensions.rs (ExtensionBridge::spawn), castor/src/state (events ledger path).\n\nContract (new file castor/src/mcp/dispatch.rs + tool-body call): dispatch(params) \u2192 create TaskRecord (status queued) \u2192 claim a slot lease (max_concurrent_tasks from config; beyond \u2192 queued stays, FIFO wait) \u2192 status executing \u2192 spawn the detached worker process (`castor __sem_child`-style hidden subcommand already exists \u2014 extend it to run the real loop: skills index into system prompt, ExtensionBridge from params.extensions, session loop with turns budget, events JSONL per turn) \u2192 terminal status completed/failed from the loop result \u2192 release slot. Return taskId + wait_command immediately (the current contract). Errors typed; slot-release always runs (including on failure).\n\nTests (offline, mock ChatEngine as in runner tests): dispatch\u2192completes\u2192status completed\u2192wait returns terminal; second dispatch while slot held \u2192 queued until released; loop failure \u2192 status failed with verbatim reason; events.jsonl written per turn. Register in mcp/mod.rs; keep tool schema unchanged.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  },
+  {
+    "id": "claude_100",
+    "domain": "claude_session",
+    "category": "castor_m11_child",
+    "dispatch_index": 100,
+    "session_id": "castor_m11_child",
+    "expected": "ADMIT",
+    "rationale": "Historical Claude-Code session dispatch #100 (castor_m11_child)",
+    "prompt": "ONE behavior: the `castor __sem_child` worker. In castor/src/main.rs the hidden `__sem_child` subcommand exists as a test helper \u2014 give it its real body in a new castor/src/mcp/worker.rs: reads a JSON job spec from a file path argument (fields: prompt, cwd, session_id, config already in env/file), builds the system prompt with the skills index (castor/src/skills.rs::render_index), opens ExtensionBridge when the spec lists extensions (castor/src/tools/extensions.rs), runs the session loop (castor/src/runner/mod.rs \u2014 ChatEngine=EngineClient, executor=FsExecutor rooted at cwd) with the turns budget, writes one events.jsonl line per turn to <state>/sessions/<id>/events.jsonl, writes the terminal TaskRecord status (completed with final text / failed with verbatim reason) via castor/src/task/registry.rs, exits 0. process_group(0) is set by the SPAWNER later \u2014 not here.\n\nReads allowed: main.rs, worker-adjacent signatures only (runner/mod.rs, skills.rs, extensions.rs, registry.rs, state paths). No MCP changes, no slots, no spawner \u2014 later slices.\n\nTests: fabricated job spec + mock ChatEngine (as runner tests do) via a `run_job(spec) -> Result<TaskOutcome>` seam: happy path completes and writes status + events; failing loop \u2192 failed with reason; empty prompt \u2192 typed error. Register `mod worker;` (or wire into main.rs match) minimally.\n\nGATE: `wsl.exe -e bash -lc 'cd /mnt/d/LLM_Ecosystem/castor && cargo build && cargo test'` green; report test count."
+  }
+]
